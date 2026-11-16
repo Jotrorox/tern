@@ -1,0 +1,411 @@
+package std::encoding
+
+// std::encoding — line codes and error-correcting codes.
+//
+// This file: 8b/10b (Enc8b10b, Dec8b10b and their functions), PriorityMux,
+// Base64 helpers (test tooling).
+// line.tern: Manchester (ManchesterEnc/ManchesterDec), Nrzi/NrziDec.
+// ecc.tern: Hamming SECDED (HammingEnc/HammingDec), Parity/ParityCheck.
+
+// ---------------------------------------------------------------------------
+// 8b/10b
+// ---------------------------------------------------------------------------
+//
+// IBM 8b/10b (Widmer/Franaszek) with running disparity. A 10-bit code is
+// written `abcdei fghj`; in the bit<10> used here bit 9 is `a`, the bit
+// sent first on the wire, so serialize MSB first. The byte HGF EDCBA is
+// symbol D.x.y with x = EDCBA and y = HGF; control symbols are K.28.0-7,
+// K.23.7, K.27.7, K.29.7 and K.30.7 (K.28.5 = 0xBC is the comma).
+
+/// An 8b/10b symbol: a data byte or, with `k`, a control character.
+pub struct Symbol {
+    /// Control character (K.x.y) rather than data (D.x.y).
+    k: bool,
+    /// The byte, HGF EDCBA.
+    data: u8,
+}
+
+/// A 10-bit code group and the running disparity after it.
+pub struct Code10 {
+    /// abcdei fghj, `a` in bit 9.
+    code: bit<10>,
+    /// Running disparity after this code group (true = RD+).
+    rd: bool,
+}
+
+/// A decoded code group.
+pub struct Decoded {
+    /// The symbol.
+    sym: Symbol,
+    /// The code group is not a valid 8b/10b code.
+    code_err: bool,
+    /// The code group's disparity does not match the running disparity.
+    disp_err: bool,
+}
+
+/// `Decoded` plus the running disparity after the code group.
+pub struct Decoded10 {
+    /// The symbol.
+    sym: Symbol,
+    /// The code group is not a valid 8b/10b code.
+    code_err: bool,
+    /// The code group's disparity does not match the running disparity.
+    disp_err: bool,
+    /// Running disparity after this code group (true = RD+).
+    rd: bool,
+}
+
+// 5b/6b codes for RD- (abcdei, `a` in bit 5)
+const T6: [uint<6>; 32] = [
+    0b100111, 0b011101, 0b101101, 0b110001, 0b110101, 0b101001, 0b011001, 0b111000,
+    0b111001, 0b100101, 0b010101, 0b110100, 0b001101, 0b101100, 0b011100, 0b010111,
+    0b011011, 0b100011, 0b010011, 0b110010, 0b001011, 0b101010, 0b011010, 0b111010,
+    0b110011, 0b100110, 0b010110, 0b110110, 0b001110, 0b101110, 0b011110, 0b101011,
+]
+const K28_6: uint<6> = 0b001111
+// 3b/4b data codes for RD- (fghj, `f` in bit 3); y = 7 is the primary P7
+const T4D: [uint<4>; 8] = [0b1011, 0b1001, 0b0101, 0b1100, 0b1101, 0b1010, 0b0110, 0b1110]
+// alternate D.x.A7 / K.x.7 code for RD-
+const A7: uint<4> = 0b0111
+// 3b/4b control codes for RD-
+const T4K: [uint<4>; 8] = [0b1011, 0b0110, 0b1010, 0b1100, 0b1101, 0b0101, 0b1001, 0b0111]
+
+/// Encode one symbol at running disparity `rd` (true = RD+). Invalid
+/// control symbols produce an unspecified (but balanced) code.
+pub const fn encode_8b10b(s: Symbol, rd: bool) -> Code10 {
+    let x = s.data as uint<5>
+    let y = (s.data >> 5) as uint<3>
+
+    // 5b/6b
+    let c6n = if s.k and x == 28 { K28_6 } else { T6[x] }
+    let unbal6 = count_ones(bits(c6n)) != 3
+    let c6 = if rd and (unbal6 or c6n == 0b111000) { ~c6n } else { c6n }
+    let rd6 = if unbal6 { !rd } else { rd }
+
+    // 3b/4b
+    let use_a7 = y == 7 and ((!rd6 and (x == 17 or x == 18 or x == 20)) or
+                             (rd6 and (x == 11 or x == 13 or x == 14)))
+    let c4n = if s.k { T4K[y] } else if use_a7 { A7 } else { T4D[y] }
+    let unbal4 = count_ones(bits(c4n)) != 2
+    let comp4 = if s.k { rd6 } else { rd6 and (unbal4 or y == 3) }
+    let c4 = if comp4 { ~c4n } else { c4n }
+
+    Code10 { code: c6 ++ c4, rd: if unbal4 { !rd6 } else { rd6 } }
+}
+
+/// Decode one code group at running disparity `rd` (true = RD+), checking
+/// code validity and disparity. The running disparity is always updated
+/// from the received code group, so one error does not cascade.
+pub const fn decode_8b10b(c: bit<10>, rd: bool) -> Decoded10 {
+    let c6 = c[9:4] as uint<6>
+    let c4 = c[3:0] as uint<4>
+
+    // 6b -> 5b
+    var x: uint<5> = 0
+    var found6: bool = false
+    for i in 0..32 {
+        let neg = T6[i]
+        let pos = if count_ones(bits(neg)) != 3 or i == 7 { ~neg } else { neg }
+        if c6 == neg or c6 == pos {
+            x = i
+            found6 = true
+        }
+    }
+    let k28 = c6 == 0b001111 or c6 == 0b110000
+    if k28 { x = 28 }
+
+    // 4b -> 3b (K.28 from RD+ uses the uncomplemented control column)
+    let c4d = if c6 == 0b110000 { ~c4 } else { c4 }
+    var y: uint<3> = 0
+    var found4: bool = false
+    for i in 0..8 {
+        let neg = T4D[i]
+        let pos = if count_ones(bits(neg)) != 2 or i == 3 { ~neg } else { neg }
+        if c4d == neg or c4d == pos {
+            y = i
+            found4 = true
+        }
+    }
+    let is_a7 = c4 == 0b0111 or c4 == 0b1000
+    if is_a7 {
+        y = 7
+        found4 = true
+    }
+
+    let kx7 = x == 23 or x == 27 or x == 29 or x == 30
+    let k = k28 or (is_a7 and kx7)
+    let a7_allowed = k28 or kx7 or x == 11 or x == 13 or x == 14 or x == 17 or x == 18 or x == 20
+    let code_err = !(found6 or k28) or !found4 or (is_a7 and !a7_allowed)
+
+    // running disparity
+    let d6 = count_ones(bits(c6))
+    let err6 = (d6 > 3 and rd) or (d6 < 3 and !rd) or (c6 == 0b111000 and rd) or (c6 == 0b000111 and !rd)
+    let rd6 = if d6 > 3 { true } else if d6 < 3 { false } else { rd }
+    let d4 = count_ones(bits(c4))
+    let err4 = (d4 > 2 and rd6) or (d4 < 2 and !rd6) or (c4 == 0b1100 and rd6) or (c4 == 0b0011 and !rd6)
+    let rd_out = if d4 > 2 { true } else if d4 < 2 { false } else { rd6 }
+
+    Decoded10 {
+        sym: Symbol { k: k, data: y ++ x },
+        code_err: code_err,
+        disp_err: err6 or err4,
+        rd: rd_out,
+    }
+}
+
+/// 8b/10b encoder with running disparity (RD- after reset). One symbol per
+/// cycle; the code group is registered.
+pub module Enc8b10b {
+    /// Clock.
+    in clk: clock
+    /// Reset; running disparity returns to RD-.
+    in rst: reset
+    /// Symbols to encode.
+    in in: Valid<Symbol>
+    /// Code groups, `a` in bit 9.
+    out out: Valid<bit<10>>
+    /// Current running disparity (true = RD+).
+    out rd: bool
+
+    /// Cycles from symbol to code group.
+    pub const LATENCY: uint = 1
+
+    reg disp: bool = false
+    reg ov: bool = false
+    reg oc: bit<10>
+
+    let e = encode_8b10b(in.data, disp)
+
+    on clk {
+        ov = in.valid
+        if in.valid {
+            oc = e.code
+            disp = e.rd
+        }
+    }
+
+    out.valid = ov
+    out.data = oc
+    rd = disp
+
+    /// Every code group is balanced to within one bit (4, 5 or 6 ones).
+    property balanced {
+        always out.valid |-> count_ones(out.data) >= 4 and count_ones(out.data) <= 6
+    }
+
+    /// An unbalanced code group always flips the running disparity.
+    property disparity_follows {
+        always (out.valid and count_ones(out.data) != 5) |-> disp != past(disp)
+    }
+}
+
+/// 8b/10b decoder with running disparity tracking (RD- after reset) and
+/// code / disparity error flags. One code group per cycle, registered.
+pub module Dec8b10b {
+    /// Clock.
+    in clk: clock
+    /// Reset; running disparity returns to RD-.
+    in rst: reset
+    /// Code groups, `a` in bit 9.
+    in in: Valid<bit<10>>
+    /// Decoded symbols with error flags.
+    out out: Valid<Decoded>
+
+    /// Cycles from code group to symbol.
+    pub const LATENCY: uint = 1
+
+    reg disp: bool = false
+    reg ov: bool = false
+    reg od: Decoded
+
+    let d = decode_8b10b(in.data, disp)
+
+    on clk {
+        ov = in.valid
+        if in.valid {
+            od = Decoded { sym: d.sym, code_err: d.code_err, disp_err: d.disp_err }
+            disp = d.rd
+        }
+    }
+
+    out.valid = ov
+    out.data = od
+
+    /// Every code group yields exactly one decoded symbol a cycle later.
+    property one_per_code {
+        always out.valid == past(in.valid)
+    }
+}
+
+test "8b10b: known code groups" {
+    let k285 = Symbol { k: true, data: 0xBC }
+    expect encode_8b10b(k285, false).code == 0b0011111010       // 0x0FA
+    expect encode_8b10b(k285, true).code == 0b1100000101        // 0x305
+    expect encode_8b10b(Symbol { k: false, data: 0x00 }, false).code == 0x274
+    expect encode_8b10b(Symbol { k: false, data: 0x00 }, true).code == 0x18B
+    expect encode_8b10b(Symbol { k: false, data: 0xB5 }, false).code == 0x2AA   // D.21.5
+    expect encode_8b10b(Symbol { k: false, data: 0x07 }, false).code == 0x38B   // D.7.0
+    expect encode_8b10b(Symbol { k: false, data: 0xF1 }, false).code == 0x237   // D.17.7 uses A7
+    expect encode_8b10b(Symbol { k: false, data: 0xEB }, true).code == 0x348    // D.11.7 uses A7
+}
+
+test "8b10b encoder: running disparity alternates on K.28.5" {
+    let dut = sim Enc8b10b()
+    dut.reset()
+    dut.in = Valid { valid: true, data: Symbol { k: true, data: 0xBC } }
+    dut.step()
+    expect dut.out.valid and dut.out.data == 0x0FA and dut.rd
+    dut.step()
+    expect dut.out.data == 0x305 and !dut.rd
+    dut.step()
+    expect dut.out.data == 0x0FA
+}
+
+test "8b10b: every symbol round-trips through encoder and decoder" {
+    let enc = sim Enc8b10b()
+    let dec = sim Dec8b10b()
+    enc.reset()
+    dec.reset()
+    // every data byte twice (so each is seen at both disparities), then
+    // every control symbol
+    for _ in 0..2 {
+        for d in 0..256 {
+            enc.in = Valid { valid: true, data: Symbol { k: false, data: d as u8 } }
+            enc.step()
+            dec.in = Valid { valid: enc.out.valid, data: enc.out.data }
+            dec.step()
+            expect dec.out.valid
+            expect !dec.out.data.code_err and !dec.out.data.disp_err
+            expect !dec.out.data.sym.k and dec.out.data.sym.data == d as u8
+        }
+    }
+    for d in [0x1C, 0x3C, 0x5C, 0x7C, 0x9C, 0xBC, 0xDC, 0xFC, 0xF7, 0xFB, 0xFD, 0xFE] {
+        enc.in = Valid { valid: true, data: Symbol { k: true, data: d } }
+        enc.step()
+        dec.in = Valid { valid: enc.out.valid, data: enc.out.data }
+        dec.step()
+        expect !dec.out.data.code_err and !dec.out.data.disp_err
+        expect dec.out.data.sym.k and dec.out.data.sym.data == d
+    }
+}
+
+test "8b10b decoder: flags invalid codes and disparity errors" {
+    let dut = sim Dec8b10b()
+    dut.reset()
+    dut.in = Valid { valid: true, data: 0b0000000000 }
+    dut.step()
+    expect dut.out.valid and dut.out.data.code_err
+    dut.reset()
+    dut.in = Valid { valid: true, data: 0x305 }       // K.28.5 RD+ while at RD-
+    dut.step()
+    expect dut.out.data.disp_err and !dut.out.data.code_err
+    expect dut.out.data.sym.k and dut.out.data.sym.data == 0xBC
+}
+
+// ---------------------------------------------------------------------------
+// PriorityMux
+// ---------------------------------------------------------------------------
+
+/// Forward the lowest-numbered valid input (input 0 has the highest
+/// priority). Combinational.
+pub module PriorityMux<T: type, N: uint = 4>
+where N >= 2
+{
+    /// Candidate inputs.
+    in in: [Valid<T>; N]
+    /// The selected input; `valid` false when no input is valid.
+    out out: Valid<T>
+    /// Index of the selected input (meaningful while `out.valid`).
+    out index: uint<clog2(N)>
+
+    /// Combinational.
+    pub const LATENCY: uint = 0
+
+    var ov: bool
+    var od: T
+    var oi: uint<clog2(N)>
+    comb {
+        ov = false
+        od = in[0].data
+        oi = 0
+        for k in 0..N {
+            let i = N - 1 - k
+            if in[i].valid {
+                ov = true
+                od = in[i].data
+                oi = i
+            }
+        }
+    }
+    out.valid = ov
+    out.data = od
+    index = oi
+}
+
+test "priority mux: lowest valid index wins" {
+    let dut = sim PriorityMux<u8, 4>()
+    for i in 0..4 {
+        dut.in[i] = Valid { valid: false, data: (i + 10) as u8 }
+    }
+    dut.settle()
+    expect !dut.out.valid
+    dut.in[3].valid = true
+    dut.in[1].valid = true
+    dut.settle()
+    expect dut.out.valid and dut.index == 1 and dut.out.data == 11
+    dut.in[0].valid = true
+    dut.settle()
+    expect dut.index == 0 and dut.out.data == 10
+}
+
+// ---------------------------------------------------------------------------
+// Base64 (test tooling)
+// ---------------------------------------------------------------------------
+
+/// The Base64 (RFC 4648) character for a 6-bit value. Intended for test
+/// benches and debug dumps; synthesizable but rarely useful in hardware.
+pub const fn base64_char(v: uint<6>) -> u8 {
+    if v < 26 {
+        (v + 65) as u8                // 'A'..'Z'
+    } else if v < 52 {
+        (v + 71) as u8                // 'a'..'z'
+    } else if v < 62 {
+        (v as u8) -% 4                // '0'..'9'
+    } else if v == 62 {
+        43                            // '+'
+    } else {
+        47                            // '/'
+    }
+}
+
+/// The 6-bit value of a Base64 character; `valid` false for any other byte
+/// (including the '=' padding).
+pub const fn base64_value(c: u8) -> Valid<uint<6>> {
+    if c >= 65 and c <= 90 {
+        Valid { valid: true, data: (c -% 65) as uint<6> }
+    } else if c >= 97 and c <= 122 {
+        Valid { valid: true, data: (c -% 71) as uint<6> }
+    } else if c >= 48 and c <= 57 {
+        Valid { valid: true, data: (c +% 4) as uint<6> }
+    } else if c == 43 {
+        Valid { valid: true, data: 62 }
+    } else if c == 47 {
+        Valid { valid: true, data: 63 }
+    } else {
+        Valid { valid: false, data: 0 }
+    }
+}
+
+test "base64: Man -> TWFu and back" {
+    // 0x4D 0x61 0x6E = 010011 010110 000101 101110
+    let groups = [19, 22, 5, 46]
+    let chars = [84, 87, 70, 117]      // 'T' 'W' 'F' 'u'
+    for i in 0..4 {
+        expect base64_char(groups[i]) == chars[i]
+        let v = base64_value(chars[i])
+        expect v.valid and v.data == groups[i]
+    }
+    expect base64_char(52) == 48       // '0'
+    expect base64_char(63) == 47       // '/'
+    expect !base64_value(61).valid     // '='
+}

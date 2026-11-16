@@ -1,0 +1,279 @@
+package std::encoding
+
+// Error detection and correction: Hamming SECDED and parity.
+
+use std::math::flog2
+
+// ---------------------------------------------------------------------------
+// Hamming SECDED
+// ---------------------------------------------------------------------------
+//
+// Extended Hamming code: K data bits, R = hamming_r(K) check bits at the
+// power-of-two positions 1, 2, 4, ... of a K + R bit Hamming code, plus an
+// overall parity bit at position 0. Codeword bit p is position p. Single
+// errors are corrected, double errors detected (SECDED).
+// K = 8 -> 13 bits, K = 32 -> 39 bits, K = 64 -> 72 bits.
+
+/// Number of Hamming check bits for `k` data bits: the smallest R with
+/// 2^R >= k + R + 1 (the overall parity bit is extra).
+pub const fn hamming_r(k: uint) -> uint {
+    var r: uint = 0
+    while (1 << r) < k + r + 1 {
+        r = r + 1
+    }
+    r
+}
+
+/// Width of a SECDED codeword for `k` data bits.
+pub const fn hamming_n(k: uint) -> uint {
+    k + hamming_r(k) + 1
+}
+
+/// Result of a SECDED decode.
+pub struct HammingResult<K: uint> {
+    /// The (corrected) data.
+    data: bit<K>,
+    /// A single-bit error was found and corrected.
+    corrected: bool,
+    /// A double-bit error was found; `data` is not trustworthy.
+    uncorrectable: bool,
+}
+
+/// Encode K data bits into a hamming_n(K)-bit SECDED codeword.
+pub const fn hamming_encode(d: bit<K>) -> bit<hamming_n(K)> {
+    let r = hamming_r(K)
+    let n = K + r
+    var c: bit<hamming_n(K)> = all0
+    for p in 1..(n + 1) {
+        if !p.is_pow2() {
+            c[p] = d[p - flog2(p) - 2]
+        }
+    }
+    for i in 0..r {
+        let pp = 1 << i
+        var par: bool = false
+        for p in 1..(n + 1) {
+            if (p & pp) != 0 and p != pp {
+                par = par != c[p]
+            }
+        }
+        c[pp] = par
+    }
+    c[0] = ^c
+    c
+}
+
+/// Decode a SECDED codeword back into K data bits, correcting a single-bit
+/// error and flagging a double-bit error. Call as `hamming_decode<K>(c)`.
+pub const fn hamming_decode<K: uint>(c: bit<hamming_n(K)>) -> HammingResult<K> {
+    let r = hamming_r(K)
+    let n = K + r
+    var s: bit<hamming_r(K)> = all0
+    for i in 0..r {
+        var par: bool = false
+        for p in 1..(n + 1) {
+            if (p & (1 << i)) != 0 {
+                par = par != c[p]
+            }
+        }
+        s[i] = par
+    }
+    let syn = s as uint<hamming_r(K)>
+    let odd = ^c
+    var d: bit<K> = all0
+    for p in 1..(n + 1) {
+        if !p.is_pow2() {
+            d[p - flog2(p) - 2] = c[p] != (odd and syn == p)
+        }
+    }
+    HammingResult { data: d, corrected: odd, uncorrectable: !odd and syn != 0 }
+}
+
+/// Registered SECDED encoder.
+pub module HammingEnc<K: uint>
+where K >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; clears `out.valid`.
+    in rst: reset
+    /// Data words.
+    in in: Valid<bit<K>>
+    /// Codewords.
+    out out: Valid<bit<hamming_n(K)>>
+
+    /// Cycles from data to codeword.
+    pub const LATENCY: uint = 1
+
+    reg ov: bool = false
+    reg oc: bit<hamming_n(K)>
+
+    on clk {
+        ov = in.valid
+        if in.valid { oc = hamming_encode(in.data) }
+    }
+
+    out.valid = ov
+    out.data = oc
+
+    /// Every codeword has even overall parity.
+    property even_parity {
+        always out.valid |-> !(^out.data)
+    }
+}
+
+/// Registered SECDED decoder.
+pub module HammingDec<K: uint>
+where K >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; clears `out.valid`.
+    in rst: reset
+    /// Codewords.
+    in in: Valid<bit<hamming_n(K)>>
+    /// Data words with correction status.
+    out out: Valid<HammingResult<K>>
+
+    /// Cycles from codeword to data.
+    pub const LATENCY: uint = 1
+
+    reg ov: bool = false
+    reg od: HammingResult<K>
+
+    on clk {
+        ov = in.valid
+        if in.valid { od = hamming_decode<K>(in.data) }
+    }
+
+    out.valid = ov
+    out.data = od
+
+    /// A word is never both corrected and uncorrectable.
+    property exclusive_status {
+        never out.valid and out.data.corrected and out.data.uncorrectable
+    }
+}
+
+test "hamming: widths" {
+    expect hamming_r(4) == 3
+    expect hamming_r(8) == 4
+    expect hamming_r(32) == 6
+    expect hamming_r(64) == 7
+    expect hamming_n(8) == 13
+    expect hamming_n(64) == 72
+    expect hamming_encode(0xA5 as bit<8>) == 0x144E
+}
+
+test "hamming: clean words decode unchanged" {
+    for _ in 0..100 {
+        let d = bits(rand<u32>())
+        let r = hamming_decode<32>(hamming_encode(d))
+        expect r.data == d and !r.corrected and !r.uncorrectable
+    }
+}
+
+test "hamming: every single-bit error is corrected" {
+    let d = 0x5A as bit<8>
+    let c = hamming_encode(d)
+    for i in 0..13 {
+        let r = hamming_decode<8>(c ^ ((1 << i) as bit<13>))
+        expect r.data == d and r.corrected and !r.uncorrectable
+    }
+}
+
+test "hamming: double-bit errors are detected" {
+    let d = 0x3C as bit<8>
+    let c = hamming_encode(d)
+    for i in 0..13 {
+        for j in 0..13 {
+            if i != j {
+                let r = hamming_decode<8>(c ^ ((1 << i) as bit<13>) ^ ((1 << j) as bit<13>))
+                expect r.uncorrectable and !r.corrected
+            }
+        }
+    }
+}
+
+test "hamming modules: encode, corrupt, decode" {
+    let enc = sim HammingEnc<16>()
+    let dec = sim HammingDec<16>()
+    enc.reset()
+    dec.reset()
+    for _ in 0..50 {
+        let d = bits(rand<u16>())
+        enc.in = Valid { valid: true, data: d }
+        enc.step()
+        let flip = rand<uint<5>>() where flip < 22
+        dec.in = Valid { valid: true, data: enc.out.data ^ ((1 << flip) as bit<22>) }
+        dec.step()
+        expect dec.out.valid and dec.out.data.data == d and dec.out.data.corrected
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parity
+// ---------------------------------------------------------------------------
+
+/// Parity bit for `x`: true when `x` has an odd number of ones, which is
+/// the bit to append for even parity.
+pub const fn parity(x: bit<N>) -> bool {
+    ^x
+}
+
+/// Parity generator: the bit to append to `in.data` so the total number of
+/// ones is even (or odd with `Odd`). Combinational.
+pub module Parity<T: type, Odd: bool = false> {
+    /// The protected word.
+    in in: Valid<T>
+    /// The parity bit, qualified by `in.valid`.
+    out parity_bit: bool
+
+    /// Combinational.
+    pub const LATENCY: uint = 0
+
+    parity_bit = (^bits(in.data)) != Odd
+}
+
+/// Parity checker: flags a word whose received parity bit does not match.
+/// Combinational.
+pub module ParityCheck<T: type, Odd: bool = false> {
+    /// The received word.
+    in in: Valid<T>
+    /// The received parity bit.
+    in parity_bit: bool
+    /// A valid word with wrong parity.
+    out error: bool
+
+    /// Combinational.
+    pub const LATENCY: uint = 0
+
+    error = in.valid and (((^bits(in.data)) != parity_bit) != Odd)
+}
+
+test "parity: generate and check, even and odd" {
+    expect parity(0b1011 as bit<4>)
+    expect !parity(0b1001 as bit<4>)
+    let gen = sim Parity<u8>()
+    let chk = sim ParityCheck<u8>()
+    let ogen = sim Parity<u8, true>()
+    let ochk = sim ParityCheck<u8, true>()
+    for _ in 0..50 {
+        let v = rand<u8>()
+        gen.in = Valid { valid: true, data: v }
+        ogen.in = Valid { valid: true, data: v }
+        gen.settle()
+        ogen.settle()
+        expect gen.parity_bit != ogen.parity_bit
+        chk.in = Valid { valid: true, data: v }
+        chk.parity_bit = gen.parity_bit
+        ochk.in = Valid { valid: true, data: v }
+        ochk.parity_bit = ogen.parity_bit
+        chk.settle()
+        ochk.settle()
+        expect !chk.error and !ochk.error
+        chk.parity_bit = !gen.parity_bit
+        chk.settle()
+        expect chk.error
+    }
+}
