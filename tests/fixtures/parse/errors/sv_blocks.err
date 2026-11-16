@@ -1,0 +1,6 @@
+sv_blocks.tern:4:10: error: `begin`/`end` is SystemVerilog; Tern uses `{ }`
+sv_blocks.tern:6:5: error: `begin`/`end` is SystemVerilog; Tern uses `{ }`
+sv_blocks.tern:8:5: error: `begin`/`end` is SystemVerilog; Tern uses `{ }`
+sv_blocks.tern:9:5: error: `case` is SystemVerilog
+sv_blocks.tern:10:5: error: `endcase` is SystemVerilog
+sv_blocks.tern:11:5: error: `typedef` is SystemVerilog

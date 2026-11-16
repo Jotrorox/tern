@@ -44,7 +44,7 @@ spaces — the real syntax is ASCII).
 |---|---|---|
 | `src/base/` | `common.[ch] arena.[ch] str.[ch] map.[ch] vec.h bignum.[ch] json.[ch] utf8.[ch] diag.[ch] args.[ch]` | utilities |
 | `src/os/` | `os.h os_posix.c os_win32.c os_common.c` | the only OS-touching code (`os_common.c` is the portable half — paths, helpers — and includes no OS header) |
-| `src/syntax/` | `token.h lexer.[ch] ast.h parser.[ch] ast_dump.c` | lexer, Pratt/recursive-descent parser, AST |
+| `src/syntax/` | `token.h lexer.[ch] ast.h parser.[ch] ast_dump.c` | lexer, Pratt/recursive-descent parser, AST (`ast.h` is the contract; concrete grammar in `docs/grammar.md`) |
 | `src/sema/` | `resolve.c types.c domains.c` (+ `sema.h`) | name binding, type/width rules, clock domains |
 | `src/elab/` | `value.[ch] consteval.c elab.c mono.c` (+ `elab.h`) | const interpreter, generics, unrolling, AST→IR |
 | `src/ir/` | `ir.h ir_build.c ir_json.c` | typed IR (contract below) and JSON form |
@@ -55,10 +55,10 @@ spaces — the real syntax is ASCII).
 | `src/pkg/` | `toml.c lock.c git.c` (+ `pkg.h`) | tern.toml, tern.lock, dependency resolution, git |
 | `src/lsp/` | `rpc.c lsp.c` | JSON-RPC language server over stdio |
 | `src/tools/` | `fmt.c doc.c import.c` | formatter, HTML docs, `tern import` (SV → extern) |
-| `src/` | `main.c cmds.h cmd_stubs.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, stubs for unimplemented commands, shared front-end driver, embedded std |
+| `src/` | `main.c cmds.h cmd_stubs.c cmd_parse.c cmd_check.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, stubs for unimplemented commands, `tern parse` and the interim parse-only `tern check`, shared front-end driver, embedded std |
 | `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>.tern` or `std/<pkg>/`) |
 | `tools/` | `embed.c` | embeds `std/**/*.tern` into `src/std_embed.c` (committed) |
-| `tests/` | `run.c`, `unit/test_base.c`, `fixtures/**` | golden-file test runner, base/os unit tests, fixtures |
+| `tests/` | `run.c`, `unit/test_base.c`, `fixtures/**`, `fuzz/fuzz_parser.c` | golden-file test runner, base/os unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
 
 ## Pipeline
 

@@ -1,0 +1,14 @@
+// begin/end, case and typedef get SystemVerilog messages; the same words
+// used as ordinary names are fine.
+module M {
+    if a begin
+        x = 1
+    end else begin
+        x = 2
+    end
+    case (s)
+    endcase
+    typedef enum logic [1:0] { A } t
+    end = 3
+    let case = 1
+}

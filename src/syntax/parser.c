@@ -2075,6 +2075,7 @@ static const PsSvWord ps_sv_words[] = {
     {"typedef", "`typedef` is SystemVerilog", "use `struct`, `enum` or `type Name = ...`"},
     {"function", "`function` is SystemVerilog", "use `fn name(x: T) -> T { ... }`"},
     {"integer", "`integer` is SystemVerilog", "use `const` with type `uint`/`sint`, or a sized type such as `s32`"},
+    {"case", "`case` is SystemVerilog", "use `match x { pattern => ..., }`; it must be exhaustive, so there is no `default`"},
 };
 
 /* SystemVerilog keywords used as a statement start. Returns 1 if reported. */
@@ -2088,19 +2089,24 @@ static int ps_sv_statement(Parser *p)
     w = ps_tok(p)->str;
     next = ps_peek(p, 1);
     for (i = 0; i < TERN_ARRAY_LEN(ps_sv_words); i++) {
-        int bare;
+        int bare, fire;
         if (strcmp(w, ps_sv_words[i].word) != 0)
             continue;
+        /* report only where the word cannot start a Tern statement (it may
+         * well be a signal name: `end = x`, `case(x)` is the exception) */
         bare = next == TK_EOF || next == TK_SEMI || next == TK_RBRACE || p->toks[p->pos + 1].nl_before;
-        if (strcmp(w, "always") == 0 && next != TK_AT)
-            return 0;
-        if (!(next == TK_IDENT || next == TK_RESERVED || next == TK_AT || next == TK_ERROR || next == TK_LBRACKET ||
-              bare || (next == TK_KW_REG && strcmp(w, "output") == 0)))
-            return 0;
-        if (next == TK_LBRACKET && !(strcmp(w, "input") == 0 || strcmp(w, "output") == 0))
-            return 0;
-        if ((strcmp(w, "begin") == 0 || strcmp(w, "end") == 0 || strncmp(w, "end", 3) == 0) && !bare &&
-            next != TK_IDENT)
+        if (strcmp(w, "always") == 0)
+            fire = next == TK_AT;
+        else if (strcmp(w, "case") == 0)
+            fire = next == TK_LPAREN;
+        else if (strcmp(w, "begin") == 0 || strncmp(w, "end", 3) == 0)
+            fire = bare || next == TK_IDENT || next == TK_KW_ELSE;
+        else if (strcmp(w, "input") == 0 || strcmp(w, "output") == 0)
+            fire = next == TK_IDENT || next == TK_RESERVED || next == TK_LBRACKET || next == TK_KW_REG;
+        else
+            fire = next == TK_IDENT || next == TK_RESERVED || next == TK_AT || next == TK_ERROR ||
+                   next == TK_KW_ENUM || next == TK_KW_STRUCT;
+        if (!fire)
             return 0;
         if (ps_error(p, ps_tok_span(p), "%s", ps_sv_words[i].msg) && ps_sv_words[i].help)
             diag_help("%s", ps_sv_words[i].help);
