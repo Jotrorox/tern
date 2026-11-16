@@ -643,7 +643,7 @@ int cmd_add(int argc, char **argv)
     /* validate the edited manifest, resolve, and only then write */
     {
         TernManifest nm;
-        uint32_t id = src_add(p.manifest_path, text.data, text.len);
+        uint32_t id = src_add(p.m.path ? p.m.path : p.manifest_path, text.data, text.len);
         const char **upd = (const char **)xcalloc(names.len + 1, sizeof(char *));
         int ok;
         for (i = 0; i < names.len; i++)

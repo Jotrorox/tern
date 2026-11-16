@@ -890,7 +890,11 @@ TomlValue *toml_parse_file(Arena *a, const char *path, uint32_t *src_id_out)
         diag_error(span_none(), "cannot read `%s`", path);
         return NULL;
     }
-    id = src_add(path, data, len);
+    id = src_find(path);
+    if (id)
+        src_update(id, data, len); /* re-reading a file (LSP, repeated loads) reuses its source */
+    else
+        id = src_add(path, data, len);
     free(data);
     if (src_id_out)
         *src_id_out = id;

@@ -704,6 +704,11 @@ static void res_avail_free(PkgAvailList *l)
     vec_free(l->items);
 }
 
+static int lock_avail_cmp(const void *a, const void *b)
+{
+    return pkg_version_cmp(&((const PkgAvail *)a)->version, &((const PkgAvail *)b)->version);
+}
+
 static ResCacheEntry *res_lookup(Resolver *R, int registry, const char *what)
 {
     size_t i;
@@ -719,6 +724,8 @@ static ResCacheEntry *res_lookup(Resolver *R, int registry, const char *what)
         e.status = R->prov->registry ? R->prov->registry(R->prov->user, what, &R->arena, &e.list) : 1;
     else
         e.status = R->prov->tags ? R->prov->tags(R->prov->user, what, &R->arena, &e.list) : -1;
+    if (e.list.items.len > 1)
+        qsort(e.list.items.data, e.list.items.len, sizeof(PkgAvail), lock_avail_cmp);
     vec_push(R->cache, e);
     return &vec_last(R->cache);
 }
@@ -832,10 +839,10 @@ static int res_choose(Resolver *R, const ResReq *reqs, size_t n, PkgNode *node)
     }
     /* version selection over ce->list */
     {
-        PkgReq rq[64];
+        PkgReq *rq = (PkgReq *)xmalloc(sizeof(PkgReq) * (n ? n : 1));
         size_t nrq = 0;
         const PkgAvail *best = NULL, *locked = NULL;
-        for (i = 0; i < n && nrq < TERN_ARRAY_LEN(rq); i++) {
+        for (i = 0; i < n; i++) {
             char err[128];
             if (reqs[i].dep->req && pkg_req_parse(reqs[i].dep->req, &rq[nrq], err, sizeof err) == 0)
                 nrq++;
@@ -868,6 +875,7 @@ static int res_choose(Resolver *R, const ResReq *reqs, size_t n, PkgNode *node)
                 if (prev && prev->kind == PKG_SRC_GIT && res_same_str(prev->url, url) && !prev->tag && !prev->rev &&
                     !prev->branch)
                     node->commit = prev->commit;
+                free(rq);
                 return 0;
             }
             {
@@ -900,8 +908,10 @@ static int res_choose(Resolver *R, const ResReq *reqs, size_t n, PkgNode *node)
                     diag_help("change the requirement in tern.toml to one of the available versions");
                 sb_free(&av);
             }
+            free(rq);
             return -1;
         }
+        free(rq);
         {
             char vb[PKG_VERSION_STRLEN];
             node->version = arena_strdup(&R->arena, pkg_version_str(&best->version, vb));
