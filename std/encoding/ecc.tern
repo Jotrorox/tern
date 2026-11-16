@@ -204,8 +204,8 @@ test "hamming modules: encode, corrupt, decode" {
         let d = bits(rand<u16>())
         enc.in = Valid { valid: true, data: d }
         enc.step()
-        let flip = rand<uint<5>>() where flip < 22
-        dec.in = Valid { valid: true, data: enc.out.data ^ ((1 << flip) as bit<22>) }
+        let bad_bit = rand<uint<5>>() where bad_bit < 22
+        dec.in = Valid { valid: true, data: enc.out.data ^ ((1 << bad_bit) as bit<22>) }
         dec.step()
         expect dec.out.valid and dec.out.data.data == d and dec.out.data.corrected
     }

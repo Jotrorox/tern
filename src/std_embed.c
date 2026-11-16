@@ -5990,8 +5990,8 @@ static const char *const tern_std_chunks_17[] = {
     "        let d = bits(rand<u16>())\n"
     "        enc.in = Valid { valid: true, data: d }\n"
     "        enc.step()\n"
-    "        let flip = rand<uint<5>>() where flip < 22\n"
-    "        dec.in = Valid { valid: true, data: enc.out.data ^ ((1 << flip) as bit<22>) }\n"
+    "        let bad_bit = rand<uint<5>>() where bad_bit < 22\n"
+    "        dec.in = Valid { valid: true, data: enc.out.data ^ ((1 << bad_bit) as bit<22>) }\n"
     "        dec.step()\n"
     "        expect dec.out.valid and dec.out.data.data == d and dec.out.data.corrected\n"
     "    }\n"
@@ -12389,7 +12389,7 @@ static const char *const tern_std_chunks_35[] = {
     "    let y0 = in.data.y as sint<IW>\n"
     "    let z0 = in.data.z\n"
     "    let z_plus_pi = (bits(z0) ^ ((1 << (W - 1)) as bit<W>)) as sint<W>\n"
-    "    let flip = if Mode == .Rotate {\n"
+    "    let pre_rotate = if Mode == .Rotate {\n"
     "        bits(z0)[W - 1] != bits(z0)[W - 2]\n"
     "    } else if Mode == .Vector {\n"
     "        x0 < 0\n"
@@ -12400,7 +12400,7 @@ static const char *const tern_std_chunks_35[] = {
     "    var v: [bool; W + 1]\n"
     "    var s: [St; W + 1]\n"
     "    v[0] = in.valid\n"
-    "    s[0] = if flip {\n"
+    "    s[0] = if pre_rotate {\n"
     "        St { x: (-x0) as sint<IW>, y: (-y0) as sint<IW>, z: z_plus_pi }\n"
     "    } else {\n"
     "        St { x: x0, y: y0, z: z0 }\n"
@@ -20067,7 +20067,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/dsp/fir.tern", tern_std_chunks_14, 2, 5555},
     {"std/dsp/iir.tern", tern_std_chunks_15, 2, 4629},
     {"std/dsp/nco.tern", tern_std_chunks_16, 2, 5765},
-    {"std/encoding/ecc.tern", tern_std_chunks_17, 2, 7715},
+    {"std/encoding/ecc.tern", tern_std_chunks_17, 2, 7724},
     {"std/encoding/encoding.tern", tern_std_chunks_18, 4, 13846},
     {"std/encoding/line.tern", tern_std_chunks_19, 3, 8816},
     {"std/fifo/async.tern", tern_std_chunks_20, 2, 6357},
@@ -20085,7 +20085,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/io/uart.tern", tern_std_chunks_32, 5, 17757},
     {"std/io/ws2812.tern", tern_std_chunks_33, 2, 5476},
     {"std/math/arith.tern", tern_std_chunks_34, 5, 16145},
-    {"std/math/cordic.tern", tern_std_chunks_35, 3, 9856},
+    {"std/math/cordic.tern", tern_std_chunks_35, 3, 9868},
     {"std/math/fixed.tern", tern_std_chunks_36, 3, 9070},
     {"std/math/lfsr.tern", tern_std_chunks_37, 2, 4288},
     {"std/math/math.tern", tern_std_chunks_38, 3, 9955},
