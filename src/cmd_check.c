@@ -18,6 +18,7 @@
 #include "driver.h"
 #include "check/check.h"
 #include "cmds.h"
+#include "os/os.h"
 
 typedef VEC(const char *) CmdCheckPaths;
 
@@ -50,6 +51,56 @@ static void cmd_check_report(Driver *dr, IrDesign *d)
             (unsigned)nmods, (unsigned)d->nmodules, (unsigned)never);
 }
 
+/* --hover LINE:COL[,LINE:COL...]: the semantic info (src/sema/sema.h) at
+ * positions of the first user file, one line each (tests the LSP data) */
+static void cmd_check_hover(Driver *dr, const char *spec)
+{
+    Sema *S = driver_sema(dr);
+    FileUnit *f = NULL;
+    size_t i;
+    const char *p = spec;
+    for (i = 0; i < S->files.len; i++)
+        if (S->files.data[i]->is_user) {
+            f = S->files.data[i];
+            break;
+        }
+    if (!f)
+        return;
+    while (*p) {
+        unsigned line = 0, col = 0;
+        const SourceFile *sf = src_get(f->ast->src);
+        const SemInfo *si = NULL;
+        uint32_t off = 0;
+        StrBuf sb = {0};
+        while (*p >= '0' && *p <= '9')
+            line = line * 10 + (unsigned)(*p++ - '0');
+        if (*p == ':')
+            p++;
+        while (*p >= '0' && *p <= '9')
+            col = col * 10 + (unsigned)(*p++ - '0');
+        if (*p == ',')
+            p++;
+        if (sf && line >= 1 && line <= sf->nlines) {
+            off = sf->lines[line - 1] + (col ? col - 1 : 0);
+            si = sema_info_at(S, f->ast->src, off);
+        }
+        if (si) {
+            sema_info_hover(S, si, &sb);
+            if (si->def.file) {
+                const SourceFile *df = src_get(si->def.file);
+                sb_printf(&sb, " [def %s:%u:%u]", df ? os_path_basename(df->path) : "?", (unsigned)si->def.line,
+                          (unsigned)si->def.col);
+            }
+        } else {
+            sb_puts(&sb, "(nothing)");
+        }
+        printf("%u:%u: %s\n", line, col, sb_cstr(&sb));
+        sb_free(&sb);
+        if (!*p || (*p < '0' || *p > '9'))
+            break;
+    }
+}
+
 static int cmd_check_common(int argc, char **argv, int ir_mode)
 {
     ArgParser ap;
@@ -57,7 +108,7 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
     DriverOptions o;
     CheckOptions co;
     Driver *dr;
-    const char *top = NULL, *val = NULL;
+    const char *top = NULL, *val = NULL, *hover = NULL;
     int json = 0, rc, verbose = 0;
     uint64_t limit = 0;
     Arena ira = {0};
@@ -77,6 +128,8 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
             verbose = 1;
         else if (ir_mode && args_flag(&ap, "json"))
             json = 1;
+        else if (ir_mode && args_opt(&ap, "hover", &val))
+            hover = val;
         else if (args_opt(&ap, "top", &val))
             top = val;
         else if (args_opt(&ap, "features", &val))
@@ -105,7 +158,9 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
     if (!driver_parse_errors(dr)) {
         if (ir_mode) {
             IrDesign *d = driver_elaborate_top(dr, top, &ira);
-            if (d) {
+            if (d && hover) {
+                cmd_check_hover(dr, hover);
+            } else if (d) {
                 StrBuf sb = {0};
                 if (json)
                     ir_to_json(d, &sb);

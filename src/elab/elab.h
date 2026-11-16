@@ -82,6 +82,7 @@ typedef struct Env {
 } Env;
 
 Env *elab_env_new(Elab *el, Env *parent, FileUnit *file);
+void el_env_keep(Elab *el, Env *e);              /* e lives until elab_free */
 void elab_env_free(Env *e);                      /* frees the binding array (not values) */
 Binding *elab_env_bind(Elab *el, Env *e, const char *name, Value v, Span def);
 Binding *elab_env_find(Env *e, const char *name);   /* walks parents; NULL if unbound */
@@ -219,6 +220,7 @@ struct Elab {
     int in_fn;                /* inside an inlined fn body */
     uint32_t depth;           /* call depth */
     VEC(Item *) hw_calls;     /* fns being inlined with hardware arguments */
+    VEC(Env *) kept;          /* scopes that live as long as the Elab (freed by elab_free) */
     /* undo log of assignments to mutable locals (merging under hardware conditions) */
     VEC(struct UndoEntry) undo;
     uint32_t undo_depth;

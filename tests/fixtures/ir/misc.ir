@@ -1,0 +1,49 @@
+enum Mode (2 bits, tag 2, binary) { Off = 2'h0, Slow = 2'h1, Fast = 2'h2, Turbo = 2'h3 }
+struct Ctrl_Ctrl (3 bits) { mode: Mode @1, enable: bool @0 }
+struct Ctrl_Status (2 bits) { err: bool @1, busy: bool @0 }
+module pll_wrapper_8 "pll_wrapper<8>" extern("ip/pll_wrapper.sv")
+  param MULT = 32'h8
+  domain 0 "" clock=refclk reset=rst default
+  0: in refclk: clock
+  1: in rst: reset<async, high> @0
+  2: out outclk: clock
+  3: out locked: bool @0
+end
+module Top top #[keep_hierarchy]
+  domain 0 "" clock=clk reset=arst hz=50000000 default
+  0: in clk: clock
+  1: in arst: reset<async, high> @0
+  2: in other: bool @0
+  3: in regs_ctrl (regs.ctrl): Ctrl_Ctrl @0
+  4: out regs_status (regs.status): Ctrl_Status @0 flipped
+  5: in regs_count (regs.count): uint<32> @0
+  6: in regs_fifo_valid (regs.fifo.valid): bool @0
+  7: in regs_fifo_data (regs.fifo.data): uint<8> @0
+  8: out regs_fifo_ready (regs.fifo.ready): bool @0 flipped
+  9: out status: Ctrl_Status @0
+  10: out locked: bool @0
+  11: out crossed: bool @0
+  12: out table_out: uint<8> @0
+  13: out widths: uint<8> @0
+  14: out top_bits: uint<12> @0
+  15: in poke: bool @0 test_port
+  16: wire pll_outclk (pll.outclk): clock
+  17: wire pll_locked (pll.locked): bool @0
+  18: wire unsafe_cross_0: bool #[unsafe_cross]
+  19: mem lut: uint<8> x 8 mem_init include_hex("misc_lut.hex") #[ram(distributed)]
+  20: wire probe: bool #[keep]
+  assign status = {(regs_ctrl.mode == 2'h3), regs_ctrl.enable}
+  assign locked = (pll_locked && poke)
+  assign unsafe_cross_0 = other
+  assign crossed = unsafe_cross_0
+  assign table_out = lut[regs_count[0+:3]]
+  assign widths = 8'h1c
+  assign top_bits = 12'habc
+  assign probe = regs_fifo_valid
+  inst pll: pll_wrapper_8 (refclk = clk, rst = arst, outclk -> pll_outclk, locked -> pll_locked)
+end
+regmap Ctrl
+  0x0 ctrl: rw 8 enable@[0+:1] mode@[1+:2]
+  0x4 status: ro 8 busy@[0+:1] err@[1+:1]
+  0x8 count: rw 32
+  0x10 fifo: wo 8 stream

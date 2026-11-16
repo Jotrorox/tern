@@ -959,7 +959,7 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
     /* clocks first, then resets (which may follow a connected clock's domain) */
     for (i = 0; i < mi->nports; i++) {
         ModPort *pp = &mi->ports[i];
-        if (!pp->is_clock || pp->place->kind != PL_SIG)
+        if (!pp->is_clock || pp->place->kind != PL_SIG || pp->dir != PORT_IN)
             continue;
         if (given[i]) {
             Value cv = elab_eval(el, args[given[i] - 1].value, env, pp->ty);
@@ -974,7 +974,7 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
     }
     for (i = 0; i < mi->nports; i++) {
         ModPort *pp = &mi->ports[i];
-        if (!pp->is_reset || pp->place->kind != PL_SIG)
+        if (!pp->is_reset || pp->place->kind != PL_SIG || pp->dir != PORT_IN)
             continue;
         if (given[i]) {
             Value rv = elab_eval(el, args[given[i] - 1].value, env, pp->ty);
@@ -1026,7 +1026,7 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
     for (i = 0; i < mi->nports; i++) {
         ModPort *pp = &mi->ports[i];
         uint32_t pdom = mi->ir->ndomains ? elb_map_child_domain(el, mi, conn, pp->domain, dom) : IR_NONE;
-        if ((pp->is_clock || pp->is_reset) && pp->place->kind == PL_SIG && conn[i]) {
+        if ((pp->is_clock || pp->is_reset) && pp->dir == PORT_IN && pp->place->kind == PL_SIG && conn[i]) {
             ir_connect(el->design, m, inst, pp->place->sig, conn[i]);
             vi->ports[i] = el_hw(el, pp->ty, conn[i]);
             continue;
@@ -1045,7 +1045,7 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
         ModPort *pp = &mi->ports[i];
         Value av;
         Expr *ae;
-        if (!given[i] || ((pp->is_clock || pp->is_reset) && pp->place->kind == PL_SIG))
+        if (!given[i] || ((pp->is_clock || pp->is_reset) && pp->dir == PORT_IN && pp->place->kind == PL_SIG))
             continue;
         ae = args[given[i] - 1].value;
         av = elab_eval(el, ae, env, pp->ty);
@@ -1640,7 +1640,7 @@ static void elb_run_stmts(Elab *el, Stmt **stmts, uint32_t n, Env *env)
                     }
                     if (c.u.i) {
                         Env *ie = elab_env_new(el, env, NULL);
-                        ie->keep = 1;
+                        el_env_keep(el, ie);
                         el_mod_stmts(el, e->u.if_expr.then_block->stmts, e->u.if_expr.then_block->nstmts, ie);
                         break;
                     }
@@ -1652,7 +1652,7 @@ static void elb_run_stmts(Elab *el, Stmt **stmts, uint32_t n, Env *env)
                     }
                     if (e->u.if_expr.else_expr->kind == EXPR_BLOCK) {
                         Env *ie = elab_env_new(el, env, NULL);
-                        ie->keep = 1;
+                        el_env_keep(el, ie);
                         el_mod_stmts(el, e->u.if_expr.else_expr->u.block->stmts, e->u.if_expr.else_expr->u.block->nstmts,
                                      ie);
                     }
@@ -1693,7 +1693,7 @@ static void elb_run_stmts(Elab *el, Stmt **stmts, uint32_t n, Env *env)
             }
             for (k = 0; k < vals.n && !el->limit_hit; k++) {
                 Env *ie = elab_env_new(el, env, NULL);
-                ie->keep = 1;
+                el_env_keep(el, ie);
                 ie->suffix = intern_cstr(arena_printf(&el->arena, "%s_%u", env->suffix ? env->suffix : "", (unsigned)k));
                 el_bind_pattern(el, s->u.for_stmt.pat, vals.v[k], ie, 0);
                 {
@@ -2001,7 +2001,7 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
     if (mc.is_extern)
         mi->ir->extern_file = it->u.extern_mod.file;
     scope = elab_env_new(el, vm->genv, vm->file);
-    scope->keep = 1;
+    el_env_keep(el, scope);
     scope->mod = &mc;
     scope->suffix = "";
     mc.scope = scope;

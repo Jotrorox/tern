@@ -50,9 +50,13 @@ Value val_int_bn(Arena *a, Ty *ty, const BigInt *b)
         v.u.i = i;
         return v;
     }
+    /* arena-backed and read-only: never bn_free'd or mutated */
     v.flags = VAL_F_BIG;
     v.u.big = ANEW(a, BigInt);
-    bn_copy(v.u.big, b);
+    v.u.big->len = b->len;
+    v.u.big->cap = b->len;
+    v.u.big->neg = b->neg;
+    v.u.big->d = (uint32_t *)arena_memdup(a, b->d, (b->len ? b->len : 1) * sizeof(uint32_t));
     return v;
 }
 

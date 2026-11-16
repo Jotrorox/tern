@@ -71,6 +71,14 @@ void sema_free(Sema *S)
     map_free(&S->types);
     map_free(&S->info_index);
     vec_free(S->info);
+    for (i = 0; i < S->retired_arenas.len; i++) {
+        arena_release(S->retired_arenas.data[i]);
+        free(S->retired_arenas.data[i]);
+    }
+    vec_free(S->retired_arenas);
+    for (i = 0; i < S->retired_blocks.len; i++)
+        free(S->retired_blocks.data[i]);
+    vec_free(S->retired_blocks);
     arena_release(&S->arena);
     free(S);
 }

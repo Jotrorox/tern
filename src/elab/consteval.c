@@ -125,6 +125,14 @@ Env *elab_env_new(Elab *el, Env *parent, FileUnit *file)
     return e;
 }
 
+void el_env_keep(Elab *el, Env *e)
+{
+    if (!e || e->keep)
+        return;
+    e->keep = 1;
+    vec_push(el->kept, e);
+}
+
 void elab_env_free(Env *e)
 {
     if (!e || e->keep)
@@ -197,12 +205,22 @@ void elab_free(Elab *el)
     uint64_t k, v;
     if (!el)
         return;
-    while (map_next(&el->modules, &it, &k, &v)) {
-        ModInfo *mi = (ModInfo *)(uintptr_t)v;
-        if (mi->scope) {
-            mi->scope->keep = 0;
-            elab_env_free(mi->scope);
+    TERN_UNUSED(k);
+    TERN_UNUSED(v);
+    TERN_UNUSED(it);
+    {
+        /* interned types may point into these scopes and values: they live
+         * as long as the Sema */
+        size_t i;
+        Arena *a = (Arena *)xmalloc(sizeof(Arena));
+        for (i = 0; i < el->kept.len; i++) {
+            vec_push(el->S->retired_blocks, el->kept.data[i]->b);
+            vec_push(el->S->retired_blocks, el->kept.data[i]);
         }
+        vec_free(el->kept);
+        *a = el->arena;
+        memset(&el->arena, 0, sizeof el->arena);
+        vec_push(el->S->retired_arenas, a);
     }
     map_free(&el->modules);
     map_free(&el->modtypes);
@@ -210,7 +228,6 @@ void elab_free(Elab *el)
     ty_ir_cache_free(&el->tycache);
     vec_free(el->hw_calls);
     vec_free(el->undo);
-    arena_release(&el->arena);
     free(el);
 }
 
@@ -987,7 +1004,7 @@ static Value ce_module_const(Elab *el, ValModule *vm, const char *name, Span at)
         return val_error();
     }
     env = elab_env_new(el, vm->genv, vm->file);
-    env->keep = 1; /* lazily evaluated items keep pointing at it */
+    el_env_keep(el, env); /* lazily evaluated items keep pointing at it */
     for (i = 0; i < n; i++) {
         Stmt *s = body[i];
         if (s->kind == STMT_ITEM && s->u.item->name.name) {

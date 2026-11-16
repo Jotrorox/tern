@@ -123,7 +123,7 @@ Env *el_bind_generics(Elab *el, GenericParams *gp, const char *owner, FileUnit *
     int ok = 1;
     uint32_t given_n = args ? nargs : vals ? vals->n : 0;
     int *used = (int *)xcalloc(given_n ? given_n : 1, sizeof(int));
-    genv->keep = 1;
+    el_env_keep(el, genv);
     genv->mod = ctx ? ctx->mod : NULL;
     if (out) {
         out->n = gp->n;
@@ -260,11 +260,8 @@ Env *el_bind_generics(Elab *el, GenericParams *gp, const char *owner, FileUnit *
         }
     }
     free(used);
-    if (!ok) {
-        genv->keep = 0;
-        elab_env_free(genv);
-        return NULL;
-    }
+    if (!ok)
+        return NULL; /* kept: freed by elab_free */
     return genv;
 }
 
@@ -502,7 +499,7 @@ static Ty *mono_build(Elab *el, Item *it, FileUnit *file, Env *ctx, Env *genv, E
         t->genv = genv;
         t->gvals = gv;
         t->ngvals = args->n;
-        genv->keep = 1;
+        el_env_keep(el, genv);
     }
     sb_free(&key);
     sb_free(&name);

@@ -210,6 +210,10 @@ struct Sema {
     VEC(SemInfo) info;
     int info_sorted;
     int record_info;      /* 0 disables recording (default 1) */
+    /* memory of finished elaborators that types may still point into
+     * (generic environments, generic argument values): freed by sema_free */
+    VEC(Arena *) retired_arenas;
+    VEC(void *) retired_blocks;
 };
 
 /* ------------------------------------------------------------ resolve.c */
