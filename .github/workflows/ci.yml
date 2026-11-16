@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.cc }} ${{ matrix.std }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+        std: [c99, c11]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test (per-file objects, -Werror)
+        run: make CC=${{ matrix.cc }} STD=${{ matrix.std }} EXTRA=-Werror test
+      - name: One-command unity build
+        run: |
+          ${{ matrix.cc }} -std=${{ matrix.std }} -O2 -Wall -Wextra -Wpedantic -Werror -o tern src/unity.c
+          ./tern --version
+      - name: Embedded std is up to date
+        run: |
+          ./tools/embed std src/std_embed.c
+          git diff --exit-code -- src/std_embed.c
+
+  warnings:
+    name: Linux check-warnings (gcc + clang, c99 + c11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make CC=gcc check-warnings
+      - run: make clean && make CC=clang check-warnings
+
+  macos:
+    name: macOS clang
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test (-Werror)
+        run: make CC=clang EXTRA=-Werror test
+      - name: check-warnings
+        run: make CC=clang check-warnings
+      - name: One-command unity build (c11 and c99)
+        run: |
+          cc -std=c11 -O2 -o tern src/unity.c && ./tern --version
+          cc -std=c99 -O2 -o tern src/unity.c && ./tern --version
+
+  unity:
+    name: Unity build (cc, c11 + c99)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cc -std=c11 -O2 -o tern src/unity.c && ./tern --version
+      - run: cc -std=c99 -O2 -o tern src/unity.c && ./tern --version
+
+  windows:
+    name: Windows MSVC
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: build.bat test
+        shell: cmd
+        run: build.bat test
+      - name: Version
+        shell: cmd
+        run: tern.exe --version
+
+  tcc:
+    name: TCC smoke build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tcc
+        run: sudo apt-get update && sudo apt-get install -y tcc
+      - name: Build and run
+        run: |
+          tcc -o tern src/unity.c
+          ./tern --version
+          tcc -o test_base tests/unit/test_base.c
+          ./test_base
+          tcc -o run tests/run.c
+          ./run --tern ./tern
+
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: make test under sanitizers
+        run: >-
+          make CC=clang OPT=-O1
+          EXTRA="-g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
+          LDFLAGS="-fsanitize=address,undefined"
+          test
