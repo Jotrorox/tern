@@ -204,17 +204,21 @@ LSP_OBJS =
 TOOLS_SRCS = \
 	src/tools/import.c \
 	src/tools/remap.c \
-	src/tools/fmt.c
+	src/tools/fmt.c \
+	src/tools/doc.c
 TOOLS_OBJS = \
 	$(OBJ)/tools_import.o \
 	$(OBJ)/tools_remap.o \
-	$(OBJ)/tools_fmt.o
+	$(OBJ)/tools_fmt.o \
+	$(OBJ)/tools_doc.o
 $(OBJ)/tools_import.o: src/tools/import.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/tools/import.c -o $@
 $(OBJ)/tools_remap.o: src/tools/remap.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/tools/remap.c -o $@
 $(OBJ)/tools_fmt.o: src/tools/fmt.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/tools/fmt.c -o $@
+$(OBJ)/tools_doc.o: src/tools/doc.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/tools/doc.c -o $@
 
 # --- src/
 MAIN_SRCS = \

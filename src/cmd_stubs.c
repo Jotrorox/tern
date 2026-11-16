@@ -24,4 +24,3 @@ int cmd_sim(int argc, char **argv) { return stub_not_implemented("sim", argc, ar
 int cmd_prove(int argc, char **argv) { return stub_not_implemented("prove", argc, argv); }
 int cmd_synth(int argc, char **argv) { return stub_not_implemented("synth", argc, argv); }
 int cmd_lsp(int argc, char **argv) { return stub_not_implemented("lsp", argc, argv); }
-int cmd_doc(int argc, char **argv) { return stub_not_implemented("doc", argc, argv); }

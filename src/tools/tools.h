@@ -50,4 +50,30 @@ int fmt_check_naming(const AstFile *f);
 /* Text rendering width for the terminal (80 when unknown). */
 #define DOC_TEXT_WIDTH 80
 
+typedef struct DocSet DocSet;
+
+DocSet *doc_set_new(void);
+void doc_set_free(DocSet *ds);
+/* Adds a source file (copied and registered with src_add). `is_std` marks
+ * standard-library files (only their pub items are documented);
+ * `fallback_pkg` names the package of a file without a `package` line.
+ * Files with syntax errors are reported and skipped: returns -1. */
+int doc_set_add_source(DocSet *ds, const char *path, const char *text, size_t len, int is_std,
+                       const char *fallback_pkg);
+/* Adds the standard library: the directory $TERN_STD when set, else the
+ * sources embedded in the binary (std_embed.h). */
+int doc_set_add_std(DocSet *ds);
+/* Groups items by package, resolves re-exports and attributes tests to the
+ * items they simulate (called by the renderers when needed). */
+void doc_set_finish(DocSet *ds);
+/* Terminal rendering of `what`: a package (`std::fifo`), an item
+ * (`std::fifo::Fifo`), `std` (its packages) or NULL (all packages),
+ * wrapped to `width` columns. Returns 0, or -1 when nothing matches (the
+ * message, with a suggestion, is appended to `out`). */
+int doc_render_text(DocSet *ds, const char *what, int width, struct StrBuf *out);
+/* Writes the static HTML site (index.html, one page per package, style.css,
+ * search.js, search-index.js) into `outdir`. Returns 0, or -1 with a
+ * message in `err`. */
+int doc_write_html(DocSet *ds, const char *outdir, struct StrBuf *err);
+
 #endif /* TERN_TOOLS_H */

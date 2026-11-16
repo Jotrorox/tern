@@ -1,0 +1,33 @@
+package std::fifo
+
+Buffering.
+
+This file: Fifo (block-RAM friendly), FifoFwft (distributed RAM), ShiftFifo
+(flip-flops) and Lifo. async.tern: AsyncFifo (two clock domains, Gray-coded
+pointers). packet.tern: PacketFifo (commit/drop whole packets).
+
+All FIFOs speak Stream<T> on both sides: `pop.valid` means `pop.data` already
+holds the oldest entry (there is no separate read strobe), and `pop.fire()`
+removes it. Depths are counted in entries; `count` reports the number of stored
+entries.
+
+Modules:
+  pub module Fifo<T: type, Depth: uint = 16, AlmostFull: uint = Depth - 1>
+      Synchronous FIFO built on a memory with a synchronous read port, so it
+      infers block RAM.
+  pub module FifoFwft<T: type, Depth: uint = 16, AlmostFull: uint = Depth - 1>
+      First-word fall-through FIFO on distributed (LUT) RAM: `pop.data` is a
+      combinational read of the oldest entry, so an entry is visible one cycle
+      after its push.
+  pub module ShiftFifo<T: type, Depth: uint = 4>
+      Flip-flop FIFO for small depths (at most 8): entries shift toward the
+      output on every pop, so `pop.data` comes straight from a register and no
+      RAM is inferred.
+  pub module Lifo<T: type, Depth: uint = 16>
+      Stack (last in, first out) on distributed RAM.
+  pub module AsyncFifo<T: type, Depth: uint = 16>
+      Dual-clock FIFO: the standard clock-domain-crossing data path.
+  pub module PacketFifo<T: type, Depth: uint = 64>
+      Store-and-forward FIFO for packet streams.
+
+Run `tern doc std::fifo::<Item>` for the details of an item.

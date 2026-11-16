@@ -1,0 +1,10 @@
+enum std::math::Round
+
+    pub enum Round
+
+How `fx_convert` treats fraction bits it drops.
+
+Variants:
+  Truncate  Drop them (round toward -infinity).
+  HalfUp    Round to nearest, halves toward +infinity.
+  HalfEven  Round to nearest, halves to the even neighbour (no bias).

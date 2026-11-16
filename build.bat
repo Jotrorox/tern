@@ -39,6 +39,8 @@ build\test_tools.exe
 if errorlevel 1 exit /b 1
 build\test_fmt.exe
 if errorlevel 1 exit /b 1
+tern.exe fmt --check std
+if errorlevel 1 exit /b 1
 tests\run.exe --tern tern.exe
 if errorlevel 1 exit /b 1
 exit /b 0

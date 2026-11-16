@@ -29,7 +29,7 @@
 #include "../../src/syntax/ast_dump.c"
 #include "../../src/std_embed.c"
 #include "../../src/tools/fmt.c"
-/* DOC_INCLUDE */
+#include "../../src/tools/doc.c"
 
 int cmd_print_usage(const char *name)
 {
@@ -251,6 +251,202 @@ int main(void)
     return 0;
 }
 
+/* Compares `got` with the golden file (rewritten with UPDATE=1). */
+static void tf_golden(const char *path, const char *got)
+{
+    char *want = NULL;
+    size_t len = 0;
+    if (os_read_file(path, &want, &len) != 0)
+        want = NULL;
+    if (!want || strcmp(want, got) != 0) {
+        if (tf_update) {
+            os_write_file(path, got, strlen(got));
+            printf("test_fmt: updated %s\n", path);
+        } else {
+            fprintf(stderr, "%s: output differs (UPDATE=1 rewrites it); got:\n%s\n", path, got);
+            tf_fails++;
+        }
+    }
+    tf_checks++;
+    free(want);
+}
+
+static const char *memmem_simple(const char *h, size_t n, const char *needle)
+{
+    size_t k = strlen(needle), i;
+    for (i = 0; i + k <= n; i++) {
+        if (memcmp(h + i, needle, k) == 0)
+            return h + i;
+    }
+    return NULL;
+}
+
+static const char *const tf_void_tags[] = {"meta", "link", "input", "br", "hr", "img"};
+
+/* Every element is closed in order; no external resources. */
+static int tf_html_balanced(const char *html, StrBuf *why)
+{
+    const char *stack[256];
+    size_t depth = 0, i;
+    const char *p = html;
+    while ((p = strchr(p, '<')) != NULL) {
+        const char *q = p + 1;
+        int closing = 0;
+        char name[32];
+        size_t n = 0;
+        if (strncmp(p, "<!--", 4) == 0) {
+            const char *e = strstr(p, "-->");
+            p = e ? e + 3 : p + 4;
+            continue;
+        }
+        if (q[0] == '!') {
+            p = q;
+            continue;
+        }
+        if (q[0] == '/') {
+            closing = 1;
+            q++;
+        }
+        while (tern_is_alnum((unsigned char)*q) && n + 1 < sizeof name)
+            name[n++] = *q++;
+        name[n] = '\0';
+        if (n == 0) {
+            sb_printf(why, "stray `<` at offset %u", (unsigned)(p - html));
+            return 0;
+        }
+        if (!closing && (strcmp(name, "script") == 0 || strcmp(name, "link") == 0)) {
+            const char *e = strchr(q, '>');
+            if (e && (memmem_simple(q, (size_t)(e - q), "http") != NULL)) {
+                sb_printf(why, "external resource in <%s>", name);
+                return 0;
+            }
+        }
+        for (i = 0; i < TERN_ARRAY_LEN(tf_void_tags); i++) {
+            if (strcmp(name, tf_void_tags[i]) == 0)
+                break;
+        }
+        if (i == TERN_ARRAY_LEN(tf_void_tags)) {
+            if (closing) {
+                if (depth == 0 || strcmp(stack[depth - 1], name) != 0) {
+                    sb_printf(why, "</%s> does not close <%s>", name, depth ? stack[depth - 1] : "(nothing)");
+                    return 0;
+                }
+                depth--;
+            } else if (depth < TERN_ARRAY_LEN(stack)) {
+                stack[depth++] = intern_cstr(name);
+            }
+        }
+        p = strchr(q, '>');
+        if (!p) {
+            sb_puts(why, "unterminated tag");
+            return 0;
+        }
+    }
+    if (depth) {
+        sb_printf(why, "<%s> is not closed", stack[depth - 1]);
+        return 0;
+    }
+    return 1;
+}
+
 static void tf_doc_tests(void)
 {
+    static const struct {
+        const char *what, *golden;
+    } goldens[] = {
+        {"std::fifo::Fifo", "tests/fixtures/doc/std_fifo_Fifo.txt"},
+        {"std::prelude::Stream", "tests/fixtures/doc/std_prelude_Stream.txt"},
+        {"std::math::Round", "tests/fixtures/doc/std_math_Round.txt"},
+        {"std::fifo", "tests/fixtures/doc/std_fifo.txt"},
+    };
+    DocSet *ds = doc_set_new();
+    size_t i;
+    StrBuf out = {0}, why = {0};
+    char *tmp, *dir;
+    int npages = 0;
+    doc_set_add_std(ds);
+    TF_CHECK(ds->nerrors == 0);
+    for (i = 0; i < TERN_ARRAY_LEN(goldens); i++) {
+        sb_reset(&out);
+        TF_CHECK(doc_render_text(ds, goldens[i].what, 80, &out) == 0);
+        tf_golden(goldens[i].golden, sb_cstr(&out));
+    }
+    sb_reset(&out);
+    TF_CHECK(doc_render_text(ds, "std::fifo::Fifx", 80, &out) == -1);
+    TF_CHECK(strstr(sb_cstr(&out), "did you mean `std::fifo::Fifo`?") != NULL);
+    sb_reset(&out);
+    TF_CHECK(doc_render_text(ds, "std", 80, &out) == 0);
+    TF_CHECK(strstr(sb_cstr(&out), "std::stream") != NULL);
+    /* every package and item renders (no crash, sanitizers) */
+    {
+        size_t j, nitems = 0;
+        for (i = 0; i < ds->pkgs.len; i++) {
+            sb_reset(&out);
+            TF_CHECK(doc_render_text(ds, ds->pkgs.data[i]->name, 60, &out) == 0);
+            for (j = 0; j < ds->pkgs.data[i]->items.len; j++) {
+                sb_reset(&out);
+                TF_CHECK(doc_render_text(ds, ds->pkgs.data[i]->items.data[j]->full, 80, &out) == 0);
+                nitems++;
+            }
+        }
+        TF_CHECK(nitems > 200);
+        printf("test_fmt: doc: %u std items rendered as text\n", (unsigned)nitems);
+    }
+
+    /* the HTML site for all of std */
+    tmp = os_temp_dir();
+    sb_reset(&out);
+    sb_printf(&out, "%s/tern-test-doc-%llu", tmp ? tmp : ".", (unsigned long long)os_time_ns());
+    dir = sb_take(&out);
+    free(tmp);
+    TF_CHECK(doc_write_html(ds, dir, &why) == 0);
+    for (i = 0; i < ds->pkgs.len; i++) {
+        char *path = os_path_join(dir, ds->pkgs.data[i]->page);
+        char *html = NULL;
+        size_t len = 0;
+        if (os_read_file(path, &html, &len) != 0) {
+            fprintf(stderr, "doc: page %s was not written\n", path);
+            tf_fails++;
+        } else {
+            sb_reset(&why);
+            npages++;
+            if (!tf_html_balanced(html, &why)) {
+                fprintf(stderr, "doc: %s: %s\n", path, why.data);
+                tf_fails++;
+            }
+            TF_CHECK(strstr(html, "<title>") != NULL);
+        }
+        tf_checks++;
+        free(html);
+        free(path);
+    }
+    {
+        static const char *const extra[] = {"index.html", "style.css", "search.js", "search-index.js"};
+        for (i = 0; i < TERN_ARRAY_LEN(extra); i++) {
+            char *path = os_path_join(dir, extra[i]);
+            char *text = NULL;
+            size_t len = 0;
+            TF_CHECK(os_read_file(path, &text, &len) == 0 && len > 100);
+            if (text && i == 0) {
+                sb_reset(&why);
+                if (!tf_html_balanced(text, &why)) {
+                    fprintf(stderr, "doc: index.html: %s\n", why.data);
+                    tf_fails++;
+                }
+            }
+            if (text && i == 3)
+                TF_CHECK(strstr(text, "\"std::fifo::Fifo\",\"module\",\"std.fifo.html#module.Fifo\"") != NULL);
+            if (text && i == 1)
+                TF_CHECK(strstr(text, "prefers-color-scheme:dark") != NULL);
+            free(text);
+            free(path);
+        }
+    }
+    TF_CHECK(npages >= 15);
+    printf("test_fmt: doc: %d std package pages written and checked\n", npages);
+    os_remove_all(dir);
+    free(dir);
+    sb_free(&out);
+    sb_free(&why);
+    doc_set_free(ds);
 }

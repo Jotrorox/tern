@@ -173,3 +173,32 @@ Exempt: `extern module` declarations (they carry SystemVerilog names) and the
 prelude's primitive aliases (`u8` ... `s64`). Generic parameters are not
 checked. The check is `fmt_check_naming()` in `src/tools/fmt.c` (declared in
 `src/tools/tools.h`), so other commands can run it too.
+
+## Doc comments (`tern doc`)
+
+`tern doc` renders `///` comments with a small Markdown subset; write them
+so that they read well both as source and in the generated pages:
+
+* paragraphs separated by an empty `///` line;
+* `` `code` `` spans (a span that names an item, such as `` `std::fifo::Fifo` ``,
+  becomes a link), *emphasis*, **strong**;
+* `[text](url)` links and `[Item]` links to items in scope;
+* bullet lists (`*`, `-`) and numbered lists (`1.`), continued by indented
+  lines;
+* fenced code blocks (```` ``` ````), highlighted as Tern;
+* `#` headings.
+
+A `///` comment before a generic parameter documents it (generics table); a
+module's ports, a bundle's or struct's fields, enum variants, regmap entries
+and `pub const`s inside a module take theirs from the comments above them.
+The package description is the ordinary `//` comment block right after the
+`package` line of the package's main file (`std/fifo/fifo.tern` for
+`std::fifo`). Tests are listed as "Tested behaviours" of the module they
+simulate (`sim Fifo<..>()`).
+
+```
+tern doc                        HTML for the project and std in build/doc/
+tern doc std -o site/           HTML for std
+tern doc std::fifo              the package in the terminal (offline reference)
+tern doc std::fifo::Fifo        one item; a unique bare name works too: tern doc Fifo
+```
