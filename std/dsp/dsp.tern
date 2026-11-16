@@ -44,7 +44,7 @@ pub const fn sin_quarter_q60(m: uint, den: uint) -> uint {
     var sum = x
     for k in 1..13 {
         term = term * x / ONE_Q60 * x / ONE_Q60 / ((2 * k) * (2 * k + 1))
-        if k % 2 == 1 { sum = sum - term } else { sum = sum + term }
+        if (k / 2) * 2 != k { sum = sum - term } else { sum = sum + term }
     }
     sum
 }
@@ -52,9 +52,9 @@ pub const fn sin_quarter_q60(m: uint, den: uint) -> uint {
 /// round(amp · sin(2π · num / den)) for any num >= 0 and den > 0, using
 /// quadrant symmetry around [sin_quarter_q60].
 pub const fn sin_scaled(num: uint, den: uint, amp: uint) -> sint {
-    let n4 = (num % den) * 4
+    let n4 = (num - (num / den) * den) * 4
     let quadrant = n4 / den
-    let rem = n4 % den
+    let rem = n4 - quadrant * den
     let m = if quadrant == 1 or quadrant == 3 { den - rem } else { rem }
     let mag = (sin_quarter_q60(m, den) * amp + ONE_Q60 / 2) / ONE_Q60
     if quadrant >= 2 { -(mag as sint) } else { mag as sint }
