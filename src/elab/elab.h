@@ -107,6 +107,7 @@ typedef struct Place {
     uint32_t sig, lo, width;
     IrExpr *index;
     uint32_t elem_width;
+    uint32_t len;             /* index: elements of the indexed array (writes past it are skipped) */
     const char *field;        /* readable field path for the IR ("carry", "pos.x") */
     uint32_t n;
     struct Place **subs;

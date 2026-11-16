@@ -1872,7 +1872,7 @@ static const IrType *sv_lvalue(SvGen *g, const IrLvalue *lv, StrBuf *out, StrBuf
     }
     {
         const IrType *at = sv_array_at(s->type, lv->lo, lv->width);
-        uint32_t ew = lv->width, rw = at ? at->width : s->type->width - lv->lo, n = rw / ew;
+        uint32_t ew = lv->width, rw = at ? at->width : s->type->width - lv->lo, n = lv->len ? lv->len : rw / ew;
         StrBuf rb = {0}, it = {0};
         const IrType *res = NULL;
         SvSel rs = sv_select(g, g->mn->sig[lv->sig], st, s->type->width, 0, lv->lo, rw, &rb);

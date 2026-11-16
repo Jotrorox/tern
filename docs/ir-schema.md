@@ -141,7 +141,7 @@ Every expression is an object with `k` (kind) and `w` (result width), plus:
 | `"const"` | `v`: bits | constant |
 | `"sig"` | `sig` | signal (any kind except `mem`) |
 | `"slice"` | `lo`, optional `field` | `args[0][lo +: w]`; `field` names a struct field for readable output |
-| `"index"` | — | element `args[1]` of `args[0]`, element `i` at `[i*w +: w]` |
+| `"index"` | — | element `args[1]` of `args[0]`, element `i` at `[i*w +: w]`; an index past the last whole element reads 0 |
 | `"unary"` | `op` | `not neg lnot rand ror rxor` |
 | `"binary"` | `op` | `add sub mul div mod and or xor shl shr ashr eq ne lt le gt ge land lor` |
 | `"concat"` | — | `args[0]` is the most significant |
@@ -157,12 +157,15 @@ results and reductions are 1 bit; `land`/`lor`/`lnot` operate on 1-bit values.
 ### Lvalue
 
 ```json
-{"sig": 3, "lo": 0, "w": 8, "index": Expr, "field": "carry"}
+{"sig": 3, "lo": 0, "w": 8, "index": Expr, "len": 3, "field": "carry"}
 ```
 
 Bits `[lo +: w]` of signal `sig`; with `index`, element `index` (each `w`
-bits) of the array starting at bit `lo`. `index` and `field` are omitted when
-absent. A whole-signal assignment has `lo` 0 and `w` equal to the signal
+bits) of the array of `len` elements starting at bit `lo`; an assignment
+whose index is `len` or more writes nothing (array lengths that are not a
+power of two). `index`, `len` and `field` are omitted when absent; a missing
+`len` means as many whole elements as fit from `lo` to the end of the
+signal. A whole-signal assignment has `lo` 0 and `w` equal to the signal
 width.
 
 ### Process and statements

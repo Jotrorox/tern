@@ -2630,6 +2630,7 @@ Value el_index(Elab *el, Value base, Value idx, Span at, Expr *idx_expr)
             *q = *base.place;
             q->index = ie;
             q->elem_width = t->elem->width;
+            q->len = t->len;
             q->width = t->elem->width;
             q->ty = t->elem;
             r.place = q;
@@ -2650,6 +2651,7 @@ Value el_index(Elab *el, Value base, Value idx, Span at, Expr *idx_expr)
             *q = *base.place;
             q->index = ie;
             q->elem_width = 1;
+            q->len = t->width;
             q->width = 1;
             q->ty = el->S->t_bool;
             r.place = q;

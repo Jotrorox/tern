@@ -195,9 +195,10 @@ static void elb_assign_leaf(Elab *el, Place *p, Value v, Expr *src, Expr *lhs, S
         return;
     }
     rhs = el_to_ir(el, &v, at);
-    if (p->index)
+    if (p->index) {
         lv = ir_lv_index(m, p->sig, p->lo, p->elem_width, p->index);
-    else
+        lv.len = p->len;
+    } else
         lv = ir_lv_slice(m, p->sig, p->lo, p->width);
     lv.field = p->field;
     if (el->blk) {
@@ -2189,6 +2190,11 @@ static int elb_verify_expr(const IrModule *m, const IrExpr *e, int in_prop)
             bad += elb_vbad(e, "binary operand widths");
         }
         break;
+    case IRE_INDEX:
+        /* may be out of range (reads 0), but the base holds at least one element */
+        if (e->args[0]->width < e->width)
+            bad += elb_vbad(e, "index element wider than the array");
+        break;
     case IRE_MUX:
         if (e->args[0]->width != 1 || e->args[1]->width != e->width || e->args[2]->width != e->width)
             bad += elb_vbad(e, "mux widths");
@@ -2207,6 +2213,23 @@ static int elb_verify_expr(const IrModule *m, const IrExpr *e, int in_prop)
     return bad;
 }
 
+static int elb_verify_lvalue(const IrModule *m, const IrLvalue *lv, const IrExpr *rhs)
+{
+    uint64_t sw;
+    int bad = 0;
+    if (lv->sig >= m->nsigs)
+        return elb_vbad(rhs, "assignment to an unknown signal");
+    sw = m->sigs[lv->sig].type->width;
+    if (lv->index) {
+        bad += elb_verify_expr(m, lv->index, 0);
+        if ((uint64_t)lv->lo + (uint64_t)(lv->len ? lv->len : 1) * lv->width > sw)
+            bad += elb_vbad(rhs, "indexed assignment past the end of the signal");
+    } else if ((uint64_t)lv->lo + lv->width > sw) {
+        bad += elb_vbad(rhs, "assignment slice out of range");
+    }
+    return bad;
+}
+
 static int elb_verify_block(const IrModule *m, const IrBlock *b)
 {
     uint32_t i, k;
@@ -2216,6 +2239,8 @@ static int elb_verify_block(const IrModule *m, const IrBlock *b)
         switch (s->kind) {
         case IRST_ASSIGN:
             bad += elb_verify_expr(m, s->rhs, 0);
+            if (s->rhs)
+                bad += elb_verify_lvalue(m, &s->lhs, s->rhs);
             if (s->rhs && s->rhs->width != s->lhs.width)
                 bad += elb_vbad(s->rhs, "assignment width");
             break;
@@ -2258,6 +2283,7 @@ int elab_ir_verify(const IrDesign *d)
         elb_verify_what[0] = 0;
         for (i = 0; i < m->nassigns; i++) {
             bad += elb_verify_expr(m, m->assigns[i].rhs, 0);
+            bad += elb_verify_lvalue(m, &m->assigns[i].lhs, m->assigns[i].rhs);
             if (m->assigns[i].rhs->width != m->assigns[i].lhs.width)
                 bad += elb_vbad(m->assigns[i].rhs, "continuous assignment width");
         }

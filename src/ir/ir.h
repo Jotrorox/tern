@@ -145,8 +145,10 @@ typedef enum IrExprKind {
     IRE_SLICE,    /* args[0][lo +: width]; also struct fields (field != NULL),
                      enum payload fields, constant array indices */
     IRE_INDEX,    /* dynamic: element args[1] of args[0]; element i is
-                     args[0][i*width +: width].  The index is always in range
-                     (Tern requires exact-width or enum indices). */
+                     args[0][i*width +: width].  args[0] holds
+                     args[0].width / width elements; an index past the last
+                     one reads 0 (2-state; possible for array lengths that
+                     are not a power of two, spec §5.5) */
     IRE_UNARY,    /* op in IROP_NOT..IROP_RXOR */
     IRE_BINARY,   /* op in IROP_ADD..IROP_LOR */
     IRE_CONCAT,   /* args[0] is the most significant */
@@ -198,7 +200,9 @@ struct IrExpr {
 
 /* Assignment target: bits [lo +: width] of signal `sig`, or — when `index` is
  * non-NULL — element `index` (each element `width` bits wide) of the array
- * that starts at bit `lo` of `sig`.  A whole-signal assignment has lo == 0 and
+ * that starts at bit `lo` of `sig` and has `len` elements.  An assignment
+ * with index >= len writes nothing (2-state; possible for array lengths that
+ * are not a power of two).  A whole-signal assignment has lo == 0 and
  * width == type->width. */
 typedef struct IrLvalue {
     uint32_t sig;
@@ -206,6 +210,9 @@ typedef struct IrLvalue {
     uint32_t width;
     IrExpr *index;
     const char *field;    /* optional field path for readable SV ("carry", "pos.x") */
+    uint32_t len;         /* index != NULL: elements of the indexed array; 0 means
+                             as many whole elements as fit from lo to the end of
+                             the signal (lo + len * width <= signal width) */
 } IrLvalue;
 
 /* -------------------------------------------------------- statements ---- */

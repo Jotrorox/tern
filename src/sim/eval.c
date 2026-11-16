@@ -155,7 +155,7 @@ void sim_exec(SimModel *m, uint32_t pc, uint32_t end)
         }
         case SOP_DEPOSIT_DYN: {
             uint64_t idx = v[in->b], lo;
-            if (in->p + in->aw > in->w || idx > (uint64_t)(in->w - in->p - in->aw) / in->aw)
+            if (idx >= in->c || in->p + in->aw > in->w || idx > (uint64_t)(in->w - in->p - in->aw) / in->aw)
                 break;
             lo = in->p + idx * in->aw;
             {
@@ -230,7 +230,7 @@ void sim_exec(SimModel *m, uint32_t pc, uint32_t end)
         case SOP_WDEPOSIT: bv_deposit(v + in->d, in->w, in->p, v + in->a, in->aw); break;
         case SOP_WDEPOSIT_DYN: {
             uint64_t idx = in->bw <= 64 ? v[in->b] : bv_to_u64_sat(v + in->b, in->bw);
-            if (in->p + in->aw > in->w || idx > (uint64_t)(in->w - in->p - in->aw) / in->aw)
+            if (idx >= in->c || in->p + in->aw > in->w || idx > (uint64_t)(in->w - in->p - in->aw) / in->aw)
                 break;
             bv_deposit(v + in->d, in->w, in->p + idx * in->aw, v + in->a, in->aw);
             break;

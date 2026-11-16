@@ -363,7 +363,8 @@ UNIT_TESTS = \
 	build/test_pkg \
 	build/test_tools \
 	build/test_fmt \
-	build/test_emit
+	build/test_emit \
+	build/test_elab
 
 tests/run: tests/run.c $(TEST_DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS)
@@ -385,6 +386,9 @@ build/test_fmt: tests/unit/test_fmt.c $(TEST_DEPS) $(SYNTAX_SRCS) $(TOOLS_SRCS) 
 
 build/test_emit: tests/unit/test_emit.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(EMIT_SRCS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_emit.c $(LDLIBS)
+
+build/test_elab: tests/unit/test_elab.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_elab.c $(LDLIBS)
 
 test: $(BIN) tests/run $(UNIT_TESTS)
 	for t in $(UNIT_TESTS); do ./$$t || exit 1; done
