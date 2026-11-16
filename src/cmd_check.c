@@ -21,6 +21,35 @@
 
 typedef VEC(const char *) CmdCheckPaths;
 
+/* --verbose: what was elaborated, and which user modules never were */
+static void cmd_check_report(Driver *dr, IrDesign *d)
+{
+    Sema *S = driver_sema(dr);
+    size_t i;
+    uint32_t k, m, never = 0, nmods = 0;
+    for (i = 0; i < S->files.len; i++) {
+        FileUnit *f = S->files.data[i];
+        if (!f->is_user)
+            continue;
+        for (k = 0; k < f->ast->nitems; k++) {
+            Item *it = f->ast->items[k];
+            int found = 0;
+            if (it->kind != ITEM_MODULE && it->kind != ITEM_EXTERN)
+                continue;
+            nmods++;
+            for (m = 0; m < d->nmodules; m++)
+                if (d->modules[m]->tern_name == it->name.name && d->modules[m]->loc.file == it->name.span.file)
+                    found = 1;
+            if (!found) {
+                fprintf(stderr, "tern check: not elaborated: %s (%s)\n", it->name.name, f->ast->path);
+                never++;
+            }
+        }
+    }
+    fprintf(stderr, "tern check: %u modules declared, %u instantiations elaborated, %u never elaborated\n",
+            (unsigned)nmods, (unsigned)d->nmodules, (unsigned)never);
+}
+
 static int cmd_check_common(int argc, char **argv, int ir_mode)
 {
     ArgParser ap;
@@ -29,7 +58,7 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
     CheckOptions co;
     Driver *dr;
     const char *top = NULL, *val = NULL;
-    int json = 0, rc;
+    int json = 0, rc, verbose = 0;
     uint64_t limit = 0;
     Arena ira = {0};
     memset(&o, 0, sizeof o);
@@ -44,6 +73,8 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
             co.unused = 1;
         else if (args_flag(&ap, "strict"))
             co.strict = 1;
+        else if (args_flag(&ap, "verbose|v"))
+            verbose = 1;
         else if (ir_mode && args_flag(&ap, "json"))
             json = 1;
         else if (args_opt(&ap, "top", &val))
@@ -87,6 +118,8 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
             IrDesign *d = driver_elaborate_all(dr, top, &ira);
             if (diag_error_count() == 0)
                 check_design(d, &co);
+            if (verbose)
+                cmd_check_report(dr, d);
         }
     }
     rc = diag_error_count() ? TERN_EXIT_FAIL : TERN_EXIT_OK;

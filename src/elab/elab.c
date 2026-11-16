@@ -744,13 +744,18 @@ Value el_force_decl(Elab *el, Binding *b)
     el->blk = NULL;
     el->in_fn = 0;
     el->undo_depth = 0;
-    switch (s->kind) {
-    case STMT_REG: v = elb_force_reg(el, b, s, env); break;
-    case STMT_VAR: v = elb_force_var(el, b, s, env); break;
-    case STMT_MEM: v = elb_force_mem(el, b, s, env); break;
-    case STMT_DOMAIN: v = elb_force_domain(el, b, s, env); break;
-    case STMT_LET: v = elb_force_let(el, b, s, env); break;
-    default: v = val_error(); break;
+    {
+        struct BlkCtx *saved_tb = el->temp_blk;
+        el->temp_blk = NULL;
+        switch (s->kind) {
+        case STMT_REG: v = elb_force_reg(el, b, s, env); break;
+        case STMT_VAR: v = elb_force_var(el, b, s, env); break;
+        case STMT_MEM: v = elb_force_mem(el, b, s, env); break;
+        case STMT_DOMAIN: v = elb_force_domain(el, b, s, env); break;
+        case STMT_LET: v = elb_force_let(el, b, s, env); break;
+        default: v = val_error(); break;
+        }
+        el->temp_blk = saved_tb;
     }
     el->blk = saved_blk;
     el->in_fn = saved_fn;
@@ -1193,6 +1198,53 @@ Value el_mem_method(Elab *el, Value mem, const char *name, Expr *call, Env *env)
     return val_error();
 }
 
+/* -------------------------------------------------------------- temps -- */
+
+static uint32_t elb_tree_size(const IrExpr *e, uint32_t cap)
+{
+    uint32_t n = 1, i;
+    for (i = 0; i < e->nargs && n <= cap; i++)
+        n += elb_tree_size(e->args[i], cap - n);
+    return n;
+}
+
+/* Gives a large hardware value an intermediate signal so that repeated uses
+ * of locals (fn bodies, loops) do not grow expression trees exponentially:
+ * in a comb block a var assigned at this point (default 0 at the top of the
+ * process), elsewhere a wire. */
+Value el_maybe_temp(Elab *el, Value v, Span at)
+{
+    ModCtx *mc = el->mod;
+    IrModule *m;
+    uint32_t sig;
+    BlkCtx *b = el->temp_blk;
+    const char *nm;
+    Value r;
+    if (v.kind != VAL_HW || !el->design || !mc || !v.ty || !v.ty->hw || v.place || mc->in_property)
+        return v;
+    if (elb_tree_size(v.u.e, 40) <= 24)
+        return v;
+    m = mc->ir;
+    nm = intern_cstr(arena_printf(&el->arena, "_t%u", (unsigned)mc->ntemps++));
+    if (b && !b->clocked && b->out) {
+        VarDefault vd;
+        sig = ir_add_signal(el->design, m, nm, NULL, IRS_VAR, el_irty(el, v.ty), at);
+        ir_stmts_push(b->out, ir_stmt_assign(el->design->arena, ir_lv_sig(m, sig), v.u.e, at));
+        vec_push(b->assigned, sig);
+        vd.sig = sig;
+        vd.val = el_zero(el, v.ty);
+        vd.loc = at;
+        vec_push(mc->var_defaults, vd);
+    } else {
+        sig = ir_add_signal(el->design, m, nm, NULL, IRS_WIRE, el_irty(el, v.ty), at);
+        ir_add_assign(el->design, m, ir_lv_sig(m, sig), v.u.e, at);
+        map_put(&mc->let_wire, sig, 1);
+    }
+    map_put(&mc->sig_driven, sig, 1);
+    r = el_hw(el, v.ty, ir_sig(el->design->arena, m, sig, at));
+    return r;
+}
+
 /* ------------------------------------------------------- unsafe_cross -- */
 
 Value el_unsafe_cross(Elab *el, Value v, Span at)
@@ -1406,8 +1458,10 @@ static void elb_block(Elab *el, Block *body, Env *env, int clocked, uint32_t dom
     blk.out = &list;
     blk.loc = at;
     el->blk = &blk;
+    el->temp_blk = &blk;
     el_exec_stmts(el, body->stmts, body->nstmts, benv, NULL, NULL);
     el->blk = NULL;
+    el->temp_blk = NULL;
     elab_env_free(benv);
     pr = ir_add_process(el->design, mc->ir, clocked ? IRP_CLOCKED : IRP_COMB, clocked ? dom : IR_NONE,
                         ir_stmts_finish(el->design->arena, &list), at);
@@ -2070,47 +2124,68 @@ void elab_add_regmap(Elab *el, Item *rm, FileUnit *file)
 
 /* ------------------------------------------------------------- verifier */
 
+static char elb_verify_what[256];
+static Span elb_verify_at;
+
+static int elb_vbad(const IrExpr *e, const char *what)
+{
+    if (!elb_verify_what[0]) {
+        snprintf(elb_verify_what, sizeof elb_verify_what, "%s (%s, width %u)", what, ir_expr_kind_name(e->kind),
+                 (unsigned)e->width);
+        elb_verify_at = e->loc;
+    }
+    return 1;
+}
+
+static Map elb_verify_seen;
+
 static int elb_verify_expr(const IrModule *m, const IrExpr *e, int in_prop)
 {
     uint32_t i;
     int bad = 0;
-    if (!e)
+    if (!e) {
+        if (!elb_verify_what[0])
+            snprintf(elb_verify_what, sizeof elb_verify_what, "missing expression");
         return 1;
+    }
+    if (map_has(&elb_verify_seen, MAP_PTR(e)))
+        return 0;
+    map_put(&elb_verify_seen, MAP_PTR(e), 1);
     if (e->width == 0)
-        bad++;
+        bad += elb_vbad(e, "zero width");
     for (i = 0; i < e->nargs; i++)
         bad += elb_verify_expr(m, e->args[i], in_prop);
     switch (e->kind) {
     case IRE_SIG:
         if (e->sig >= m->nsigs || m->sigs[e->sig].type->width != e->width)
-            bad++;
+            bad += elb_vbad(e, "signal width");
         break;
     case IRE_SLICE:
         if (e->lo + e->width > e->args[0]->width)
-            bad++;
+            bad += elb_vbad(e, "slice out of range");
         break;
     case IRE_BINARY:
         if (e->op >= IROP_SHL && e->op <= IROP_ASHR) {
             if (e->args[0]->width != e->width)
-                bad++;
+                bad += elb_vbad(e, "shift width");
         } else if (e->op >= IROP_EQ && e->op <= IROP_GE) {
             if (e->args[0]->width != e->args[1]->width || e->width != 1)
-                bad++;
+                bad += elb_vbad(e, "comparison operand widths");
         } else if (e->args[0]->width != e->width || e->args[1]->width != e->width) {
-            bad++;
+            bad += elb_vbad(e, "binary operand widths");
         }
         break;
     case IRE_MUX:
         if (e->args[0]->width != 1 || e->args[1]->width != e->width || e->args[2]->width != e->width)
-            bad++;
+            bad += elb_vbad(e, "mux widths");
         break;
     case IRE_MEMREAD:
         if (e->sig >= m->nsigs || m->sigs[e->sig].kind != IRS_MEM)
-            bad++;
+            bad += elb_vbad(e, "memread of a non-memory");
         break;
     case IRE_PAST:
         if (!in_prop)
-            bad++;
+            bad += elb_vbad(e, "past outside a property");
         break;
     default:
         break;
@@ -2128,12 +2203,12 @@ static int elb_verify_block(const IrModule *m, const IrBlock *b)
         case IRST_ASSIGN:
             bad += elb_verify_expr(m, s->rhs, 0);
             if (s->rhs && s->rhs->width != s->lhs.width)
-                bad++;
+                bad += elb_vbad(s->rhs, "assignment width");
             break;
         case IRST_IF:
             bad += elb_verify_expr(m, s->cond, 0) + elb_verify_block(m, &s->then_b) + elb_verify_block(m, &s->else_b);
             if (s->cond && s->cond->width != 1)
-                bad++;
+                bad += elb_vbad(s->cond, "condition width");
             break;
         case IRST_CASE:
             bad += elb_verify_expr(m, s->subject, 0);
@@ -2155,7 +2230,8 @@ static int elb_verify_seq(const IrModule *m, const IrSeq *q)
 {
     if (!q)
         return 0;
-    return elb_verify_expr(m, q->expr, 1) + elb_verify_seq(m, q->a) + elb_verify_seq(m, q->b);
+    return (q->kind == IRQ_EXPR ? elb_verify_expr(m, q->expr, 1) : 0) + elb_verify_seq(m, q->a) +
+           elb_verify_seq(m, q->b);
 }
 
 int elab_ir_verify(const IrDesign *d)
@@ -2165,10 +2241,11 @@ int elab_ir_verify(const IrDesign *d)
     for (mi = 0; mi < d->nmodules; mi++) {
         const IrModule *m = d->modules[mi];
         int bad = 0;
+        elb_verify_what[0] = 0;
         for (i = 0; i < m->nassigns; i++) {
             bad += elb_verify_expr(m, m->assigns[i].rhs, 0);
             if (m->assigns[i].rhs->width != m->assigns[i].lhs.width)
-                bad++;
+                bad += elb_vbad(m->assigns[i].rhs, "continuous assignment width");
         }
         for (i = 0; i < m->nprocs; i++)
             bad += elb_verify_block(m, &m->procs[i].body);
@@ -2179,13 +2256,17 @@ int elab_ir_verify(const IrDesign *d)
             for (k = 0; k < m->insts[i].nconns; k++) {
                 const IrConn *c = &m->insts[i].conns[k];
                 if (c->expr && c->expr->width != m->insts[i].module->sigs[c->port].type->width)
-                    bad++;
+                    bad += elb_vbad(c->expr, "connection width");
             }
         }
-        if (bad)
+        map_clear(&elb_verify_seen);
+        if (bad) {
             diag_error(m->loc, "internal error: %d IR invariant violation%s in module `%s`", bad, bad == 1 ? "" : "s",
                        m->name);
+            diag_note(elb_verify_at, "first: %s", elb_verify_what);
+        }
         total += bad;
     }
+    map_free(&elb_verify_seen);
     return total;
 }

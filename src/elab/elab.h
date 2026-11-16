@@ -225,6 +225,7 @@ struct Elab {
     int returned;             /* a `return` is propagating */
     Value ret;
     Ty *tail_expect;          /* expected type of the next block's tail value */
+    struct BlkCtx *temp_blk;  /* block receiving intermediate values (see el_maybe_temp) */
     Map seen_errors;          /* (span, message) hashes: report each error once */
     int quiet;                /* suppress diagnostics (speculative evaluation) */
     int quiet_errors;         /* errors suppressed while quiet */

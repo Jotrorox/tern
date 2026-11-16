@@ -70,26 +70,31 @@ static int drv_parse_file(Driver *dr, const char *path, int is_user, int is_std)
     return 1;
 }
 
-/* std package of a path relative to the std root: "fifo/fifo.tern" -> "std::fifo" */
-static const char *drv_std_pkg(const char *rel)
+/* a library std file is replaced by a user file at the same std-relative
+ * path (`tern check std`, `tern check std/fifo/fifo.tern`) */
+static int drv_pkg_overridden(Map *user_std, const char *rel)
 {
-    StrBuf sb = {0};
-    const char *s = rel, *slash;
-    const char *r;
-    sb_puts(&sb, "std");
-    while ((slash = strchr(s, '/')) != NULL) {
-        sb_puts(&sb, "::");
-        sb_append(&sb, s, (size_t)(slash - s));
-        s = slash + 1;
-    }
-    r = intern_cstr(sb_cstr(&sb));
-    sb_free(&sb);
-    return r;
+    return map_has(user_std, MAP_PTR(intern_cstr(rel)));
 }
 
-static int drv_pkg_overridden(Map *user_std, const char *pkg)
+static void drv_user_std_paths(Driver *dr, Map *out)
 {
-    return map_has(user_std, MAP_PTR(pkg));
+    size_t i;
+    for (i = 0; i < dr->S->files.len; i++) {
+        FileUnit *f = dr->S->files.data[i];
+        char *abs;
+        const char *p, *hit = NULL;
+        if (!f->is_user || !f->pkg->is_std || !f->pkg->path[0])
+            continue;
+        f->is_std = 1;
+        abs = os_path_abs(f->ast->path);
+        for (p = abs; (p = strstr(p, "std/")) != NULL; p++)
+            if (p == abs || p[-1] == '/')
+                hit = p + 4;
+        if (hit)
+            map_put(out, MAP_PTR(intern_cstr(hit)), 1);
+        free(abs);
+    }
 }
 
 static char *drv_std_dir(void)
@@ -127,7 +132,7 @@ static void drv_load_std(Driver *dr, Map *user_std)
         drv_collect(dir, &files, 0);
         for (i = 0; i < files.len; i++) {
             const char *rel = files.data[i] + dl + (files.data[i][dl] == '/' ? 1 : 0);
-            if (drv_pkg_overridden(user_std, drv_std_pkg(rel)))
+            if (drv_pkg_overridden(user_std, rel))
                 continue;
             drv_parse_file(dr, files.data[i], 0, 1);
         }
@@ -142,7 +147,7 @@ static void drv_load_std(Driver *dr, Map *user_std)
         AstFile *f;
         if (strcmp(os_path_ext(ef->path), ".tern") != 0)
             continue;
-        if (drv_pkg_overridden(user_std, drv_std_pkg(rel)))
+        if (drv_pkg_overridden(user_std, rel))
             continue;
         f = drv_parse(dr, ef->path, tern_std_text(i), ef->len);
         sema_add_file(dr->S, f, 0, 1);
@@ -239,14 +244,8 @@ Driver *driver_open(const DriverOptions *opt)
     for (i = 0; i < lib.len; i++)
         drv_parse_file(dr, lib.data[i], 0, 0);
     TERN_UNUSED(first_lib);
-    /* user files that provide std packages replace the library copy */
-    for (i = 0; i < dr->S->files.len; i++) {
-        FileUnit *f = dr->S->files.data[i];
-        if (f->is_user && f->pkg->is_std && f->pkg->path[0]) {
-            map_put(&user_std, MAP_PTR(f->pkg->path), 1);
-            f->is_std = 1;
-        }
-    }
+    /* user files that are std files replace the library copy */
+    drv_user_std_paths(dr, &user_std);
     drv_load_std(dr, &user_std);
     map_free(&user_std);
     drv_free_paths(&user);

@@ -53,6 +53,7 @@ typedef struct ModCtx {
     Map let_wire;             /* sig -> 1: module-level let */
     int in_property;
     uint32_t nunsafe;
+    uint32_t ntemps;
 } ModCtx;
 
 typedef struct BlkCtx {
@@ -125,6 +126,7 @@ Value el_temporal_call(Elab *el, const char *name, Expr *call, Env *env);
 void el_mod_stmts(Elab *el, Stmt **stmts, uint32_t n, Env *env);
 Value el_unsafe_cross(Elab *el, Value v, Span at);
 int el_is_signal_place(const Place *p);
+Value el_maybe_temp(Elab *el, Value v, Span at);
 
 Value el_eval_path(Elab *el, Path *p, Env *env, Ty *expect, int type_ctx);
 Binding *ce_lookup_local_binding(Env *e, const char *name);   /* this scope only */

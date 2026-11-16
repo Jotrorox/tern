@@ -3241,7 +3241,8 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
             ok = 0;
             break;
         }
-        b = elab_env_bind(el, benv, ps[i].name.name, val_copy_deep(&el->arena, &a), ps[i].name.span);
+        b = elab_env_bind(el, benv, ps[i].name.name, el_maybe_temp(el, val_copy_deep(&el->arena, &a), at),
+                          ps[i].name.span);
         b->is_mut = 1;
         b->sem = SEM_PARAM;
     }
@@ -3909,7 +3910,8 @@ void el_bind_pattern(Elab *el, Pattern *p, Value v, Env *env, int is_mut)
         Value cv;
         if (ce_bind_is_const(el, p, env, &cv))
             return;
-        b = elab_env_bind(el, env, p->u.bind.name, is_mut ? val_copy_deep(&el->arena, &v) : v, p->u.bind.span);
+        b = elab_env_bind(el, env, p->u.bind.name, el_maybe_temp(el, is_mut ? val_copy_deep(&el->arena, &v) : v,
+                                                                   p->u.bind.span), p->u.bind.span);
         b->is_mut = (uint8_t)is_mut;
         b->sem = SEM_LOCAL;
         el_record_decl(el, p->u.bind.span, p->u.bind.name, SEM_LOCAL, v.ty, NULL, NULL);
@@ -4377,7 +4379,7 @@ static void ce_merge_arms(Elab *el, CeArmRun *arms, uint32_t n, int exhaustive, 
         el_log_assign(el, b, env);
         b = ce_env_find_local(all.data[i].env, all.data[i].name);
         if (b)
-            b->val = r;
+            b->val = el_maybe_temp(el, r, at);
     }
     vec_free(all);
 }
@@ -5101,13 +5103,13 @@ void el_assign_local(Elab *el, Place *p, Value v, Span at)
         if (v.kind == VAL_ERROR)
             return;
         el_log_assign(el, b, NULL);
-        b->val = val_copy_deep(&el->arena, &v);
+        b->val = el_maybe_temp(el, val_copy_deep(&el->arena, &v), at);
         return;
     }
     el_log_assign(el, b, NULL);
     nv = ce_sel_update(el, el->undo_depth ? val_copy_deep(&el->arena, &b->val) : b->val, p->sels, p->nsel, v, at);
     if (nv.kind != VAL_ERROR)
-        b->val = nv;
+        b->val = el_maybe_temp(el, nv, at);
 }
 
 static void ce_bind_local_items(Elab *el, Stmt **stmts, uint32_t n, Env *env)
@@ -5257,7 +5259,8 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
         }
         if (v.kind == VAL_INT && v.ty && v.ty->kind == TY_INT && !t)
             v.ty = (v.flags & VAL_F_BIG ? bn_is_neg(v.u.big) : v.u.i < 0) ? S->t_sint : S->t_int;
-        b = elab_env_bind(el, env, s->u.var.name.name, val_copy_deep(&el->arena, &v), s->u.var.name.span);
+        b = elab_env_bind(el, env, s->u.var.name.name, el_maybe_temp(el, val_copy_deep(&el->arena, &v), s->span),
+                          s->u.var.name.span);
         b->is_mut = 1;
         b->sem = SEM_LOCAL;
         el_record_decl(el, s->u.var.name.span, s->u.var.name.name, SEM_LOCAL, v.ty, NULL, NULL);
