@@ -54,6 +54,7 @@
 #include "backend/vcdread.c"
 #include "backend/formal.c"
 #include "backend/prove.c"
+#include "backend/synth.c"
 #include "pkg/toml.c"
 #include "pkg/manifest.c"
 #include "pkg/lock.c"

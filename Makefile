@@ -227,13 +227,15 @@ BACKEND_SRCS = \
 	src/backend/verilator.c \
 	src/backend/vcdread.c \
 	src/backend/formal.c \
-	src/backend/prove.c
+	src/backend/prove.c \
+	src/backend/synth.c
 BACKEND_OBJS = \
 	$(OBJ)/backend_build.o \
 	$(OBJ)/backend_verilator.o \
 	$(OBJ)/backend_vcdread.o \
 	$(OBJ)/backend_formal.o \
-	$(OBJ)/backend_prove.o
+	$(OBJ)/backend_prove.o \
+	$(OBJ)/backend_synth.o
 $(OBJ)/backend_build.o: src/backend/build.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/build.c -o $@
 $(OBJ)/backend_verilator.o: src/backend/verilator.c $(HDRS) $(OBJ)/.dir
@@ -244,6 +246,8 @@ $(OBJ)/backend_formal.o: src/backend/formal.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/formal.c -o $@
 $(OBJ)/backend_prove.o: src/backend/prove.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/prove.c -o $@
+$(OBJ)/backend_synth.o: src/backend/synth.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/synth.c -o $@
 
 # --- pkg/
 PKG_SRCS = \
