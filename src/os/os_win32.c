@@ -12,6 +12,12 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
 
 #include "os.h"
 
@@ -921,6 +927,25 @@ void os_proc_free(OsProc *p)
 }
 
 #undef OSW_EPOCH_DIFF
+
+/* windows.h defines macros with ordinary names. In the unity build every
+ * later file would see them, so remove the ones likely to collide. */
+#undef near
+#undef far
+#undef IN
+#undef OUT
+#undef OPTIONAL
+#undef CONST
+#undef ERROR
+#undef DELETE
+#undef interface
+#undef small
+#undef hyper
+#undef Yield
+#undef ABSOLUTE
+#undef RELATIVE
+#undef TRANSPARENT
+#undef OPAQUE
 
 #else
 /* keep the translation unit non-empty on other platforms */
