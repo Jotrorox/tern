@@ -1,0 +1,4 @@
+assign_errors.tern:9:5: error: cannot assign to input port `a`
+assign_errors.tern:10:5: error: register `r` can only be assigned in an `on` block
+assign_errors.tern:11:5: error: cannot assign to `w`: a `let` is assigned once, at its declaration
+assign_errors.tern:12:14: error: `y` is not a register: assign it in a `comb` block or at module level

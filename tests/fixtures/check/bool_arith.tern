@@ -1,0 +1,7 @@
+// §5.2: bool is not an integer
+module Top {
+    in a: bool
+    in b: bool
+    out y: uint<2>
+    y = a + b
+}

@@ -13,6 +13,7 @@
  *     foo.sv      tern build --stdout --diag-format=short foo.tern (stdout)
  *     foo.test    tern test --diag-format=short foo.tern           (stdout)
  *     foo.fmt     tern fmt --stdout foo.tern                       (stdout)
+ *     foo.ir      tern ir --diag-format=short foo.tern             (stdout: elaborated IR)
  *
  * Output and expectation are compared after normalization (CRLF -> LF,
  * trailing whitespace and trailing blank lines removed). A fixture whose
@@ -48,6 +49,7 @@ static const RunKind run_kinds[] = {
     {".sv", {"build", "--stdout", "--diag-format=short", NULL}, 0},
     {".test", {"test", "--diag-format=short", NULL, NULL}, 0},
     {".fmt", {"fmt", "--stdout", NULL, NULL}, 0},
+    {".ir", {"ir", "--diag-format=short", NULL, NULL}, 0},
 };
 
 typedef struct RunJob {

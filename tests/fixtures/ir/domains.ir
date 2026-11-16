@@ -1,0 +1,52 @@
+module Blink
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<async, low> @0
+  2: out led: bool @0
+  3: reg r: bool @0 = 1'h0
+  assign led = r
+  on 0 regs(r) {
+    r = !r
+  }
+end
+module Sync2 cdc(sync2)
+  domain 0 "dst" clock=dst reset=none
+  domain 1 "src" clock=src reset=none
+  0: in src: clock
+  1: in dst: clock
+  2: in d: bool @1
+  3: out q: bool @0
+  4: reg s1: bool @0 #[async_reg]
+  5: reg s2: bool @0 #[async_reg]
+  assign q = s2
+  on 0 regs(s1, s2) {
+    s1 = d
+    s2 = s1
+  }
+end
+module Top top
+  domain 0 "sys" clock=sys_clk reset=sys_rst hz=100000000
+  domain 1 "pix" clock=pix_clk reset=none
+  0: in sys_clk: clock
+  1: in sys_rst: reset<async, low>
+  2: in pix_clk: clock
+  3: in flag: bool @0
+  4: out led: bool @0
+  5: out seen: bool @1
+  6: reg cnt: uint<8> @0 = 8'h0
+  7: reg pix_cnt: uint<8> @1
+  8: wire b_led (b.led): bool @0
+  9: wire s_d (s.d): bool @0
+  10: wire s_q (s.q): bool @1
+  assign led = b_led
+  assign s_d = flag
+  assign seen = s_q
+  on 0 regs(cnt) {
+    cnt = (cnt + 8'h1)
+  }
+  on 1 regs(pix_cnt) {
+    pix_cnt = (pix_cnt + 8'h1)
+  }
+  inst b: Blink (clk = sys_clk, rst = sys_rst, led -> b_led)
+  inst s: Sync2 (src = sys_clk, dst = pix_clk, d = s_d, q -> s_q)
+end

@@ -1,0 +1,12 @@
+// §5.5: a dynamic index must be exactly wide enough; constant indices are range checked
+module Top {
+    in arr: [u8; 16]
+    in i: uint<3>
+    in j: uint<5>
+    out a: u8
+    out b: u8
+    out c: u8
+    a = arr[i]
+    b = arr[j]
+    c = arr[16]
+}

@@ -1,0 +1,16 @@
+// §9.3: static_assert fires at elaboration with the instantiation path
+module UartTx<ClkHz: uint, Baud: uint = 115_200> {
+    in clk: clock
+    out txd: bool
+    const Div: uint = ClkHz / Baud
+    static_assert(Div >= 16, "clock too slow for this baud rate")
+    txd = true
+}
+
+#[top]
+module Top {
+    in clk: clock
+    out txd: bool
+    let u = UartTx<ClkHz: 1_000_000, Baud: 115_200>()
+    txd = u.txd
+}

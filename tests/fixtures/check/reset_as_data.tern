@@ -1,0 +1,7 @@
+// §6.4: a reset is never read as data
+module Top {
+    in clk: clock
+    in rst: reset
+    out busy: bool
+    busy = rst as bool
+}

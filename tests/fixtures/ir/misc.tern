@@ -1,0 +1,59 @@
+// Regmap types (Ctrl::Regs bundle, Ctrl::Status struct) and the IrRegmap,
+// an extern module with a value generic, unsafe_cross, include_hex,
+// elaboration-time array methods, typed literals with a const width,
+// T::WIDTH / MAX, typeof, attributes passed through and #[test_port].
+
+enum Mode { Off, Slow, Fast, Turbo }
+
+regmap Ctrl {
+    0x00 ctrl: rw { enable: bool @0, mode: Mode @[2:1] }
+    0x04 status: ro { busy: bool @0, err: bool @1 }
+    0x08 count: rw u32
+    0x10 fifo: wo u8 -> Stream<u8>
+}
+
+extern module pll_wrapper("ip/pll_wrapper.sv") <MULT: uint = 4> {
+    in refclk: clock
+    in rst: reset<async, high>
+    out outclk: clock
+    out locked: bool
+}
+
+const fn square(x: uint) -> uint { x * x }
+const fn add(a: uint, b: uint) -> uint { a + b }
+
+#[top]
+#[keep_hierarchy]
+module Top {
+    in clk: clock #[clock(hz: 50_000_000)]
+    in arst: reset<async>
+    in other: bool
+    in regs: Ctrl::Regs
+    out status: Ctrl::Status
+    out locked: bool
+    out crossed: bool
+    out table_out: u8
+    out widths: uint<8>
+    out top_bits: uint<12>
+    #[test_port]
+    in poke: bool
+
+    status = Ctrl::Status { busy: regs.ctrl.enable, err: regs.ctrl.mode == .Turbo }
+    let pll = pll_wrapper<MULT: 8>(refclk: clk, rst: arst)
+    locked = pll.locked and poke
+    crossed = unsafe_cross(other)
+
+    #[ram(distributed)]
+    mem lut: [u8; 8] = include_hex("misc_lut.hex")
+    table_out = lut[regs.count[2:0] as uint<3>]
+
+    const Squares: [uint; 4] = [1, 2, 3, 4].map(square)
+    const Total: uint = Squares.reduce(add)
+    static_assert(Total == 30)
+    static_assert([1, 2].zip([3, 4])[1] == (2, 4))
+    let w2: typeof(widths) = 12
+    widths = (u16::WIDTH as uint<8>) +% w2
+    top_bits = 0xABCu<Ctrl::Status::WIDTH + 10>
+    #[keep]
+    let probe = regs.fifo.valid
+}

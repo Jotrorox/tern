@@ -1,0 +1,16 @@
+// §7.1: a `where` clause is checked at the instantiation
+module Fifo<Depth: uint = 16>
+where Depth.is_pow2(), Depth >= 2
+{
+    in clk: clock
+    out full: bool
+    full = false
+}
+
+#[top]
+module Top {
+    in clk: clock
+    out f: bool
+    let x = Fifo<Depth: 6>()
+    f = x.full
+}

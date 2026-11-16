@@ -1,0 +1,11 @@
+// §2: `tick + 1` is one bit wider than `tick`; assigning it back is an error
+module Top {
+    in clk: clock
+    in rst: reset
+    out q: uint<4>
+    reg tick: uint<4> = 0
+    on clk {
+        tick = tick + 1
+    }
+    q = tick
+}

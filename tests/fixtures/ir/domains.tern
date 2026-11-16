@@ -1,0 +1,54 @@
+// §8.2: a module with two clock domains: named domains, `@ dom` on ports,
+// registers and instances, `on <domain>`, a reset-less domain, a clock
+// frequency attribute, a multi-clock primitive connected by name with
+// `dom.clock`, and #[cdc] / #[async_reg] attributes.
+
+#[cdc(sync2)]
+module Sync2 {
+    in src: clock
+    in dst: clock
+    in d: bool @ src
+    out q: bool @ dst
+    #[async_reg]
+    reg s1: bool @ dst
+    #[async_reg]
+    reg s2: bool @ dst
+    on dst {
+        s1 = d
+        s2 = s1
+    }
+    q = s2
+}
+
+module Blink {
+    in clk: clock
+    in rst: reset<async, low>
+    out led: bool
+    reg r: bool = false
+    on clk { r = !r }
+    led = r
+}
+
+#[top]
+module Top {
+    in sys_clk: clock #[clock(hz: 100_000_000)]
+    in sys_rst: reset<async, low>
+    in pix_clk: clock
+    in flag: bool @ sys
+    out led: bool @ sys
+    out seen: bool @ pix
+
+    domain sys = (sys_clk, sys_rst)
+    domain pix = (pix_clk)
+
+    reg cnt: u8 = 0 @ sys
+    on sys { cnt = cnt +% 1 }
+
+    reg pix_cnt: u8 @ pix
+    on pix { pix_cnt = pix_cnt +% 1 }
+
+    let b = Blink() @ sys
+    led = b.led
+    let s = Sync2(src: sys.clock, dst: pix.clock, d: flag)
+    seen = s.q
+}

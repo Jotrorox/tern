@@ -1,0 +1,1 @@
+enum_shorthand.tern:11:13: error: cannot infer the enum type of `.Idle` here

@@ -1,0 +1,8 @@
+// §5.3: a literal must fit its type
+module Top {
+    out a: uint<8>
+    out b: sint<4>
+    a = 300
+    b = -9
+    let c = 0x1FFu8
+}

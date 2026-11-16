@@ -150,6 +150,7 @@ where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 
 /// Bidirectional pad (ALT_IOBUF): drives `o` while `oe` is high and always
 /// reads the pad on `i`. Instantiate it in the #[top] module with the top's
 /// `tri<bool>` port.
+#[pad]
 pub module AltIobuf {
     /// Value to drive.
     in o: bool

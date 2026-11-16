@@ -1,0 +1,36 @@
+// §10.1: memories with a synchronous read (a reset-less register assigned
+// IRE_MEMREAD in the domain's clocked process), read-during-write
+// forwarding for .NewData, a combinational read, an initialized ROM and a
+// byte-masked write; #[ram(..)] passed through.
+
+#[top]
+module Ram {
+    in clk: clock
+    in we: bool
+    in wr_addr: uint<4>
+    in wr_data: u32
+    in rd_addr: uint<4>
+    in be: bit<4>
+    in idx: uint<2>
+    out rd: u32
+    out rd_new: u32
+    out async_rd: u8
+
+    #[ram(block)]
+    mem buf: [u32; 16]
+    #[ram(distributed)]
+    mem lut: [u8; 4] = [10, 20, 30, 40]
+
+    rd = buf.read(rd_addr)
+    rd_new = buf.read(rd_addr, rdw: .NewData)
+    async_rd = lut[idx]
+
+    on clk {
+        if we { buf[wr_addr] = wr_data }
+    }
+
+    mem bytes: [u32; 16]
+    on clk {
+        bytes.write(wr_addr, wr_data, be)
+    }
+}

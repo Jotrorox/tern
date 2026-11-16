@@ -1,0 +1,1 @@
+where_violation.tern:14:13: error: `where` constraint `Depth.is_pow2()` of `Fifo<6>` is not satisfied

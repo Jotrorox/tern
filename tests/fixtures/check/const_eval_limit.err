@@ -1,0 +1,1 @@
+const_eval_limit.tern:4:24: error: compile-time evaluation exceeded the step limit (10000000 steps)

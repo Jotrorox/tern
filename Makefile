@@ -47,7 +47,10 @@ HDRS = \
 	src/sim/sim.h src/sim/sim_impl.h \
 	src/pkg/pkg.h \
 	src/tools/tools.h \
-	src/cmds.h src/std_embed.h
+	src/sema/sema.h \
+	src/elab/value.h src/elab/elab.h src/elab/elab_impl.h \
+	src/check/check.h \
+	src/cmds.h src/std_embed.h src/driver.h
 
 # --- os/
 OS_SRCS = \
@@ -122,12 +125,40 @@ $(OBJ)/syntax_ast_dump.o: src/syntax/ast_dump.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/syntax/ast_dump.c -o $@
 
 # --- sema/
-SEMA_SRCS =
-SEMA_OBJS =
+SEMA_SRCS = \
+	src/sema/resolve.c \
+	src/sema/types.c \
+	src/sema/info.c
+SEMA_OBJS = \
+	$(OBJ)/sema_resolve.o \
+	$(OBJ)/sema_types.o \
+	$(OBJ)/sema_info.o
+$(OBJ)/sema_resolve.o: src/sema/resolve.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sema/resolve.c -o $@
+$(OBJ)/sema_types.o: src/sema/types.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sema/types.c -o $@
+$(OBJ)/sema_info.o: src/sema/info.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sema/info.c -o $@
 
 # --- elab/
-ELAB_SRCS =
-ELAB_OBJS =
+ELAB_SRCS = \
+	src/elab/value.c \
+	src/elab/consteval.c \
+	src/elab/mono.c \
+	src/elab/elab.c
+ELAB_OBJS = \
+	$(OBJ)/elab_value.o \
+	$(OBJ)/elab_consteval.o \
+	$(OBJ)/elab_mono.o \
+	$(OBJ)/elab_elab.o
+$(OBJ)/elab_value.o: src/elab/value.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/elab/value.c -o $@
+$(OBJ)/elab_consteval.o: src/elab/consteval.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/elab/consteval.c -o $@
+$(OBJ)/elab_mono.o: src/elab/mono.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/elab/mono.c -o $@
+$(OBJ)/elab_elab.o: src/elab/elab.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/elab/elab.c -o $@
 
 # --- ir/
 IR_SRCS = \
@@ -142,8 +173,12 @@ $(OBJ)/ir_json.o: src/ir/ir_json.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/ir/ir_json.c -o $@
 
 # --- check/
-CHECK_SRCS =
-CHECK_OBJS =
+CHECK_SRCS = \
+	src/check/check.c
+CHECK_OBJS = \
+	$(OBJ)/check_check.o
+$(OBJ)/check_check.o: src/check/check.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/check/check.c -o $@
 
 # --- emit/
 EMIT_SRCS = \
@@ -240,18 +275,22 @@ $(OBJ)/tools_doc.o: src/tools/doc.c $(HDRS) $(OBJ)/.dir
 # --- src/
 MAIN_SRCS = \
 	src/std_embed.c \
+	src/driver.c \
 	src/cmd_parse.c \
 	src/cmd_check.c \
 	src/cmd_stubs.c \
 	src/main.c
 MAIN_OBJS = \
 	$(OBJ)/std_embed.o \
+	$(OBJ)/driver.o \
 	$(OBJ)/cmd_parse.o \
 	$(OBJ)/cmd_check.o \
 	$(OBJ)/cmd_stubs.o \
 	$(OBJ)/main.o
 $(OBJ)/std_embed.o: src/std_embed.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/std_embed.c -o $@
+$(OBJ)/driver.o: src/driver.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/driver.c -o $@
 $(OBJ)/cmd_parse.o: src/cmd_parse.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/cmd_parse.c -o $@
 $(OBJ)/cmd_check.o: src/cmd_check.c $(HDRS) $(OBJ)/.dir

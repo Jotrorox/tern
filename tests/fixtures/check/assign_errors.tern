@@ -1,0 +1,14 @@
+// assignment targets: inputs, registers outside `on`, lets
+module Top {
+    in clk: clock
+    in rst: reset
+    in a: u8
+    out y: u8
+    reg r: u8 = 0
+    let w = a +% 1
+    a = 1
+    r = a
+    w = a
+    on clk { y = a }
+    y = r
+}

@@ -1,0 +1,67 @@
+module Counter_4_1 "Counter<4, 1>"
+  param W = 32'h4
+  param Step = 32'h1
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in en: bool @0
+  3: out count: uint<4> @0
+  4: reg c: uint<4> @0 = 4'h0
+  assign count = c
+  on 0 regs(c) {
+    if en {
+      c = (c + 4'h1)
+    }
+  }
+end
+module Counter_8_3 "Counter<8, 3>"
+  param W = 32'h8
+  param Step = 32'h3
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in en: bool @0
+  3: out count: uint<8> @0
+  4: reg c: uint<8> @0 = 8'h0
+  assign count = c
+  on 0 regs(c) {
+    if en {
+      c = (c + 8'h3)
+    }
+  }
+end
+module Inv
+  0: in a: bool
+  1: out y: bool
+  assign y = !a
+end
+module Top top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in en: bool @0
+  3: out a: uint<4> @0
+  4: out b: uint<8> @0
+  5: out c: bool @0
+  6: out top_max: uint<8> @0
+  7: wire c0_en (c0.en): bool @0
+  8: wire c0_count (c0.count): uint<4> @0
+  9: wire counter_0_en (counter_0.en): bool @0
+  10: wire counter_0_count (counter_0.count): uint<8> @0
+  11: wire late_en (late.en): bool @0
+  12: wire late_count (late.count): uint<4> @0
+  13: wire inv_1_a (inv_1.a): bool
+  14: wire inv_1_y (inv_1.y): bool
+  assign c0_en = en
+  assign a = c0_count
+  assign counter_0_en = !en
+  assign b = counter_0_count
+  assign late_en = (c0_count == 4'h0)
+  assign inv_1_a = late_count[0]
+  assign c = inv_1_y
+  assign top_max = 8'hff
+  inst c0: Counter_4_1 (clk = clk, rst = rst, en = c0_en, count -> c0_count)
+  inst counter_0: Counter_8_3 (clk = clk, rst = rst, en = counter_0_en, count -> counter_0_count)
+  inst late: Counter_4_1 (clk = clk, rst = rst, en = late_en, count -> late_count)
+  inst inv_1: Inv (a = inv_1_a, y -> inv_1_y)
+end

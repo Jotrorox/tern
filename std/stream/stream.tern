@@ -11,6 +11,10 @@ package std::stream
 // holds valid/data until the beat fires, and no `valid` output depends
 // combinationally on a `ready` input of the same port.
 
+// The handshake bundles live in std::prelude; they are re-exported here so
+// that `use std::stream::Stream` (spec §2) names the same type.
+pub use std::prelude::{Valid, Stream}
+
 // ---------------------------------------------------------------------------
 // Payload helper types
 // ---------------------------------------------------------------------------

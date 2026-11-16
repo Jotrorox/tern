@@ -1,0 +1,66 @@
+module SimpleFifo_u8_4 "SimpleFifo<uint<8>, 4>"
+  param Depth = 32'h4
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in push_valid (push.valid): bool @0
+  3: in push_data (push.data): uint<8> @0
+  4: out push_ready (push.ready): bool @0 flipped
+  5: out pop_valid (pop.valid): bool @0
+  6: out pop_data (pop.data): uint<8> @0
+  7: in pop_ready (pop.ready): bool @0 flipped
+  8: out count: uint<3> @0
+  9: mem buf: uint<8> x 4
+  10: reg wr_ptr: uint<3> @0 = 3'h0
+  11: reg rd_ptr: uint<3> @0 = 3'h0
+  12: reg wr_vis: uint<3> @0 = 3'h0
+  13: wire used: uint<3>
+  14: wire rd_next: uint<3>
+  15: reg buf_rd0: uint<8> @0
+  assign used = (wr_ptr - rd_ptr)
+  assign count = used
+  assign push_ready = (used != 3'h4)
+  assign pop_valid = (rd_ptr != wr_vis)
+  assign rd_next = ((pop_valid && pop_ready) ? (rd_ptr + 3'h1) : rd_ptr)
+  assign pop_data = buf_rd0
+  on 0 regs(buf_rd0) {
+    buf_rd0 = buf[zext2(rd_next)]
+  }
+  on 0 regs(wr_ptr, rd_ptr, wr_vis) {
+    if (push_valid && push_ready) {
+      buf[zext2(wr_ptr)] = push_data
+      wr_ptr = (wr_ptr + 3'h1)
+    }
+    wr_vis = wr_ptr
+    rd_ptr = rd_next
+  }
+  assert property count_bounded @0: always (count <= 3'h4)
+  cover property wraps @0: ((count == 3'h4) ##[1:$] (count == 3'h0))
+end
+module Top top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in push_valid (push.valid): bool @0
+  3: in push_data (push.data): uint<8> @0
+  4: out push_ready (push.ready): bool @0 flipped
+  5: out pop_valid (pop.valid): bool @0
+  6: out pop_data (pop.data): uint<8> @0
+  7: in pop_ready (pop.ready): bool @0 flipped
+  8: out level: uint<3> @0
+  9: wire f_push_valid (f.push.valid): bool @0
+  10: wire f_push_data (f.push.data): uint<8> @0
+  11: wire f_push_ready (f.push.ready): bool @0
+  12: wire f_pop_valid (f.pop.valid): bool @0
+  13: wire f_pop_data (f.pop.data): uint<8> @0
+  14: wire f_pop_ready (f.pop.ready): bool @0
+  15: wire f_count (f.count): uint<3> @0
+  assign f_push_valid = push_valid
+  assign f_push_data = push_data
+  assign push_ready = f_push_ready
+  assign pop_valid = f_pop_valid
+  assign pop_data = f_pop_data
+  assign f_pop_ready = pop_ready
+  assign level = f_count
+  inst f: SimpleFifo_u8_4 (clk = clk, rst = rst, push_valid = f_push_valid, push_data = f_push_data, push_ready -> f_push_ready, pop_valid -> f_pop_valid, pop_data -> f_pop_data, pop_ready = f_pop_ready, count -> f_count)
+end

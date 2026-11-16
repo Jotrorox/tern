@@ -1,4 +1,4 @@
-// skip: enable once the parser and checker exist
+// a lossless add is one bit wider than its operands
 module Top {
     in a: uint<8>
     out y: uint<8>

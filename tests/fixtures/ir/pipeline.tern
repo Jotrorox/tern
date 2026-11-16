@@ -1,0 +1,49 @@
+// §7.3: elaboration-time `for` with a reg and an `on` block per iteration
+// (r_0, r_1, ...), chained through a `var` array assigned element-wise;
+// elaboration-time `if` choosing one branch.
+
+module Pipeline<T: type, Stages: uint> {
+    in clk: clock
+    in d: T
+    out q: T
+    var stage: [T; Stages + 1]
+    stage[0] = d
+    for i in 0..Stages {
+        reg r: T @ clk
+        on clk { r = stage[i] }
+        stage[i + 1] = r
+    }
+    q = stage[Stages]
+}
+
+module Adder<W: uint, Fast: bool = false> {
+    in a: uint<W>
+    in b: uint<W>
+    out s: uint<W + 1>
+    if Fast {
+        s = a + b
+    } else {
+        var c: bit<W + 1>
+        var r: bit<W>
+        comb {
+            c[0] = false
+            for i in 0..W {
+                r[i] = a[i] ^ b[i] ^ c[i]
+                c[i + 1] = (a[i] and b[i]) or (c[i] and (a[i] ^ b[i]))
+            }
+        }
+        s = (c[W] as uint<1>) ++ r
+    }
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in x: u8
+    out y: u8
+    out sum: uint<5>
+    let p = Pipeline<u8, 3>(d: x)
+    y = p.q
+    let add = Adder<4>(a: x[3:0] as uint<4>, b: x[7:4] as uint<4>)
+    sum = add.s
+}

@@ -1,0 +1,14 @@
+// Decision 7: tri<T> exists only on #[top] ports
+module Pad {
+    in pad: tri<bool>
+    out v: bool
+    v = pad as bool
+}
+
+#[top]
+module Top {
+    in pad: tri<bool>
+    out v: bool
+    let p = Pad(pad)
+    v = p.v
+}

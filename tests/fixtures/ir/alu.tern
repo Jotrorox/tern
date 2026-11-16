@@ -1,0 +1,38 @@
+// §6.2: a comb block with an exhaustive match (IRST_CASE), a var with a
+// default (prepended in its comb process) and a var without one, a struct
+// field assignment, wrapping and lossless arithmetic, set membership and a
+// match expression.
+
+struct Flags {
+    carry: bool,
+    zero: bool,
+}
+
+enum Op { Nop, Add, Sub, And }
+
+#[top]
+module Alu {
+    in op: Op
+    in a: u32
+    in b: u32
+    out y: u32
+    out flags: Flags
+    out is_arith: bool
+    out code: uint<2>
+
+    var alu_out: u32
+    var f: Flags = Flags { carry: false, zero: false }
+    comb {
+        match op {
+            .Add => { alu_out = (a + b) as u32; f.carry = (a + b)[32] },
+            .Sub => alu_out = a -% b,
+            .And => alu_out = a & b,
+            .Nop => alu_out = 0,
+        }
+        f.zero = alu_out == 0
+    }
+    y = alu_out
+    flags = f
+    is_arith = op in [.Add, .Sub]
+    code = match op { .Nop => 0, .Add | .Sub => 1, .And => 3 }
+}

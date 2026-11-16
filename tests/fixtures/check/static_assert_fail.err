@@ -1,0 +1,1 @@
+static_assert_fail.tern:6:5: error: static assertion failed: clock too slow for this baud rate

@@ -1,0 +1,2 @@
+div_by_signal.tern:7:9: error: division by a signal: `b` is not a compile-time constant
+div_by_signal.tern:8:9: error: division by zero

@@ -1,0 +1,1 @@
+tri_non_top.tern:3:13: error: tri-state port `pad` on a module that is not #[top]

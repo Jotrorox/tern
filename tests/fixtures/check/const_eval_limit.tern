@@ -1,0 +1,12 @@
+// §9.2: runaway compile-time evaluation is an error, not a hang
+const fn spin(n: uint) -> uint {
+    var i = 0
+    while i >= 0 { i = i + n }
+    i
+}
+
+module Top {
+    out y: u8
+    const X: uint = spin(1)
+    y = 0
+}

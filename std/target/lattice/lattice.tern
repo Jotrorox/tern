@@ -183,6 +183,7 @@ where Divr <= 15, Divf <= 127, Divq >= 1, Divq <= 6
 /// input): drives `o` while `oe` is high and always reads the pad on `i`.
 /// `PullUp` enables the internal pull-up. Instantiate it in the #[top] module
 /// with the top's `tri<bool>` port.
+#[pad]
 pub module SbIo<PullUp: bool = false> {
     /// Value to drive.
     in o: bool
@@ -265,6 +266,7 @@ where ClkiDiv >= 1, ClkiDiv <= 128, ClkfbDiv >= 1, ClkfbDiv <= 128, ClkopDiv >= 
 /// ECP5 bidirectional pad (BB): drives `o` while `oe` is high and always
 /// reads the pad on `i`. Instantiate it in the #[top] module with the top's
 /// `tri<bool>` port.
+#[pad]
 pub module EcpIo {
     /// Value to drive.
     in o: bool

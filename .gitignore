@@ -14,3 +14,4 @@
 .DS_Store
 /fuzz/out/
 .claude/
+tools/embed.dSYM/

@@ -45,6 +45,9 @@ int cmd_parse(int argc, char **argv);
  * SystemVerilog, constraints and regmap outputs from IR JSON
  * (src/emit/cmd_emit.c). */
 int cmd_emit(int argc, char **argv);
+/* Internal: `tern ir [--json] [--top M] <file>` prints the elaborated design
+ * (ir_dump / JSON) used by the golden tests (tests/fixtures/.../<name>.ir). */
+int cmd_ir(int argc, char **argv);
 
 /* Shared by `tern parse` and the interim `tern check` (cmd_parse.c): parses
  * the files/directories in argv[1..], reports syntax errors and, with

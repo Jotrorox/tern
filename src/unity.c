@@ -32,6 +32,15 @@
 #include "ir/ir_build.c"
 #include "ir/ir_json.c"
 
+#include "sema/resolve.c"
+#include "sema/types.c"
+#include "sema/info.c"
+#include "elab/value.c"
+#include "elab/consteval.c"
+#include "elab/mono.c"
+#include "elab/elab.c"
+#include "check/check.c"
+
 #include "sim/bitvec.c"
 #include "sim/netlist.c"
 #include "sim/eval.c"
@@ -52,6 +61,7 @@
 #include "tools/doc.c"
 
 #include "std_embed.c"
+#include "driver.c"
 #include "cmd_parse.c"
 #include "cmd_check.c"
 #include "cmd_stubs.c"

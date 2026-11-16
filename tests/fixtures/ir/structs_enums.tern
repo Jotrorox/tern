@@ -1,0 +1,57 @@
+// §5.4: packed structs (first field MSB), enums with payloads (tag ++
+// payload padded to the largest variant), struct and variant literals,
+// payload destructuring with alternatives, bits/from_bits, a one-hot enum,
+// a generic struct with an inferred argument, and tuple matching.
+
+struct Pixel { r: u8, g: u8, b: u8 }
+
+enum Cmd {
+    Write { addr: u16, data: u32 },
+    Read { addr: u16 },
+    Idle,
+}
+
+#[encoding(onehot)]
+enum State { Idle, Run, Finish }
+
+enum Event { Start, Done, Abort, None }
+
+struct Pair<T: type> { a: T, b: T }
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in grad: u16
+    in payload: u32
+    in sel: bool
+    in event: Event
+    out grey: uint<10>
+    out addr: u16
+    out raw: bit<24>
+    out back: Pixel
+    out busy: bool
+    out sum: uint<9>
+
+    let p = Pixel { r: 255, g: 0, b: grad[7:0] as u8 }
+    grey = (p.r + p.g + p.b) / 3
+    let c = if sel { Cmd::Write { addr: 0x10, data: payload } } else { Cmd::Read { addr: grad } }
+    addr = match c { .Write { addr, .. } | .Read { addr } => addr, .Idle => 0 }
+    raw = bits(p)
+    back = Pixel::from_bits(raw)
+
+    reg state: State = .Idle
+    on clk {
+        state = match (state, event) {
+            (.Idle, .Start) => .Run,
+            (.Run, .Done) => .Finish,
+            (.Run, .Abort) => .Idle,
+            (.Finish, _) => .Idle,
+            (s, _) => s,
+        }
+    }
+    busy = state in [.Run, .Finish]
+
+    let pr = Pair { a: p.r, b: p.g }
+    sum = pr.a + pr.b
+}

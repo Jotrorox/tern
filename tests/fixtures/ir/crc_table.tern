@@ -1,0 +1,46 @@
+// §9.2: a const fn with var/for/if computing a ROM at compile time, used
+// as a memory initializer; the same kind of fn inlined on signals; a
+// recursive const fn; static_assert and a typed const array.
+
+const fn crc_table(poly: uint<32>) -> [uint<32>; 256] {
+    var t: [uint<32>; 256]
+    for i in 0..256 {
+        var c = i as uint<32>
+        for _ in 0..8 { c = if c[0] { (c >> 1) ^ poly } else { c >> 1 } }
+        t[i] = c
+    }
+    t
+}
+
+const fn fact(n: uint) -> uint {
+    if n <= 1 { 1 } else { n * fact(n - 1) }
+}
+
+const Crc32Table: [uint<32>; 256] = crc_table(0xEDB88320)
+static_assert(Crc32Table[1] == 0x77073096, "CRC-32 table")
+static_assert(fact(10) == 3628800)
+
+fn parity(x: bit<N>) -> bool { ^x }
+
+fn crc_step(c: uint<8>, poly: uint<8>) -> uint<8> {
+    var r = c
+    for _ in 0..2 {
+        r = if r[7] { (r << 1) ^ poly } else { r << 1 }
+    }
+    r
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in addr: u8
+    in x: u8
+    out entry: u32
+    out p: bool
+    out step: u8
+
+    mem rom: [uint<32>; 256] = Crc32Table
+    entry = rom.read(addr)
+    p = parity(bits(x))
+    step = crc_step(x, 0x07)
+}
