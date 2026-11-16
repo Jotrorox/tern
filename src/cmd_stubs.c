@@ -1,0 +1,37 @@
+/* cmd_stubs.c — placeholders for commands that are not implemented yet.
+ *
+ * To implement a command: delete its one-line stub below and add the real
+ * cmd_<name> in its own file. Delete this file (and its entries in
+ * src/unity.c, the Makefile and build.bat) once the last stub is gone. */
+#include "base/common.h"
+#include "base/args.h"
+#include "cmds.h"
+
+static int stub_not_implemented(const char *name, int argc, char **argv)
+{
+    if (args_wants_help(argc, argv)) {
+        cmd_print_usage(name);
+        return TERN_EXIT_OK;
+    }
+    fflush(stdout);
+    fprintf(stderr, "tern %s: not implemented yet\n", name);
+    return TERN_EXIT_USAGE;
+}
+
+int cmd_new(int argc, char **argv) { return stub_not_implemented("new", argc, argv); }
+int cmd_build(int argc, char **argv) { return stub_not_implemented("build", argc, argv); }
+int cmd_check(int argc, char **argv) { return stub_not_implemented("check", argc, argv); }
+int cmd_test(int argc, char **argv) { return stub_not_implemented("test", argc, argv); }
+int cmd_sim(int argc, char **argv) { return stub_not_implemented("sim", argc, argv); }
+int cmd_prove(int argc, char **argv) { return stub_not_implemented("prove", argc, argv); }
+int cmd_synth(int argc, char **argv) { return stub_not_implemented("synth", argc, argv); }
+int cmd_fmt(int argc, char **argv) { return stub_not_implemented("fmt", argc, argv); }
+int cmd_lsp(int argc, char **argv) { return stub_not_implemented("lsp", argc, argv); }
+int cmd_doc(int argc, char **argv) { return stub_not_implemented("doc", argc, argv); }
+int cmd_add(int argc, char **argv) { return stub_not_implemented("add", argc, argv); }
+int cmd_update(int argc, char **argv) { return stub_not_implemented("update", argc, argv); }
+int cmd_vendor(int argc, char **argv) { return stub_not_implemented("vendor", argc, argv); }
+int cmd_publish(int argc, char **argv) { return stub_not_implemented("publish", argc, argv); }
+int cmd_import(int argc, char **argv) { return stub_not_implemented("import", argc, argv); }
+int cmd_remap(int argc, char **argv) { return stub_not_implemented("remap", argc, argv); }
+int cmd_parse(int argc, char **argv) { return stub_not_implemented("parse", argc, argv); }
