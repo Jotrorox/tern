@@ -1,0 +1,19 @@
+-- Mem.ram
+WIDTH=16;
+DEPTH=12;
+ADDRESS_RADIX=HEX;
+DATA_RADIX=HEX;
+CONTENT BEGIN
+    0 : 0003;
+    1 : 1114;
+    2 : 2225;
+    3 : 3336;
+    4 : 4447;
+    5 : 5558;
+    6 : 6669;
+    7 : 777a;
+    8 : 888b;
+    9 : 999c;
+    a : aaad;
+    b : bbbe;
+END;
