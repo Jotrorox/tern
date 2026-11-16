@@ -2729,13 +2729,17 @@ static void fmt_default_paths(FmtPaths *out)
     }
     if (root) {
         static const char *const subdirs[] = {"src", "tests"};
+        char *cwd = os_getcwd();
         size_t i;
         for (i = 0; i < TERN_ARRAY_LEN(subdirs); i++) {
             char *p = os_path_join(root, subdirs[i]);
-            if (os_is_dir(p))
-                fmt_collect(p, out, 0);
+            char *rel = cwd ? os_path_relative(p, cwd) : xstrdup(p);
+            if (os_is_dir(rel))
+                fmt_collect(rel, out, 0);
+            free(rel);
             free(p);
         }
+        free(cwd);
         free(root);
     } else {
         OsDirList list;
