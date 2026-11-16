@@ -50,7 +50,7 @@ spaces — the real syntax is ASCII).
 | `src/ir/` | `ir.h ir_build.c ir_json.c` | typed IR (contract below) and JSON form |
 | `src/check/` | `drivers.c assign.c cdc.c unused.c` | multiple/missing drivers, no-latch proof, CDC report, unused |
 | `src/emit/` | `sv.c constraints.c regmap.c` | SystemVerilog/Verilog-2005, .xdc/.sdc, regmap .h/.svd/.md |
-| `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`) | cycle-based simulator and `test` interpreter |
+| `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
 | `src/backend/` | `verilator.c formal.c synth.c` | scripts for external tools |
 | `src/pkg/` | `toml.c lock.c git.c` (+ `pkg.h`) | tern.toml, tern.lock, dependency resolution, git |
 | `src/lsp/` | `rpc.c lsp.c` | JSON-RPC language server over stdio |
@@ -239,17 +239,29 @@ comments. Key points:
 
 ## Simulator contract (`src/sim/sim.h`, defined by the simulator)
 
+`sim.h` is the reference (its header comment states the semantics: two-phase
+evaluation, reset and power-on model, assertion/property/coverage rules).
+Summary:
+
 ```c
-SimModel *sim_new(const IrDesign *d, const IrModule *top, uint64_t seed);
-int  sim_find(SimModel*, const char *path);  /* "tx.valid", "rx_fifo.count", "state" → handle or -1 */
-void sim_poke(SimModel*, int h, const IrBits *v);   /* inputs and #[test_port] only */
-void sim_peek(SimModel*, int h, IrBits *out);
-void sim_settle(SimModel*);                      /* combinational settle */
-void sim_step(SimModel*, uint32_t domain, uint32_t n); /* n edges of a domain of the top */
-void sim_reset(SimModel*);                        /* assert all resets 2 cycles, release */
+SimModel *sim_new(const IrDesign *d, const IrModule *top, uint64_t seed); /* NULL + diag_error (comb loop) */
+void sim_free(SimModel*);
+int  sim_find(SimModel*, const char *path);  /* "tx.valid", "rx_fifo.count", "rx_fifo.mem" -> handle or -1 */
+int  sim_find_prefix(SimModel*, const char *prefix, int *out, int max); /* flattened bundle fields */
+int  sim_signal_count(m); sim_signal_path/name/instance/ir(m, h); sim_type(m, h); sim_width(m, h);
+int  sim_poke(SimModel*, int h, const IrBits *v);   /* top inputs and #[test_port] only, else SIM_ERR_* */
+int  sim_peek(SimModel*, int h, IrBits *out);       /* + sim_poke_u64/sim_peek_u64/sim_peek_bits */
+int  sim_mem_peek/sim_mem_poke(SimModel*, int h, uint64_t addr, ...);
+void sim_settle(SimModel*);                         /* combinational settle */
+void sim_step(SimModel*, uint32_t domain, uint32_t n); /* n cycles of a top domain */
+void sim_run_ns(SimModel*, uint64_t ns);            /* all top clocks by hz (default 100 MHz) */
+void sim_reset(SimModel*);                          /* assert all top resets 2 cycles, release */
+uint64_t sim_cycle(m, domain); uint64_t sim_time_ps(m);
+int  sim_domain_count/sim_default_domain/sim_find_domain(m, name);
+void sim_set_fail_handler(SimModel*, SimFailFn, void *user); uint32_t sim_finish(SimModel*);
+size_t sim_coverage(SimModel*, const SimCovPoint **out);
+int  sim_vcd_open(SimModel*, const char *path); void sim_vcd_close(SimModel*);
 ```
-plus VCD, in-design assertion failure reporting, property monitors and
-coverage counters.
 
 ## Testing the compiler
 

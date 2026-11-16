@@ -29,6 +29,13 @@
 #include "syntax/lexer.c"
 #include "syntax/parser.c"
 #include "syntax/ast_dump.c"
+#include "ir/ir_build.c"
+#include "ir/ir_json.c"
+
+#include "sim/bitvec.c"
+#include "sim/netlist.c"
+#include "sim/eval.c"
+#include "sim/vcd.c"
 
 #include "std_embed.c"
 #include "cmd_parse.c"
