@@ -35,6 +35,7 @@ HDRS = \
 	src/base/diag.h src/base/args.h \
 	src/os/os.h \
 	src/ir/ir.h \
+	src/pkg/pkg.h \
 	src/cmds.h src/std_embed.h
 
 BASE_SRCS = \
@@ -44,7 +45,11 @@ BASE_SRCS = \
 
 OS_SRCS = src/os/os_posix.c src/os/os_win32.c src/os/os_common.c
 
-SRCS = $(OS_SRCS) $(BASE_SRCS) \
+PKG_SRCS = \
+	src/pkg/toml.c src/pkg/manifest.c src/pkg/lock.c src/pkg/git.c \
+	src/pkg/cmd_pkg.c
+
+SRCS = $(OS_SRCS) $(BASE_SRCS) $(PKG_SRCS) \
 	src/std_embed.c src/cmd_stubs.c src/main.c
 
 OBJS = \
@@ -52,6 +57,8 @@ OBJS = \
 	$(OBJ)/base_common.o $(OBJ)/base_arena.o $(OBJ)/base_str.o \
 	$(OBJ)/base_map.o $(OBJ)/base_bignum.o $(OBJ)/base_json.o \
 	$(OBJ)/base_utf8.o $(OBJ)/base_diag.o $(OBJ)/base_args.o \
+	$(OBJ)/pkg_toml.o $(OBJ)/pkg_manifest.o $(OBJ)/pkg_lock.o \
+	$(OBJ)/pkg_git.o $(OBJ)/pkg_cmd.o \
 	$(OBJ)/std_embed.o $(OBJ)/cmd_stubs.o $(OBJ)/main.o
 
 all: $(BIN)
@@ -91,6 +98,17 @@ $(OBJ)/base_diag.o: src/base/diag.c $(HDRS) $(OBJ)/.dir
 $(OBJ)/base_args.o: src/base/args.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/base/args.c -o $@
 
+$(OBJ)/pkg_toml.o: src/pkg/toml.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/pkg/toml.c -o $@
+$(OBJ)/pkg_manifest.o: src/pkg/manifest.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/pkg/manifest.c -o $@
+$(OBJ)/pkg_lock.o: src/pkg/lock.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/pkg/lock.c -o $@
+$(OBJ)/pkg_git.o: src/pkg/git.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/pkg/git.c -o $@
+$(OBJ)/pkg_cmd.o: src/pkg/cmd_pkg.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/pkg/cmd_pkg.c -o $@
+
 $(OBJ)/std_embed.o: src/std_embed.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/std_embed.c -o $@
 $(OBJ)/cmd_stubs.o: src/cmd_stubs.c $(HDRS) $(OBJ)/.dir
@@ -122,8 +140,12 @@ tests/run: tests/run.c $(TEST_DEPS)
 build/test_base: tests/unit/test_base.c $(TEST_DEPS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_base.c $(LDLIBS)
 
-test: $(BIN) tests/run build/test_base
+build/test_pkg: tests/unit/test_pkg.c $(TEST_DEPS) $(PKG_SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_pkg.c $(LDLIBS)
+
+test: $(BIN) tests/run build/test_base build/test_pkg
 	./build/test_base
+	./build/test_pkg
 	./tests/run --tern ./$(BIN)
 
 # ---------------------------------------------------------------- other ---
@@ -137,6 +159,7 @@ check-warnings:
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/unity-$$s src/unity.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/run-$$s tests/run.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/test_base-$$s tests/unit/test_base.c || exit 1; \
+	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/test_pkg-$$s tests/unit/test_pkg.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/embed-$$s tools/embed.c || exit 1; \
 	done
 	@echo "check-warnings: OK (c99 and c11, -Werror)"

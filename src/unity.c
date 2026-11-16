@@ -26,6 +26,12 @@
 #include "base/diag.c"
 #include "base/args.c"
 
+#include "pkg/toml.c"
+#include "pkg/manifest.c"
+#include "pkg/lock.c"
+#include "pkg/git.c"
+#include "pkg/cmd_pkg.c"
+
 #include "std_embed.c"
 #include "cmd_stubs.c"
 #include "main.c"
