@@ -192,11 +192,57 @@ done:
     tl_close(&t);
 }
 
+/* ------------------------------------------------ arrays of bundles -- */
+
+static void test_bundle_index(void)
+{
+    TlDesign t;
+    uint64_t s, o;
+    char p[64];
+    if (!tl_open(&t, "bundle_index.tern", "BundleIndex"))
+        goto done;
+    sim_reset(t.m);
+    for (s = 0; s < 3; s++) {
+        snprintf(p, sizeof p, "ins[%u].valid", (unsigned)s);
+        tl_poke(&t, p, s != 1);
+        snprintf(p, sizeof p, "ins[%u].data", (unsigned)s);
+        tl_poke(&t, p, ((0x30 + s) << 1) | (s == 2));
+    }
+    tl_poke(&t, "picked.ready", 1);
+    for (s = 0; s < 4; s++) {
+        tl_poke(&t, "sel", s);
+        for (o = 0; o < 4; o++) {
+            uint64_t k;
+            tl_poke(&t, "osel", o);
+            sim_settle(t.m);
+            TL_EQ(tl_peek(&t, "picked.valid"), s < 3 && s != 1);
+            TL_EQ(tl_peek(&t, "picked.data"), s < 3 ? (((0x30 + s) << 1) | (s == 2)) : 0);
+            TL_EQ(tl_peek(&t, "data"), s < 3 ? 0x30 + s : 0);
+            for (k = 0; k < 3; k++) {
+                snprintf(p, sizeof p, "ins[%u].ready", (unsigned)k);
+                TL_EQ(tl_peek(&t, p), k == s);
+                snprintf(p, sizeof p, "outs[%u].valid", (unsigned)k);
+                TL_EQ(tl_peek(&t, p), k == o);
+                snprintf(p, sizeof p, "outs[%u].data", (unsigned)k);
+                TL_EQ(tl_peek(&t, p), k == o && s < 3 ? 0x30 + s : 0);
+            }
+        }
+    }
+    tl_poke(&t, "sel", 0);
+    tl_step(&t, 3);
+    tl_poke(&t, "sel", 1); /* not valid */
+    tl_step(&t, 2);
+    TL_EQ(tl_peek(&t, "count"), 3);
+done:
+    tl_close(&t);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1)
         tl_tern = argv[1];
     test_index_range();
+    test_bundle_index();
     src_free_all();
     intern_free_all();
     if (tl_fails) {

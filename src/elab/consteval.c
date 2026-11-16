@@ -2410,6 +2410,20 @@ Value el_cast(Elab *el, Value v, Ty *to, Span at, Expr *src)
 static Place *ce_sub_place(Elab *el, Place *p, uint32_t lo, uint32_t width, Ty *ty, const char *field)
 {
     Place *q;
+    if (p && p->kind == PL_DYN) {
+        /* a field of the element selected by a dynamic index */
+        uint32_t k;
+        q = ANEW(&el->arena, Place);
+        *q = *p;
+        q->ty = ty;
+        q->subs = ANEWN(&el->arena, Place *, p->n ? p->n : 1);
+        for (k = 0; k < p->n; k++) {
+            q->subs[k] = ce_sub_place(el, p->subs[k], lo, width, ty, field);
+            if (!q->subs[k])
+                return NULL;
+        }
+        return q;
+    }
     if (!p || p->kind != PL_SIG || p->index)
         return NULL;
     q = ANEW(&el->arena, Place);
@@ -2492,6 +2506,94 @@ Value el_field(Elab *el, Value base, const char *name, Span at)
     }
     el_error(el, at, "no field `%s` on %s", name, t ? ty_str(t) : val_kind_name((ValKind)base.kind));
     return val_error();
+}
+
+static int ce_check_index_width(Elab *el, Ty *it, uint32_t len, Span at, int is_bits);
+
+/* Element `ie` (hardware index) of the n values elems[] (an array of bundles,
+ * or of arrays of bundles): bundles are selected field by field, hardware
+ * leaves by an index into their concatenation (out of range: 0). The result
+ * carries a PL_DYN place (write decode) when every element has a place. */
+static Value ce_dyn_pick(Elab *el, Value *elems, uint32_t n, IrExpr *ie, Span at)
+{
+    Value e0 = elems[0], r;
+    uint32_t k, f;
+    for (k = 0; k < n; k++)
+        if (elems[k].kind == VAL_ERROR)
+            return val_error();
+    if (e0.kind == VAL_BUNDLE || (e0.kind == VAL_ARRAY && (!e0.ty || !e0.ty->hw))) {
+        uint32_t nf = e0.u.list->n;
+        Value *sub = ANEWN(&el->arena, Value, n);
+        Place *agg = ANEW(&el->arena, Place);
+        int places = 1;
+        r = val_list(&el->arena, (ValKind)e0.kind, e0.ty, nf);
+        agg->kind = PL_AGG;
+        agg->ty = e0.ty;
+        agg->n = nf;
+        agg->subs = ANEWN(&el->arena, Place *, nf ? nf : 1);
+        for (f = 0; f < nf; f++) {
+            int missing = 0;
+            for (k = 0; k < n; k++) {
+                if (elems[k].kind != e0.kind || elems[k].u.list->n != nf) {
+                    el_error(el, at, "the elements of this array have different shapes");
+                    return val_error();
+                }
+                sub[k] = elems[k].u.list->v[f];
+                if (sub[k].kind == VAL_VOID)
+                    missing = 1;
+            }
+            if (missing) {
+                r.u.list->v[f] = val_void(el->S);
+                places = 0;
+                continue;
+            }
+            r.u.list->v[f] = ce_dyn_pick(el, sub, n, ie, at);
+            if (r.u.list->v[f].kind == VAL_ERROR)
+                return val_error();
+            agg->subs[f] = r.u.list->v[f].place;
+            if (!agg->subs[f])
+                places = 0;
+        }
+        if (places)
+            r.place = agg;
+        return r;
+    }
+    if (e0.kind == VAL_INST || e0.kind == VAL_MEM || e0.kind == VAL_DOMAIN) {
+        el_error(el, at, "an array of %s can only be indexed with a compile-time index",
+                 e0.kind == VAL_INST ? "instances" : e0.kind == VAL_MEM ? "memories" : "domains");
+        return val_error();
+    }
+    if (!e0.ty || !e0.ty->hw) {
+        el_error(el, at, "cannot index an array of %s with a signal", e0.ty ? ty_str(e0.ty) : val_kind_name((ValKind)e0.kind));
+        return val_error();
+    }
+    {
+        IrExpr **parts = (IrExpr **)xcalloc(n, sizeof(IrExpr *));
+        Place *dp = ANEW(&el->arena, Place);
+        int places = 1;
+        dp->kind = PL_DYN;
+        dp->ty = e0.ty;
+        dp->n = n;
+        dp->index = ie;
+        dp->subs = ANEWN(&el->arena, Place *, n);
+        for (k = 0; k < n; k++) {
+            Value x = elems[k].ty == e0.ty ? elems[k] : elab_convert(el, elems[k], e0.ty, NULL, NULL, at);
+            if (x.kind == VAL_ERROR) {
+                free(parts);
+                return x;
+            }
+            parts[n - 1 - k] = el_to_ir(el, &x, at);
+            dp->subs[k] = elems[k].place;
+            if (!dp->subs[k])
+                places = 0;
+        }
+        r = el_hw(el, e0.ty, ir_index(el->design->arena, n == 1 ? parts[0] : ir_concat(el->design->arena, n, parts, at),
+                                      ie, e0.ty->width, at));
+        free(parts);
+        if (places)
+            r.place = dp;
+        return r;
+    }
 }
 
 static int ce_check_index_width(Elab *el, Ty *it, uint32_t len, Span at, int is_bits)
@@ -2610,10 +2712,15 @@ Value el_index(Elab *el, Value base, Value idx, Span at, Expr *idx_expr)
                 base = hv;
             }
         } else {
-            /* array of bundles / instances: mux chain is not expressible for places */
-            el_error(el, at, "an array of %s can only be indexed with a compile-time index",
-                     t && t->elem ? ty_str(t->elem) : "values");
-            return val_error();
+            /* array of bundles: a mux per field for reads, a decode for writes */
+            IrExpr *ie;
+            uint32_t n = base.u.list->n;
+            if (!el->design)
+                return ce_need_design(el, at);
+            if (!n || !ce_check_index_width(el, idx.ty, n, idx_expr ? idx_expr->span : at, 0))
+                return val_error();
+            ie = el_to_ir(el, &idx, at);
+            return ce_dyn_pick(el, base.u.list->v, n, ie, at);
         }
     }
     if (!el->design)
@@ -4978,6 +5085,15 @@ Value el_read_place(Elab *el, Place *p)
         Value v = val_list(&el->arena, p->ty && p->ty->kind == TY_BUNDLE ? VAL_BUNDLE : VAL_ARRAY, p->ty, p->n);
         for (i = 0; i < p->n; i++)
             v.u.list->v[i] = el_read_place(el, p->subs[i]);
+        v.place = p;
+        return v;
+    }
+    case PL_DYN: {
+        Value *vs = ANEWN(&el->arena, Value, p->n ? p->n : 1);
+        Value v;
+        for (i = 0; i < p->n; i++)
+            vs[i] = el_read_place(el, p->subs[i]);
+        v = ce_dyn_pick(el, vs, p->n, p->index, span_none());
         v.place = p;
         return v;
     }

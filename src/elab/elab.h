@@ -89,7 +89,7 @@ Binding *elab_env_find(Env *e, const char *name);   /* walks parents; NULL if un
 
 /* ------------------------------------------------------------- places -- */
 
-typedef enum PlaceKind { PL_SIG, PL_AGG, PL_LOCAL } PlaceKind;
+typedef enum PlaceKind { PL_SIG, PL_AGG, PL_LOCAL, PL_DYN } PlaceKind;
 
 typedef struct PlaceSel {     /* a step from a local variable to the assigned part */
     uint8_t kind;             /* 0 field/element index a, 1 dynamic index (idx), 2 bit slice [a +: b] */
@@ -100,7 +100,10 @@ typedef struct PlaceSel {     /* a step from a local variable to the assigned pa
 /* An assignable location. PL_SIG: bits [lo +: width] of signal `sig` of the
  * current module, or element `index` (elem_width bits each) of the array
  * starting at bit lo. PL_AGG: a bundle (subs[i] per field) or an array of
- * bundles (subs[i] per element). PL_LOCAL: (part of) a mutable local. */
+ * bundles (subs[i] per element). PL_LOCAL: (part of) a mutable local.
+ * PL_DYN: the one of subs[0..n) (places of type `ty`) selected by the
+ * hardware value `index` (a dynamic index into an array of bundles: reads
+ * are a mux, writes a decode; an index >= n selects nothing). */
 typedef struct Place {
     uint8_t kind;
     Ty *ty;

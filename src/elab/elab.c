@@ -131,7 +131,7 @@ static Place *elb_declare_tree(Elab *el, const char *name, const char *path, Ty 
 
 int el_is_signal_place(const Place *p)
 {
-    return p && (p->kind == PL_SIG || p->kind == PL_AGG);
+    return p && (p->kind == PL_SIG || p->kind == PL_AGG || p->kind == PL_DYN);
 }
 
 static void elb_mark_driven(Elab *el, uint32_t sig, Span at, const char *how)
@@ -242,6 +242,36 @@ void el_assign(Elab *el, Place *p, Value v, Expr *src, Expr *lhs, Span at)
         return;
     if (p->kind == PL_LOCAL) {
         el_assign_local(el, p, v, at);
+        return;
+    }
+    if (p->kind == PL_DYN) {
+        /* write decode: assign the element the index selects */
+        IrStmtList *saved;
+        IrCaseArm *arms;
+        uint32_t k, na = 0, iw = p->index->width;
+        if (!el->blk) {
+            el_error(el, at, "an assignment through a signal index into an array of bundles must be inside a `comb` or `on` block");
+            return;
+        }
+        saved = el->blk->out;
+        arms = (IrCaseArm *)xcalloc(p->n + 1, sizeof(IrCaseArm));
+        for (k = 0; k < p->n; k++) {
+            IrStmtList l = {0};
+            if (iw < 32 && k >= (1u << iw))
+                break;
+            el->blk->out = &l;
+            el_assign(el, p->subs[k], v, src, lhs, at);
+            el->blk->out = saved;
+            arms[na].nvals = 1;
+            arms[na].vals = ANEWN(el->design->arena, IrBits, 1);
+            arms[na].vals[0] = ir_bits_u64(el->design->arena, iw, k);
+            arms[na].body = ir_stmts_finish(el->design->arena, &l);
+            na++;
+        }
+        if (iw >= 32 || na < (1u << iw))
+            na++; /* default: an index past the array writes nothing */
+        ir_stmts_push(el->blk->out, ir_stmt_case(el->design->arena, p->index, na, arms, at));
+        free(arms);
         return;
     }
     if (p->kind == PL_AGG) {
