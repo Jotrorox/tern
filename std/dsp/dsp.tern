@@ -1,0 +1,100 @@
+package std::dsp
+
+/// Fixed-point number type `Fixed<I, F>` (I integer bits, F fraction bits),
+/// re-exported from `std::math` so DSP code needs a single `use`.
+pub use std::math::Fixed
+
+// Common items of std::dsp: the complex sample type, elaboration-time
+// trigonometry for coefficient ROMs, and bit reversal.
+//
+// Conventions shared by every std::dsp component:
+// * The sample type `T` is any type whose raw bits are a two's-complement
+//   number (`s16`, `sint<12>`, `bit<18>`, a `Fixed<I, F>`). Components
+//   reinterpret `bits(x)` as `sint<T::WIDTH>`; components with a `Signed`
+//   generic can treat the bits as unsigned instead.
+// * Full-precision results are `sint<..>` with a published width constant
+//   (`OW`), never silently truncated. Where a result is narrowed back to `T`
+//   it is rounded and saturated, and the documentation says so.
+// * Sample-rate pipelines use `Valid<T>` (no backpressure); frame-based
+//   components that must stall use `Stream<T>`.
+// * There is no floating point: sine/cosine tables are computed by integer
+//   `const fn`s (a Taylor series in Q60 fixed point, exact to the rounding of
+//   any table up to 32-bit amplitude).
+
+/// A complex sample. Packed as `re ++ im` (`re` in the upper half).
+pub struct Complex<T: type> {
+    re: T,
+    im: T,
+}
+
+/// π scaled by 2^60, rounded to nearest.
+pub const PI_Q60: uint = 3622009729038561421
+
+/// 1.0 in the Q60 format used by the trigonometric const fns.
+pub const ONE_Q60: uint = 1 << 60
+
+/// sin(π/2 · m / den) scaled by 2^60, for 0 <= m <= den (the first quadrant).
+/// Evaluated with a Taylor series up to x^25 in Q60 integer arithmetic; the
+/// error is below 2^-50, far under the rounding of any hardware table.
+/// Every partial sum of the series is positive on [0, π/2], so the whole
+/// computation stays in unsigned arithmetic.
+pub const fn sin_quarter_q60(m: uint, den: uint) -> uint {
+    let x = PI_Q60 * m / (2 * den)
+    var term = x
+    var sum = x
+    for k in 1..13 {
+        term = term * x / ONE_Q60 * x / ONE_Q60 / ((2 * k) * (2 * k + 1))
+        if k % 2 == 1 { sum = sum - term } else { sum = sum + term }
+    }
+    sum
+}
+
+/// round(amp · sin(2π · num / den)) for any num >= 0 and den > 0, using
+/// quadrant symmetry around [sin_quarter_q60].
+pub const fn sin_scaled(num: uint, den: uint, amp: uint) -> sint {
+    let n4 = (num % den) * 4
+    let quadrant = n4 / den
+    let rem = n4 % den
+    let m = if quadrant == 1 or quadrant == 3 { den - rem } else { rem }
+    let mag = (sin_quarter_q60(m, den) * amp + ONE_Q60 / 2) / ONE_Q60
+    if quadrant >= 2 { -(mag as sint) } else { mag as sint }
+}
+
+/// round(amp · cos(2π · num / den)); cos(θ) = sin(θ + π/2).
+pub const fn cos_scaled(num: uint, den: uint, amp: uint) -> sint {
+    sin_scaled(4 * num + den, 4 * den, amp)
+}
+
+/// Reverses the bit order of `x` (bit 0 becomes bit L-1). Usable at
+/// elaboration time and, applied to a signal, as pure wiring.
+pub const fn bit_reverse<L: uint>(x: uint<L>) -> uint<L> {
+    var r: uint<L> = 0
+    for i in 0..L {
+        if x[i] { r = r | (1u<L> << (L - 1 - i)) }
+    }
+    r
+}
+
+test "sin_scaled hits the exact values" {
+    expect sin_scaled(0, 4, 1000) == 0
+    expect sin_scaled(1, 4, 1000) == 1000
+    expect sin_scaled(2, 4, 1000) == 0
+    expect sin_scaled(3, 4, 1000) == -1000
+    expect sin_scaled(1, 12, 1000) == 500   // sin 30°
+    expect sin_scaled(1, 8, 1000) == 707    // sin 45°
+    expect sin_scaled(13, 12, 1000) == 500  // wraps around a full turn
+}
+
+test "cos_scaled is sin shifted by a quarter turn" {
+    expect cos_scaled(0, 8, 32767) == 32767
+    expect cos_scaled(2, 8, 32767) == 0
+    expect cos_scaled(4, 8, 32767) == -32767
+    expect cos_scaled(1, 6, 1000) == 500    // cos 60°
+}
+
+test "bit_reverse mirrors the bits" {
+    expect bit_reverse(0b0001u4) == 0b1000
+    expect bit_reverse(0b0110u4) == 0b0110
+    expect bit_reverse(0b100u3) == 0b001
+    expect bit_reverse(0b1101_0000u8) == 0b0000_1011
+}

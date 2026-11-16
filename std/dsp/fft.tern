@@ -1,0 +1,291 @@
+package std::dsp
+
+/// Twiddle factors W_N^k = exp(-2πik/N) for k in 0..N/2, as `sint<W>` with
+/// amplitude 2^(W-1) - 1 (1.0 is represented as 2^(W-1) - 1).
+pub const fn twiddles<N: uint, W: uint>() -> [Complex<sint<W>>; N / 2] {
+    var t: [Complex<sint<W>>; N / 2]
+    let amp = (1 << (W - 1)) - 1
+    for k in 0..(N / 2) {
+        t[k] = Complex {
+            re: cos_scaled(k, N, amp) as sint<W>,
+            im: (-sin_scaled(k, N, amp)) as sint<W>,
+        }
+    }
+    t
+}
+
+/// Radix-2 FFT, frame-based: load N samples, compute, unload N bins.
+///
+/// The generic order follows the spec listing `Fft<N, T>`; `T` is the type
+/// of the real and imaginary parts (read as two's complement), default `s16`.
+///
+/// Implementation: a correct but deliberately simple iterative in-place
+/// decimation-in-time FFT over one RAM of N complex words.
+/// 1. Load: `in` accepts N samples (`in.ready` high only in this phase) and
+///    writes sample n to address bit_reverse(n).
+/// 2. Compute: log2(N) stages of N/2 butterflies; each butterfly takes four
+///    cycles on one read and one write port (read a, read b, write a', write
+///    b'). Twiddles come from a ROM computed at elaboration ([twiddles]).
+///    `busy` is high. This takes `COMPUTE_CYCLES` = 2 · N · log2(N) cycles.
+/// 3. Unload: `out` presents bins 0..N-1 in natural order, one per cycle
+///    while `out.ready` is high, with the bin number on `index`.
+/// Then it returns to Load. Throughput is one frame per
+/// N + COMPUTE_CYCLES + N + 1 cycles (with no stalls).
+///
+/// Scaling: every butterfly divides by 2 (arithmetic shift, truncating), so
+/// the output is DFT(x) / N and cannot grow. Products are truncated to the
+/// sample width; results saturate in the rare corner where |a + b·w| would
+/// exceed full scale. Expect an error of a few LSB growing with log2(N);
+/// keep inputs below full scale by one bit for best accuracy.
+pub module Fft<N: uint, T: type = s16>
+where N.is_pow2(), N >= 4, N <= 4096
+{
+    const L: uint = clog2(N)
+    const SW: uint = T::WIDTH
+    type S = sint<SW>
+    type C = Complex<S>
+    /// Cycles spent computing one frame.
+    pub const COMPUTE_CYCLES: uint = 2 * N * L
+    /// Cycles from accepting the last input sample to the first output bin.
+    pub const LATENCY: uint = COMPUTE_CYCLES + 2
+
+    /// Clock.
+    in clk: clock
+    /// Reset: back to the Load phase, frame discarded.
+    in rst: reset
+    /// Time-domain input samples, N per frame.
+    in in: Stream<Complex<T>>
+    /// Frequency-domain bins in natural order, N per frame, scaled by 1/N.
+    out out: Stream<Complex<T>>
+    /// Bin number of the sample on `out` (sample number while loading).
+    out index: uint<L>
+    /// High while the frame is being computed.
+    out busy: bool
+
+    enum State { Load, Compute, Prime, Unload }
+    reg state: State = .Load
+
+    mem buf: [C; N]
+    mem tw: [C; N / 2] = twiddles<N, SW>()
+
+    reg cnt: uint<L> = 0          // load/unload position
+    reg j: uint<L - 1> = 0        // butterfly within the stage
+    reg ph: uint<2> = 0           // cycle within the butterfly
+    reg half: uint<L> = 1         // 2^stage: distance between a and b
+    reg mask: uint<L - 1> = 0     // half - 1
+    reg tstep: uint<L> = N / 2    // twiddle stride: N / (2 · half)
+    reg a_reg: C = all0
+    reg b_new_reg: C = all0
+
+    // Butterfly addresses: insert a 0 bit at position `stage` of j.
+    let pos = j & mask
+    let high = j & ~mask
+    let ia: uint<L> = ((high as uint<L>) << 1) | (pos as uint<L>)
+    let ib: uint<L> = ia | half
+    let k: uint<L - 1> = (pos * tstep) as uint<L - 1>
+
+    // One read port. During a butterfly the address is chosen so that it
+    // never equals the address being written in the same cycle.
+    let next_cnt: uint<L> = if out.fire() { cnt +% 1 } else { cnt }
+    let raddr: uint<L> = match state {
+        .Compute => if ph == 0 or ph == 3 { ia } else { ib },
+        .Load | .Prime => 0,
+        .Unload => next_cnt,
+    }
+    let rd = buf.read(raddr)
+    let w = tw.read(k)
+
+    fn sat(v: sint<SW + 3>) -> S {
+        if v > S::MAX { S::MAX } else if v < S::MIN { S::MIN } else { v as S }
+    }
+
+    // Butterfly on a = a_reg, b = rd (valid in phase 2), w (valid from phase 1).
+    let tr = ((rd.re * w.re - rd.im * w.im) >>> (SW - 1)) as sint<SW + 2>
+    let ti = ((rd.re * w.im + rd.im * w.re) >>> (SW - 1)) as sint<SW + 2>
+    let a_new = C { re: sat((a_reg.re + tr) >>> 1), im: sat((a_reg.im + ti) >>> 1) }
+    let b_new = C { re: sat((a_reg.re - tr) >>> 1), im: sat((a_reg.im - ti) >>> 1) }
+
+    // One write port.
+    var we: bool = false
+    var waddr: uint<L> = 0
+    var wdata: C = all0
+    comb {
+        match state {
+            .Load => if in.fire() {
+                we = true
+                waddr = bit_reverse(cnt)
+                wdata = C { re: bits(in.data.re) as S, im: bits(in.data.im) as S }
+            },
+            .Compute => if ph == 2 {
+                we = true
+                waddr = ia
+                wdata = a_new
+            } else if ph == 3 {
+                we = true
+                waddr = ib
+                wdata = b_new_reg
+            },
+            .Prime | .Unload => {},
+        }
+    }
+
+    let last_butterfly = j == N / 2 - 1
+    let last_stage = half == N / 2
+
+    on clk {
+        if we { buf[waddr] = wdata }
+        match state {
+            .Load => if in.fire() {
+                cnt = cnt +% 1
+                if cnt == N - 1 {
+                    state = .Compute
+                    j = 0
+                    ph = 0
+                    half = 1
+                    mask = 0
+                    tstep = N / 2
+                }
+            },
+            .Compute => {
+                ph = ph +% 1
+                if ph == 1 { a_reg = rd }
+                if ph == 2 { b_new_reg = b_new }
+                if ph == 3 {
+                    j = j +% 1
+                    if last_butterfly {
+                        if last_stage {
+                            state = .Prime
+                        } else {
+                            half = half << 1
+                            mask = (mask << 1) | 1
+                            tstep = tstep >> 1
+                        }
+                    }
+                }
+            },
+            .Prime => {
+                state = .Unload
+                cnt = 0
+            },
+            .Unload => if out.fire() {
+                cnt = cnt +% 1
+                if cnt == N - 1 { state = .Load }
+            },
+        }
+    }
+
+    in.ready = state == .Load
+    out.valid = state == .Unload
+    out.data = Complex { re: T::from_bits(bits(rd.re)), im: T::from_bits(bits(rd.im)) }
+    index = cnt
+    busy = state == .Compute or state == .Prime
+
+    /// Loading and unloading never overlap.
+    property load_and_unload_exclusive {
+        never in.ready and out.valid
+    }
+    /// A frame always finishes computing in COMPUTE_CYCLES.
+    property compute_terminates {
+        always rose(busy) |-> eventually[..COMPUTE_CYCLES + 1] fell(busy)
+    }
+    /// The output bin holds while the consumer stalls.
+    property output_holds_under_backpressure {
+        always (out.valid and !out.ready) |=> out.valid and stable(out.data) and stable(index)
+    }
+}
+
+test "fft of an impulse is flat" {
+    let dut = sim Fft<8, s16>()
+    dut.reset()
+    dut.out.ready = false
+    for i in 0..8 {
+        expect dut.in.ready
+        dut.in = Stream { valid: true, data: Complex { re: if i == 0 { 1000 } else { 0 }, im: 0 } }
+        dut.step()
+    }
+    dut.in.valid = false
+    dut.step_until(dut.out.valid, max: 200)
+    dut.out.ready = true
+    for i in 0..8 {
+        expect dut.out.valid and dut.index == i
+        expect dut.out.data.re == 125 and dut.out.data.im == 0    // 1000 / 8
+        dut.step()
+    }
+    expect !dut.out.valid and dut.in.ready
+}
+
+test "fft of a constant has only a DC bin" {
+    let dut = sim Fft<8, s16>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: Complex { re: 800, im: 0 } }
+    dut.step(8)
+    dut.in.valid = false
+    dut.step_until(dut.out.valid, max: 200)
+    for i in 0..8 {
+        let re = dut.out.data.re
+        let im = dut.out.data.im
+        if i == 0 {
+            expect re >= 796 and re <= 800
+        } else {
+            expect re >= -4 and re <= 4
+        }
+        expect im >= -4 and im <= 4
+        dut.step()
+    }
+}
+
+test "fft of a cosine puts energy in bins 1 and N-1" {
+    let dut = sim Fft<8, s16>()
+    dut.reset()
+    dut.out.ready = true
+    for v in [1000, 707, 0, -707, -1000, -707, 0, 707] {
+        dut.in = Stream { valid: true, data: Complex { re: v, im: 0 } }
+        dut.step()
+    }
+    dut.in.valid = false
+    dut.step_until(dut.out.valid, max: 200)
+    for i in 0..8 {
+        let re = dut.out.data.re
+        if i == 1 or i == 7 {
+            expect re >= 496 and re <= 504
+        } else {
+            expect re >= -4 and re <= 4
+        }
+        dut.step()
+    }
+}
+
+test "fft compute time matches COMPUTE_CYCLES" {
+    let dut = sim Fft<16, s16>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: Complex { re: 1, im: 0 } }
+    dut.step(16)
+    dut.in.valid = false
+    expect dut.busy
+    dut.step(2 * 16 * 4 - 1)
+    expect dut.busy
+    dut.step(2)
+    expect !dut.busy and dut.out.valid
+}
+
+test "fft output stalls under backpressure" {
+    let dut = sim Fft<4, s16>()
+    dut.reset()
+    dut.out.ready = false
+    for v in [400, 0, 0, 0] {
+        dut.in = Stream { valid: true, data: Complex { re: v, im: 0 } }
+        dut.step()
+    }
+    dut.in.valid = false
+    dut.step_until(dut.out.valid, max: 100)
+    dut.step(5)
+    expect dut.out.valid and dut.index == 0 and dut.out.data.re == 100
+    dut.out.ready = true
+    dut.step()
+    expect dut.index == 1 and dut.out.data.re == 100
+    dut.out.ready = false
+    dut.step(3)
+    expect dut.index == 1
+}
