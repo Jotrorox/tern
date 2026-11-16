@@ -1,0 +1,15 @@
+/tern
+/tern.exe
+*.o
+*.obj
+*.pdb
+*.ilk
+/build/
+/tools/embed
+/tools/embed.exe
+/tests/run
+/tests/run.exe
+/tests/out/
+*.vcd
+.DS_Store
+/fuzz/out/

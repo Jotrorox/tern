@@ -1,0 +1,1487 @@
+Tern
+A Modern Hardware Description Language
+Language Specification
+Version 0.1 — 3 November 2026
+Johannes Müller
+tern-lang.com
+Tern is a synthesis-first hardware description language: everything that compiles is
+hardware, every signal is typed with a width and a clock domain, tests live beside
+the design, and the compiler emits clean SystemVerilog so it drops into any existing
+flow. This document is the normative specification of the language, its standard
+library and its toolchain. The reference implementation is written in portable C (C11,
+C99-compatible) with no third-party dependencies.
+
+=====PAGE=====
+
+Contents
+1 Introduction 2
+1.1 What Tern is . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+1.2 The name . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+1.3 What goes wrong in SystemVerilog . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+1.4 Design goals . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+1.5 Non-goals . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+1.6 Prior art . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+1.7 Notation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+2 Language tour 5
+3 Lexical structure 8
+3.1 Source text . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+3.2 Tokens . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+3.3 Keywords . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+3.4 Operators and precedence . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 9
+4 Packages and files 10
+5 Types 11
+5.1 Built-in types . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+5.2 Width rules . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+5.3 Conversions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+5.4 Structs and enums . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+5.5 Arrays . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+5.6 Clock-domain typing . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+6 Signals and assignment 13
+6.1 The three declarations . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+6.2 Combinational blocks . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+6.3 Clocked blocks . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+6.4 Reset model . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+6.5 Power-on and uninitialized registers . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+7 Modules, generics and elaboration 15
+7.1 Declaring a module . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+7.2 Instantiating . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+7.3 Elaboration-time code . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+7.4 Functions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 16
+7.5 Top level . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 16
+8 Bundles, clock domains and CDC 17
+8.1 Bundles . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+8.2 Clock domains . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+8.3 Crossing domains . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 18
+1
+
+=====PAGE=====
+
+9 Compile-time evaluation 19
+9.1 Compile-time values . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19
+9.2 const fn . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19
+9.3 Static checks . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19
+9.4 Type-level computation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20
+9.5 No preprocessor . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20
+10 Memories, state machines and register maps 21
+10.1 Memories . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 21
+10.2 State machines . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 21
+10.3 Register maps . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 22
+11 Verification 23
+11.1 Unit tests . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 23
+11.2 Table-driven and randomized stimulus . . . . . . . . . . . . . . . . . . . . . . . . . 23
+11.3 Assertions inside the design . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+11.4 Properties . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+11.5 Formal . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+11.6 Coverage . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 25
+12 Standard library 26
+12.1 Rules every component follows . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26
+12.2 Packages . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26
+12.3 Composition in practice . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29
+13 Toolchain 30
+13.1 Pipeline . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 30
+13.2 Commands . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 30
+13.3 Emitted SystemVerilog . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 31
+13.4 Importing SystemVerilog . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 31
+13.5 Migration path . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 31
+13.6 Packages and the git-based registry . . . . . . . . . . . . . . . . . . . . . . . . . . . 31
+13.7 Implementation in C . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32
+14 Decisions 35
+A Grammar 36
+B SystemVerilog to Tern cheat sheet 38
+2
+
+=====PAGE=====
+
+1 Introduction
+1.1 What Tern is
+Tern describes synchronous digital hardware. A Tern design is a tree ofmodules; a module is a set
+of typed signals — wires, combinational variables and registers — connected by expressions and
+grouped into blocks that give those expressions their meaning. There is no event scheduler, no
+simulation-only subset, and no construct whose synthesis behaviour differs from its simulation
+behaviour.
+The language optimizes, in this order, for being hard to misuse, easy to read, and a drop-in
+replacement for SystemVerilog in synthesis and simulation flows. The goal is a language an
+engineer can learn in an afternoon and a team can run a whole chip project in.
+1.2 The name
+The Arctic tern makes the longest migration of any animal, pole to pole, every year. Tern is built
+around migration: it reads existing SystemVerilog as typed black boxes, emits SystemVerilog for
+every tool that exists today, and lets a team move one module at a time. Source files end in.tern,
+the command-line tool istern, and the project’s home — documentation, the standard-library
+reference and the package index — is tern-lang.com. In prose, “Tern” is the language; “tern lang”
+is used where a disambiguator is needed.
+1.3 What goes wrong in SystemVerilog
+Table 1.1 lists the SystemVerilog behaviours that cause most bugs and most of the learning curve,
+and what Tern does instead. Each row corresponds to a rule in this specification.
+1.4 Design goals
+1. Everything synthesizes.If it compiles, it is hardware.
+2. One mental model.Wires, combinational variables and registers connected by expressions.
+3. Learnable in an afternoon.Rust/Go-flavoured syntax, 38 keywords, one assignment
+operator, nobegin/end.
+4. Correct by construction where cheap.No latches, no width surprises, no unconnected
+inputs, no implicit clock-domain crossings, no multiple drivers — all compile errors.
+5. Generic and compile-time programmable. Type and value generics, const fn,
+elaboration-time loops and conditionals.
+6. Testing is part of the language.test blocks, assertions, a small temporal property
+language and a cycle-based simulator ship with the compiler.
+7. Interoperates with the existing world.Reads SystemVerilog modules as typed black
+boxes; emits readable SystemVerilog and Verilog-2005.
+8. Batteries included. One CLI for build, test, format, lint, docs and packages, and a
+standard library of universal components.
+3
+
+=====PAGE=====
+
+SystemVerilog What goes wrong Tern
+wire, reg, logic,
+implicit nets
+reg is not a register; a typo silently
+creates a new net
+Three declarations with one meaning
+each: let (wire), var (combinational
+variable), reg (flip-flop). No implicit
+declarations.
+Blocking = vs.
+non-blocking <=
+Races, simulation/synthesis mismatch One =. The block kind decides the
+semantics; reading areg always yields
+its current value.
+Incomplete
+always_comb / case
+Inferred latches, found only in
+synthesis logs
+Every combinational path must assign
+every output;match must be
+exhaustive.
+Implicit width rules Silent truncation, sign surprises, 32-bit
+promotion
+Lossless arithmetic; narrowing and
+signed/unsigned mixing are explicit.
+Clock and reset by
+convention
+Every always_ff restates edge and
+polarity; CDC is unchecked
+Clock domain is part of a register’s
+type; reset style lives in thereset
+type; crossing domains needs an
+explicit synchronizer.
+4-state x/z X-optimism and X-pessimism differ
+between tools
+2-state. Uninitialized registers are an
+error or deliberately randomized in
+simulation.
+Two languages in one Lint rules to know what is real
+hardware
+One language. test blocks use the
+same expressions but are never
+synthesized.
+generate, ‘include,
+‘define
+Text macros and awkward elaboration Packages, generics,const fn, ordinary
+for/if on compile-time values.
+Interfaces and
+modports
+Verbose, direction rules nobody
+remembers
+bundle types withflip; direction
+follows fromin or out.
+No standard build,
+package, formatter,
+LSP
+Every team owns a Makefile and a lint
+config
+tern build, tern test, tern fmt,
+tern lsp, a git-based package index.
+Table 1.1: SystemVerilog problems and the Tern rules that remove them
+1.5 Non-goals
+• Replacing UVM or full constrained-random verification environments. Tern tests are for
+unit and block-level verification.
+• Analog, mixed-signal, or gate-level netlist entry.
+• Event-driven simulation with arbitrary#delay timing. The simulator is cycle-based.
+• Latch-based or asynchronous (clockless) design. Latches can be imported from SystemVerilog,
+never written in Tern.
+• 4-state simulation. Tern is 2-state (see Decisions, Chapter 14).
+• A hardware-construction DSL embedded in a host language. Tern’s compile-time language
+is deliberately small.
+1.6 Prior art
+Chisel and SpinalHDL (Scala), Amaranth (Python) and Clash (Haskell) get the semantics right but
+require learning a host language first. Bluespec is powerful but far from RTL thinking. Veryl is the
+closest standalone attempt: Rust-like syntax that transpiles to SystemVerilog. Tern takes Veryl’s
+position (standalone language, SystemVerilog output) and adds Chisel’s typed clock domains and
+bundles, lossless arithmetic, and built-in testing.
+4
+
+=====PAGE=====
+
+1.7 Notation
+Code in this document is Tern unless marked otherwise.Must, must not and error describe
+behaviour the compiler enforces;warning describes behaviourtern check reports without failing
+the build (and which–strict turns into an error).
+5
+
+=====PAGE=====
+
+2 Language tour
+The same 8N1 UART transmitter is 38 lines in Tern and 62 in SystemVerilog, and the Tern version
+cannot contain a latch, a race, a width bug or a missed reset.
+package uart
+use std::stream::Stream
+/// Sends one byte per ‘tx‘ handshake, 8 data bits, no parity, 1 stop bit.
+module UartTx<ClkHz: uint, Baud: uint = 115_200> {
+in clk: clock
+in rst: reset
+in tx: Stream<uint<8>> // valid + data in, ready out
+out txd: bool
+const Div: uint = ClkHz / Baud
+static_assert(Div >= 16, "clock too slow for this baud rate")
+enum State { Idle, Start, Data, Stop }
+reg state: State = .Idle
+reg tick: uint<clog2(Div)> = 0
+reg bit: uint<3> = 0
+reg shift: uint<8> = 0
+let baud_tick = tick == Div - 1
+tx.ready = state == .Idle
+txd = match state {
+.Idle | .Stop ⇒ true,
+.Start ⇒ false,
+.Data ⇒ shift[0],
+}
+on clk {
+tick = if baud_tick or state == .Idle { 0 } else { tick +% 1 }
+match state {
+.Idle ⇒ if tx.valid { shift = tx.data; state = .Start },
+.Start ⇒ if baud_tick { state = .Data },
+.Data ⇒ if baud_tick {
+shift = shift >> 1
+bit = bit +% 1
+if bit == 7 { state = .Stop }
+},
+.Stop ⇒ if baud_tick { state = .Idle },
+}
+}
+}
+test "sends 0x55 LSB first" {
+let dut = sim UartTx<ClkHz: 16, Baud: 1>() // Div = 16, clk/rst driven by the
+harness
+6
+
+=====PAGE=====
+
+dut.reset()
+dut.tx = Stream { valid: true, data: 0x55 }
+dut.step()
+expect !dut.tx.ready
+let line = [false, true, false, true, false, true, false, true, false, true]
+for b in line {
+dut.step(8) // sample mid-bit
+expect dut.txd == b
+dut.step(8)
+}
+}
+The same module in SystemVerilog:
+module uart_tx #(
+parameter int CLK_HZ = 50_000_000,
+parameter int BAUD = 115_200
+) (
+input logic clk,
+input logic rst,
+input logic tx_valid,
+input logic [7:0] tx_data,
+output logic tx_ready,
+output logic txd
+);
+localparam int DIV = CLK_HZ / BAUD;
+localparam int TW = $clog2(DIV);
+typedef enum logic [1:0] {IDLE, START, DATA, STOP} state_t;
+state_t state;
+logic [TW-1:0] tick;
+logic [2:0] bit_idx;
+logic [7:0] shift;
+logic baud_tick;
+assign baud_tick = (tick == DIV - 1);
+assign tx_ready = (state == IDLE);
+always_comb begin
+case (state)
+IDLE, STOP: txd = 1’b1;
+START: txd = 1’b0;
+DATA: txd = shift[0];
+default: txd = 1’b1; // forget this and you have a latch
+endcase
+end
+always_ff @(posedge clk) begin
+if (rst) begin
+state <= IDLE; tick <= ’0; bit_idx <= ’0; shift <= ’0;
+end else begin
+tick <= (baud_tick || state == IDLE) ? ’0 : tick + 1’b1;
+case (state)
+IDLE: if (tx_valid) begin shift <= tx_data; state <= START; end
+START: if (baud_tick) state <= DATA;
+DATA: if (baud_tick) begin
+shift <= shift >> 1; bit_idx <= bit_idx + 1’b1;
+if (bit_idx == 3’d7) state <= STOP;
+7
+
+=====PAGE=====
+
+end
+STOP: if (baud_tick) state <= IDLE;
+default: state <= IDLE;
+endcase
+end
+end
+endmodule
+What to notice:
+• One assignment operator. Insideon clk, state = .Start sets the register’s next value; at
+module level,txd = ... is a continuous assignment.
+• Reset is never written by hand.reg state = .Idle gives the reset value; thereset port
+type says whether it is synchronous or asynchronous and which polarity.
+• match must cover everyState, so there is nodefault and no latch to forget.
+• tick +% 1 is a wrapping add that keeps the width; a plaintick + 1 is one bit wider and
+is rejected when assigned back.
+• Stream<uint<8» is a bundle:valid and data flow in,ready flows out, because the port is
+in.
+• The test is in the same file, uses the same types, and runs withtern test. The harness
+drives clk and rst because the module has exactly one clock domain.
+8
+
+=====PAGE=====
+
+3 Lexical structure
+3.1 Source text
+Source files are UTF-8. Identifiers are ASCII; string literals and comments may contain any
+Unicode. A statement ends at the end of its line; a semicolon separates two statements on one
+line. Blocks are delimited by braces. There is no preprocessor.
+3.2 Tokens
+Kind Form Notes
+Identifier [a-zA-Z_][a-zA-Z0-9_]* Types and modules areUpperCamel, signals
+and functionssnake_case; the formatter
+warns, the compiler does not care.
+Integer literal 42, 0xFF, 0b1010_0011, 0o17,
+1_000_000
+Untyped; width comes from context._ is
+ignored.
+Typed literal 42u8, -3s12, 0xFFu<W> Suffix u<N> / s<N>; <W> may be a const
+expression.
+Fill literal all0, all1 Takes the width of its context, like
+SystemVerilog’0 / ’1.
+Boolean true, false bool is a distinct type, notuint<1>.
+String "..." Only instatic_assert, test, log and
+attributes. Never hardware.
+Comment // ..., /* ... */ , /// doc /// doc comments are extracted bytern
+doc.
+Attribute #[name(args)] Synthesis hints:#[ram(block)], #[keep],
+#[max_fanout(8)], #[dont_touch],
+#[top], #[test_port], #[clock(hz: N)] ,
+#[encoding(onehot)]. Passed through to
+the emitted SystemVerilog.
+3.3 Keywords
+The 38 keywords are reserved everywhere:
+package use pub module extern bundle struct enum const fn type regmap domain
+where test property sequence in out flip let var reg mem on comb match if
+else for while return as sim expect assert assume cover
+clock, reset, uint, sint, bit, bool, tri are built-in type names, not keywords.and, or, not,
+xor are the logical operators (the symbols&&, ||, ! are accepted as synonyms).static_assert,
+always, never, eventually, until are contextual: ordinary identifiers outside their constructs.
+Reserved for future use and rejected today with a dedicated message:impl, trait, async, yield,
+generate, initial, wire, logic — the last four so that pasted SystemVerilog produces “this is
+not Tern” rather than a confusing parse error.
+9
+
+=====PAGE=====
+
+3.4 Operators and precedence
+Table 3.2 lists all operators from highest to lowest precedence. All binary operators associate left
+to right. There is no? : ; if is an expression. There is no===; equality is always 2-state.
+Level Operators Result
+1 x.field x[i] x[hi:lo] f(args) x as T field, bit, slice, call, cast
+2 -x !x ~x &x |x ^x negate, logical not, bitwise not, reductions (to
+bool)
+3 * uint<N> × uint<M>→ uint<N+M>
+4 + - +% -% widening add/sub; wrapping add/sub
+5 « » »> shifts keep the width;»> is arithmetic
+6 & bitwise and
+7 ^ bitwise xor
+8 | bitwise or
+9 ++ concatenation; a ++ b is {a, b} in SystemVerilog
+10 == != < <= > >= → bool
+11 and / && bool
+12 or / || bool
+13 if c { a } else { b }, match expressions; all arms the same type
+Table 3.2: Operator precedence
+10
+
+=====PAGE=====
+
+4 Packages and files
+A Tern project is a directory tree of.tern files. Each file belongs to one package, packages map
+to directories, and there is noinclude.
+• A file starts withpackage <name>; files in the same directory must declare the same package.
+package uart::rx lives inuart/rx/.
+• use pkg::Itemimports one name,use pkg::{A, B} several, use pkg::* everything public.
+Items are private unless markedpub.
+• The project root holdstern.toml (Section 13.6).tern build compiles every package under
+src/; tern test also compilestests/.
+• Top-level items: module, extern module, bundle, struct, enum, const, const fn, fn,
+type, regmap, test, property, sequence.
+• std::prelude is imported into every file. Names from it can be shadowed by an explicit
+use.
+11
+
+=====PAGE=====
+
+5 Types
+Every signal has a static type with a known width and signedness. The compiler never widens or
+narrows silently, and clocks and resets are types of their own, so they cannot be used as data by
+accident.
+5.1 Built-in types
+Type Meaning SystemVerilog
+equivalent
+bool one bit, logical logic used as a condition
+bit<N> N raw bits, no arithmetic logic [N-1:0]
+uint<N> unsigned integer, N bits logic [N-1:0]
+sint<N> two’s-complement, N bits logic signed [N-1:0]
+uint / sint (no
+width)
+compile-time integers only; never a signal int parameter
+clock a clock;clock<falling> samples on the
+falling edge
+logic + posedge/negedge
+reset a reset; defaultreset<sync, high>; also
+reset<async, low> etc.
+logic + the reset branch
+in everyalways_ff
+[T; N] array of N elements of T unpacked array
+struct named fields, packed in declaration order
+(first field is MSB)
+packed struct
+enum named states, optionally with payload;
+encoding chosen by the compiler
+typedef enum (+ tagged
+union)
+bundle a group of signals with per-field direction interface + modport
+tri<T> tri-state pad, only on a#[top] module inout wire
+u8, u16, u32, u64 and s8, s16, s32, s64 are prelude aliases foruint<8> and so on.
+5.2 Width rules
+The lossless principle: an arithmetic result is wide enough to hold every possible value, so no
+operator can overflow unless the programmer asks for wrapping.
+5.3 Conversions
+• Implicit, always allowed:uint<N>→ uint<M> for M≥ N (zero-extend); sint<N>→
+sint<M> for M≥ N (sign-extend); untyped literal→ any integer type that can hold it;
+bit<N>→ uint<N> and back.
+• Explicit only: x as uint<8> (truncate or extend),x as sint<9> (reinterpret or extend),
+x as bit<N> (forget signedness),x as bool (x != 0), bits(x) (any value to its raw bits),
+T::from_bits(b) (the reverse, e.g. for an enum or struct).
+• Mixing uint and sint in one operator is an error until one side is cast. The function
+widen_signed(x) in std::math converts uint<N> to sint<N+1> losslessly.
+12
+
+=====PAGE=====
+
+Expression Result type
+uint<N> + uint<M> uint<max(N,M)+1>
+uint<N> +% uint<M> uint<max(N,M)> , wraps
+uint<N> * uint<M> uint<N+M>
+sint<N> - sint<M> sint<max(N,M)+1>
+uint<N> / const uint<N> ; division by a signal requiresstd::math::Divider
+x « k (const k) same width as x; bits fall off the top
+a ++ b bit<Na+Nb>
+x[hi:lo] bit<hi-lo+1>
+&x, |x, ^x bool
+x == y bool ; operands equal after implicit widening
+Table 5.2: Width of arithmetic results
+• boolisnotaninteger. a + bonbooleansisanerror; use a as uint<1>orcount_ones(...).
+5.4 Structs and enums
+struct Pixel { r: u8, g: u8, b: u8 } // 24 bits, r is the MSB byte
+enum Op { Nop, Add, Sub, Load } // 2 bits, binary encoded
+enum Cmd { // enum with payload: a tagged union
+Write { addr: u16, data: u32 },
+Read { addr: u16 },
+Idle,
+}
+let p = Pixel { r: 255, g: 0, b: grad[7:0] }
+let grey = (p.r + p.g + p.b) / 3 // uint<10> / const → uint<10>
+let c = Cmd::Write { addr: 0x10, data: payload }
+let a = match c { .Write { addr, .. } | .Read { addr } ⇒ addr, .Idle ⇒ 0 }
+Enums with payloads are packed astag ++ payload, the payload padded to the largest vari-
+ant. They replace the unsafe union plus manual tag pattern. An enum variant is written
+.Name when the type is known from context andType::Name otherwise. #[encoding(binary)],
+#[encoding(onehot)] and #[encoding(gray)] choose the tag encoding.
+5.5 Arrays
+[u8; 16] is 16 elements, indexeda[i] with auint<4> index. Out-of-range constant indices are
+compile errors; a dynamic index must be exactly wide enough (so every index is in range) or be
+an enum. a.len, a.map(f), a.reduce(f) and a.zip(b) exist at elaboration time for building
+logic, not as runtime hardware.
+5.6 Clock-domain typing
+A reg carries its domain in its type:reg x: uint<8> @ clk_b . Reading a register from one
+domain in logic clocked by another is an error unless the read goes through astd::cdc primitive.
+Combinational logic has the domain of the registers it reads; purely constant logic is domain-free.
+This is the check SystemVerilog does not have (details in Chapter 8).
+13
+
+=====PAGE=====
+
+6 Signals and assignment
+A module body is three kinds of signal declaration plus the blocks that assign them. The kind of
+block gives= its meaning, and the compiler checks that every path is fully assigned.
+6.1 The three declarations
+Declaration What it is Assigned where Semantics of =
+let name = expr a named wire once, at the
+declaration
+continuous; name is expr at all
+times
+var name: T [=
+default]
+combinational
+variable
+in onecomb block, on
+several paths
+last write wins within the block;
+must be assigned on every path
+unless a default is given
+reg name: T [= init]
+[@ dom]
+a flip-flop in one on block sets the next value; updates at
+the clock edge; reads return the
+current value
+output port same as let or
+var
+out x = expr at
+module level or in a
+comb block
+continuous
+Table 6.1: Signal declarations
+Each signal has exactly one driver block. Driving avar from twocomb blocks, or areg from two
+on blocks, is a compile error (“multiple drivers”), as is leaving anout port or avar undriven.
+6.2 Combinational blocks
+var alu_out: u32 // no default: every branch below must assign it
+var flags: Flags = Flags::NONE // default given: branches may skip it
+comb {
+match op {
+.Add ⇒ { alu_out = (a + b) as u32; flags.carry = (a + b)[32] },
+.Sub ⇒ alu_out = a -% b,
+.And ⇒ alu_out = a & b,
+.Nop ⇒ alu_out = 0,
+}
+}
+If .Nop were missing, the compiler reportsalu_out may be unassigned when op == Nop with
+the path. There is no way to express a latch; SystemVerilog’salways_latch has no counterpart.
+Inside acomb block, let binds an intermediate value,if/match/for (over const ranges) structure
+the assignments, and assignments tovars andout ports are the only side effects.
+6.3 Clocked blocks
+reg count: u8 = 0 // reset value 0, default domain
+reg data: u32 // no reset: must be written before read (checked)
+14
+
+=====PAGE=====
+
+reg tx_q: u8 = 0 @ clk_io // explicit domain
+on clk {
+if load { count = din } else if en { count = count +% 1 }
+data = next_data // unconditional: a register with no enable
+}
+• A module with exactly oneclock port (and at most onereset) has adefault domain; reg
+and on clk may omit it. Two clock ports mean everyreg must say@ which.
+• Inside on clk, reading areg gives the value before the edge, always; writing it sets the
+value after the edge. This is SystemVerilog’s non-blocking assignment, and it is the only
+kind. Intermediate combinational values inside the block arelet bindings.
+• A reg not assigned on some path keeps its value: an enable is inferred. This is the one place
+“not assigned” is not an error, because a register holding its value is a flip-flop, not a latch.
+• A reg may be assigned several times in one block; the last assignment in program order
+wins, as in SystemVerilog.
+6.4 Reset model
+• The reset port type carries the style:reset = synchronous, active-high.reset<async>,
+reset<low>, reset<async, low> change it. The compiler generates the right sensitivity
+list and polarity; no module ever writesif (!rst_n).
+• reg x: T = init resets toinit from the domain’s reset.reg x: T has no reset. A reset
+value must be a compile-time constant.
+• A domain with aclock but noreset is allowed; everyreg in it is reset-less, and= init
+becomes a power-on initial value only (emitted asinitial for FPGA, a warning for ASIC
+targets).
+• Reset is never read as data.rst as bool is an error; a design that needs “are we in reset”
+uses areg in_reset: bool = true that it clears.
+6.5 Power-on and uninitialized registers
+A reset-less reg read before any write on some path is a warning fromtern check (an error
+with –strict). In simulation its initial value is pseudo-random per seed (tern test –seed), so
+a design that silently relied on zeros fails deterministically rather than passing by luck.
+15
+
+=====PAGE=====
+
+7 Modules, generics and elaboration
+A module instance is an expression: inputs are passed by name, outputs are read as fields, and
+clocks propagate implicitly, so an instantiation is one line instead of a port map.
+7.1 Declaring a module
+pub module Fifo<T: type, Depth: uint = 16>
+where Depth.is_pow2()
+{
+in clk: clock
+in rst: reset
+in push: Stream<T>
+out pop: Stream<T>
+out count: uint<clog2(Depth) + 1>
+...
+}
+• Generics go in<>: T: type for a type,N: uint / B: bool for values, with defaults. A
+where clause states constraints checked at elaboration; the error points at the instantiation
+that violated it.
+• Ports are declared in the body within / out. inout does not exist; a top-level pad uses
+tri<T> and is the only bidirectional signal.
+• Port order is irrelevant: connections are always by name.
+7.2 Instantiating
+let rx_fifo = Fifo<u8, 64>(push: uart.rx) // clk, rst inherited from the parent’s
+default domain
+let tx_fifo = Fifo<u8, Depth: 64>(clk: clk_io, rst: rst_io, push: dma.out)
+cpu.rx = rx_fifo.pop
+let fifo_full = rx_fifo.count == 64
+• Every in port must be given, exceptclock/reset ports that match the parent’s default
+domain, which are inherited. An unconnected input is an error; an unused output is fine
+(reported bytern check –unused).
+• Generic arguments are positional or named; types and values share one list.
+• The result of an instantiation is a value whose fields are the module’sout ports. It can be
+destructured: let Fifo { pop, count } = Fifo<u8>(push: s) .
+• Shorthand: Fifo<u8>(push) connects the parent’spush to the port of the same name.
+• @ dom after the argument list sets the domain for every clock/reset port of the instance that
+is not named explicitly.
+7.3 Elaboration-time code
+Any for, if or let whose condition or range is a compile-time value is unrolled at elaboration.
+There is no separategenerate syntax.
+16
+
+=====PAGE=====
+
+module Pipeline<T: type, Stages: uint> {
+in clk: clock
+in d: T
+out q: T
+var stage: [T; Stages + 1]
+stage[0] = d
+for i in 0..Stages {
+reg r: T @ clk // one register per unrolled iteration: r_0, r_1,
+...
+on clk { r = stage[i] }
+stage[i + 1] = r
+}
+q = stage[Stages]
+}
+module Adder<W: uint, Fast: bool = false> {
+...
+if Fast { /* carry-lookahead */ } else { /* ripple */ } // one branch is
+elaborated
+}
+Names declared inside an unrolled loop get the iteration appended in the emitted SystemVerilog
+(r_0, r_1) so waveforms stay readable.
+7.4 Functions
+fn declares a pure combinational function: it takes values, returns a value, may containlet, if,
+match and for over const ranges, and is inlined wherever it is called. It cannot containreg or
+instantiate modules. const fn is the subset that runs at elaboration (Chapter 9); everyconst
+fn is also usable as afn on signals.
+fn parity(x: bit<N>) → bool { ^x } // N inferred from the
+argument
+fn saturate(x: sint<W>, lo: sint<W>, hi: sint<W>) → sint<W> {
+if x < lo { lo } else if x > hi { hi } else { x }
+}
+7.5 Top level
+#[top]marks a module as a synthesis root; a project may have several, one per target intern.toml.
+Only a top may havetri<T> ports and may name its clock ports anything; everything below it
+uses the typedclock/reset ports. #[clock(hz: 100_000_000)] on a clock port records its
+nominal frequency forstd::clk::Strobe, std::timer::Rtc and the simulator’s time base.
+17
+
+=====PAGE=====
+
+8 Bundles, clock domains and CDC
+A bundle is a struct whose fields have directions; declaring a portin or out fixes every field’s
+direction at once. One keyword,flip, replaces SystemVerilog interfaces and modports.
+8.1 Bundles
+pub bundle Valid<T: type> {
+valid: bool
+data: T
+}
+pub bundle Stream<T: type> {
+valid: bool
+data: T
+flip ready: bool // flows against the bundle’s direction
+}
+pub bundle Axi4Lite<AW: uint = 32, DW: uint = 32> {
+aw: Stream<uint<AW>>
+w: Stream< struct { data: uint<DW>, strb: bit<DW/8> }>
+flip b: Stream<bit<2>>
+ar: Stream<uint<AW>>
+flip r: Stream<struct { data: uint<DW>, resp: bit<2> }>
+}
+• On anin port, non-flipped fields are inputs andflip fields are outputs; on anout port
+the reverse. Nesting composes:flip b on anin Axi4Lite makes b.valid an output and
+b.ready an input.
+• A bundle value can be assigned whole (cpu.rx = fifo.pop), field by field (tx.ready =
+...), or built with a literal (Stream { valid: true, data: x } — only the non-flipped
+fields appear in a literal). Assigning whole connects both directions in one line.
+• fn items inside abundle body getself. The standardStream has fire() -> bool (valid
+and ready), map(f) and skid().
+8.2 Clock domains
+A domain is aclock plus, optionally, areset; the two travel together.
+module Top {
+in sys_clk: clock
+in sys_rst: reset<async, low>
+in pix_clk: clock
+domain sys = (sys_clk, sys_rst) // named domains when a module has several
+clocks
+domain pix = (pix_clk) // no reset
+let dma = Dma(bus: cpu.bus) @ sys
+let video = Scanout(fb: dma.fb) @ pix
+}
+18
+
+=====PAGE=====
+
+• A module with oneclock port has an implicit, unnamed default domain. A module with
+several must declaredomain names, and everyreg, on and instance says which (@ sys).
+• Domains are part of a signal’s type. Alet has the domain of the signals it reads; mixing two
+domains in one expression is an error:pix-domain signal ‘line’ used in sys-domain
+logic; cross with std::cdc.
+• A module with two clock ports (such as Sync2) receives them by named connection:
+Sync2(src: sys.clock, dst: pix.clock, d: flag) .
+8.3 Crossing domains
+The only legal way across a domain boundary is astd::cdc module. The compiler recognises
+these, types their outputs in the destination domain, and carries the right synthesis attributes
+(ASYNC_REG, false-path constraints) into the emitted SystemVerilog and an.sdc/.xdc fragment.
+Primitive Use
+Sync2<T = bool> / Sync3 single-bit level, 2 or 3 flops;T may be a bundle of independent bits
+PulseSync single-cycle pulse, toggle-based
+HandshakeSync<T> multi-bit value with req/ack; slow but safe
+AsyncFifo<T, Depth> streaming data, Gray-coded pointers
+ResetSync asynchronous assert, synchronous de-assert of areset into a domain
+ResetBridge derives areset in one domain from a reset in another
+unsafe_cross(x) escape hatch; warning and a// CDC: unchecked marker in SystemVerilog.
+For quasi-static configuration bits.
+Table 8.1:std::cdc primitives
+tern check lists every crossing in the design with its primitive, which is the CDC report most
+teams write by hand today.
+19
+
+=====PAGE=====
+
+9 Compile-time evaluation
+Everything that SystemVerilog does with parameters,localparam, $clog2, generate and the
+preprocessor, Tern does with one small, deterministic compile-time language:const values, const
+fn, and ordinaryif/for over them.
+9.1 Compile-time values
+• const Name: T = expr at package or module level.T is usually widthlessuint/sint/bool,
+but any type works.
+• Generic parameters are consts inside the module.
+• Widthless uint/sint are arbitrary precision at compile time; there is no 32-bit overflow in
+parameter arithmetic.
+• A value is compile-time if every input is: a literal, a const, a generic, a loop index of a const
+range, or a call of aconst fn on those.
+9.2 const fn
+const fn clog2(n: uint) → uint {
+var r = 0
+while (1 << r) < n { r = r + 1 }
+r
+}
+const fn crc_table(poly: uint<32>) → [uint<32>; 256] {
+var t: [uint<32>; 256]
+for i in 0..256 {
+var c = i as uint<32>
+for _ in 0..8 { c = if c[0] { (c >> 1) ^ poly } else { c >> 1 } }
+t[i] = c
+}
+t
+}
+const Crc32Table: [uint<32>; 256] = crc_table(0xEDB88320) // computed once, becomes
+a ROM
+• const fn has var, while, for, if, match, recursion, arrays and structs. It cannot read
+signals, instantiate modules or do I/O. Evaluation is bounded (–const-eval-limit, default
+107 steps), so a runaway loop is a compile error, not a hang.
+• A const fn called with signal arguments is just afn: the same source gives a ROM at
+compile time or a combinational circuit at run time.while is rejected in that case, since it
+is unbounded.
+9.3 Static checks
+• static_assert(cond, "message") anywhere a const is in scope; fires at elaboration with
+the instantiation path.
+20
+
+=====PAGE=====
+
+• where clauses on generics are sugar forstatic_asserts evaluated at the instantiation site.
+• const_log("...{}...", value) prints during elaboration.
+9.4 Type-level computation
+type aliases may depend on consts:type Addr = uint<clog2(Depth)>. typeof(expr) names
+the type of an expression,T::WIDTH the width of any type,T::MAX/T::MIN its extreme values.
+Bundles can be generic over other bundles. There is deliberately no type-levelif; a module that
+needs two shapes is two modules or anenum payload.
+9.5 No preprocessor
+‘ifdef becomes a bool generic or a feature flag in tern.toml [features], read as
+cfg::feature_name. ‘define macros becomeconst or const fn. ‘include becomes use. The
+compiler emits SystemVerilog with all of this resolved, so downstream tools never see a macro.
+21
+
+=====PAGE=====
+
+10 Memories, state machines and reg-
+ister maps
+10.1 Memories
+mem buf: [u32; 1024] // inferred: block RAM if the
+target has it
+#[ram(distributed)] mem lut: [u8; 64] = include_hex("sine.hex")
+let rd = buf.read(rd_addr) // synchronous read port: value
+appears next cycle
+on clk {
+if we { buf[wr_addr] = wr_data } // write port; byte enables: buf.
+write(addr, data, mask)
+}
+let async_rd = lut[idx] // combinational read: distributed/
+LUT RAM only
+• mem is neither areg nor an array of regs; it has no reset and no whole-value assignment. The
+number of read and write ports is counted by the compiler, so a[u32; 1024] with three
+readers gets the errormem buf has 3 read ports; the target supports 2 instead of
+ten thousand flip-flops.
+• Read-during-write behaviour is explicit:buf.read(addr, rdw: .OldData) or .NewData;
+the default is.Undefined, which the simulator randomizes so tests catch the dependency.
+• Initialcontents: aliteral, include_hex/include_bin, oraconst fn. Emittedas $readmemh
+plus aninitial block, or as.mif/.coe for vendor flows.
+• The target description intern.toml decides what inference is possible; the same source
+compiles everywhere.
+10.2 State machines
+There is no FSM keyword because anenum and amatch inside on clk already give exhaustive,
+waveform-readable state machines. Tuple matching expresses a transition table directly:
+reg state: State = .Idle
+on clk {
+state = match (state, event) {
+(.Idle, .Start) ⇒ .Run,
+(.Run, .Done) ⇒ .Finish,
+(.Run, .Abort) ⇒ .Idle,
+(.Finish, _) ⇒ .Idle,
+(s, _) ⇒ s, // stay
+}
+}
+let busy = state in [.Run, .Finish] // set membership
+22
+
+=====PAGE=====
+
+10.3 Register maps
+A regmap declares a memory-mapped register block once and generates the hardware, the software
+header and the documentation from it.
+regmap Ctrl {
+0x00 ctrl: rw { enable: bool @0, mode: Mode @[1:2] }
+0x04 status: ro { busy: bool @0, err: bool @1 }
+0x08 count: rw u32
+0x10 fifo: wo u8 → Stream<u8> // write-only register exposed as a stream
+}
+let regs = std::bus::RegisterFile<Ctrl>(bus: cpu.axi_lite)
+let engine = Engine(enable: regs.ctrl.enable, mode: regs.ctrl.mode, in: regs.fifo)
+regs.status = Ctrl::Status { busy: engine.busy, err: engine.err }
+• Each line isoffset name: access type ; access isrw, ro, wo, w1c (write-one-to-clear) or
+rw1s. The type is a scalar, a field list with bit positions, orT -> Stream<T> for a FIFO-style
+register.
+• Ctrl::Regs is the generated bundle;Ctrl::<Name> the struct of each register’s fields.
+• RegisterFile<Map> is generic over the bus:Axi4Lite by default,Apb and Wishbone by
+generic argument.
+• tern build also writes<Map>.h (C header),<Map>.svd (CMSIS-SVD) and a Markdown
+table for the docs.
+23
+
+=====PAGE=====
+
+11 Verification
+Tests, assertions and properties are part of the language and run withtern test on a built-in
+cycle-based simulator. They use the same types and expressions as the design; nothing inside a
+test or property is ever synthesized.
+11.1 Unit tests
+test "fifo preserves order" {
+let dut = sim Fifo<u8, 4>() // harness owns clk/rst of the default
+domain
+dut.reset() // asserts reset for 2 cycles, then releases
+for v in [1, 2, 3, 4] {
+dut.push = Stream { valid: true, data: v }
+dut.step() // one clock edge; combinational logic
+settles after it
+}
+dut.push.valid = false
+expect dut.count == 4
+dut.pop.ready = true
+for v in [1, 2, 3, 4] {
+expect dut.pop.valid and dut.pop.data == v
+dut.step()
+}
+expect !dut.pop.valid
+}
+• sim Module<...>(inputs...)builds a simulation handle. Inputs not given at construction
+are driven later by assignment; areg’s current value and any internal signal are readable by
+path (dut.rx_fifo.count). Internal signals cannot be written; a signal a test must drive is
+exposed with#[test_port].
+• step(n = 1) advances n cycles of the default domain;step_until(cond, max = 1000)
+runs untilcond holds and fails atmax; settle() evaluates combinational logic without a
+clock. With several domains:dut.sys.step(), dut.pix.step(), ordut.run(ns: 500)
+using the periods from#[clock(hz)].
+• expect condrecords a failure and continues;assert condstops the test. Both print the
+expression with the values of its operands and the cycle number.
+• log("...{}...", x) prints; dut.dump("waves.vcd") records a VCD waveform (readable
+by GTKWave and Surfer).
+• tern test runs every test in parallel, with a filter, a seed,–waves (dump on failure) and
+–cover.
+11.2 Table-driven and randomized stimulus
+test "alu ops" {
+let dut = sim Alu<32>()
+24
+
+=====PAGE=====
+
+for (op, a, b, want) in [(.Add, 1, 2, 3), (.Sub, 5, 7, 0xFFFF_FFFE), (.And, 0xF0,
+0x3C, 0x30)] {
+dut.op = op; dut.a = a; dut.b = b
+dut.settle()
+expect dut.y == want
+}
+}
+test "random adds" {
+let dut = sim Alu<32>()
+for _ in 0..10_000 {
+let a = rand<u32>()
+let b = rand<u32>() where b <= 0x1000 // rejection constraint
+dut.op = .Add; dut.a = a; dut.b = b
+dut.settle()
+expect dut.y == (a + b) as u32
+}
+}
+rand<T>() is seeded per test run; the seed is printed on failure and replayed with–seed.
+11.3 Assertions inside the design
+Immediate assertions live incomb or on blocks and are checked by the simulator and by for-
+mal. They are stripped from synthesis output, or kept as SystemVerilogassert property with
+–emit-assertions.
+on clk {
+assert !(push.fire() and count == Depth), "push into full fifo"
+}
+11.4 Properties
+A small subset of SVA, declared inside a module and checked every cycle of its domain:
+property valid_holds_until_ready {
+always (push.valid and !push.ready) |⇒ push.valid and stable(push.data)
+}
+property eventually_drains {
+always (count > 0 and pop.ready) |→ eventually[..Depth] count == 0
+}
+assume property no_push_during_reset { always rst |→ !push.valid }
+cover property wraps_around { count == Depth ##[1:$] count == 0 }
+Operators: always, never, |-> (same cycle), |=> (next cycle), ##n / ##[a:b] delay,
+eventually[..n], stable(x), rose(x), fell(x), past(x, n), until. Sequences can be
+named withsequence. Repetition ([*n], [->n]) is reserved for a later version. What this subset
+cannot say is written in SystemVerilog against the emitted code.
+11.5 Formal
+tern prove Fifo –depth 20 runs bounded model checking (and k-induction with–induct) over
+every assert/assume/cover in the module, via Yosys and SymbiYosys. Counterexamples come
+25
+
+=====PAGE=====
+
+back as a waveform plus a generatedtest that reproduces the trace, so a formal failure becomes
+a regression test with one command.
+11.6 Coverage
+tern test –cover reports line coverage, branch coverage permatch arm and if, and cover
+property hits. Full match-arm coverage is possible by construction because every arm must exist.
+26
+
+=====PAGE=====
+
+12 Standard library
+std ships with the compiler and is written entirely in Tern. Every module in it is generic, carries
+tests and properties, documents its latency as aconst, and speaks the sameStream handshake,
+so a design is assembled from parts that fit without adapters. The reference is generated from the
+sources and published at tern-lang.com/std;tern doc std::<pkg> shows it offline.
+12.1 Rules every component follows
+1. Generic over the payload type (T: type) and sized byuint generics withwhere constraints;
+no magic widths.
+2. One handshake: Stream<T> (valid/ready/data) between components,Valid<T> (no back-
+pressure) where it is enough. Width and rate changes are explicit components, never hidden
+in a port.
+3. Latencyandthroughputarepublishedconstants( Fifo::LATENCY,Multiplier<..>::LATENCY);
+the documentation tables are generated from them.
+4. Every component has atest per documented behaviour and at least oneproperty for its
+invariant;tern test std runs them all.
+5. Reset values, encodings and target inference are attributes with sensible defaults, overridable
+at the instance.
+6. Nothing in std is vendor-specific except std::target::*, which wraps primitives the
+language cannot express.
+7. Every component follows the naming scheme: modulesUpperCamel, portssnake_case, an
+input stream isin or push, an output streamout or pop, and the first generic is the payload
+type.
+12.2 Packages
+std::prelude (auto-imported)
+Valid<T>, Stream<T>, u8..u64, s8..s64, clog2, bits, all0/all1, count_ones, static_assert,
+typeof.
+27
+
+=====PAGE=====
+
+std::stream
+Skid<T> one-entry register slice; breaks theready path (LATENCY
+= 1)
+Pipe<T, Stages> N register stages with full throughput
+Fork<T, N> broadcast to N consumers; fires when all are ready
+(policy: .Eager buffers per branch)
+Join<A, B> / Join3 waits for both inputs, outputs a tuple
+Arbiter<T, N, Policy> .RoundRobin (default), .Fixed, .Weighted<[uint; N]>
+Mux<T, N> / Demux<T, N> select-driven stream multiplexers
+Gearbox<In, Out> width conversion, narrow→wide and wide→narrow, with
+last support
+Throttle passes at most one beat perN cycles
+Packetizer<T> / Depacketizer<T> add or consume alast flag by count or delimiter
+StreamCounter counts beats and packets, exposes asValid
+std::fifo
+Fifo<T, Depth> synchronous, registered output,count and almost_full<N>
+FifoFwft<T, Depth> first-word fall-through variant
+AsyncFifo<T, Depth> two domains, Gray-coded pointers; the standard CDC data path
+Lifo<T, Depth> stack
+ShiftFifo<T, Depth> flop-based, for depths≤ 8
+PacketFifo<T, Depth> commit/drop whole packets (last-aware)
+std::cdc
+Sync2<T>,Sync3<T>,PulseSync,HandshakeSync<T>,ResetSync,ResetBridge,GrayCounter<W>,
+AsyncFifo (re-export), unsafe_cross. See Chapter 8.
+std::math
+functions clog2, flog2, is_pow2, gray/ungray, count_ones,
+leading_zeros, trailing_zeros, priority_encode,
+onehot/onehot_to_bin, min/max/abs, sat_add/sat_sub,
+widen_signed, round_half_up/round_even
+Multiplier<N, M, Stages> pipelined multiplier; maps to DSP blocks where available
+Divider<N, Stages> restoring divider, quotient and remainder
+Sqrt<N> integer square root, one bit per cycle or pipelined
+Mac<N, M, Acc> multiply-accumulate with saturation option
+Cordic<W, Mode> .Rotate (sin/cos), .Vector (atan, magnitude),.Hyperbolic
+Fixed<I, F> fixed-point type with+ - * /, rounding modes and conversions
+Lfsr<W, Poly> Fibonacci/Galois LFSR, maximal-length presets
+28
+
+=====PAGE=====
+
+std::bus
+bundles Axi4<AW, DW, IDW>, Axi4Lite<AW, DW>,
+Axi4Stream<DW>, Apb<AW, DW>, Ahb<AW, DW>,
+Wishbone<AW, DW>, TileLinkUL<AW, DW>
+RegisterFile<Map, Bus> generated from aregmap (Section 10.3)
+bridges Axi4LiteToApb, Axi4ToAxi4Lite, ApbBridge<N>,
+WishboneToAxi4Lite
+Axi4Crossbar<Masters, Slaves> full crossbar with per-slave arbitration
+Axi4Interconnect address decode from a const map, shared or crossbar
+AxiDma simple MM2S/S2MM with a descriptor register map
+WishboneArbiter<N> multi-master Wishbone
+std::io
+UartTx, UartRx, Uart (both plus FIFOs, runtime baud divisor), SpiMaster, SpiSlave,
+QspiMaster, I2cMaster, I2cSlave, Pwm<W>, Debounce, EdgeDetect, QuadratureDecoder,
+Ws2812, SevenSegment<Digits>, Ps2, OneWire, Sdio (SPI-mode SD card).
+std::mem
+RomTable<T, N>, SinglePortRam, SimpleDualPortRam, TrueDualPortRam, RegFile<T, N, Rd,
+Wr>, Cam<T, N>, ShiftReg<T, N>, DelayLine<T, N> (SRL-friendly), Lut<In, Out> from a
+const fn.
+std::crc
+Crc<W, Poly, Init, RefIn, RefOut, XorOut> with byte-parallel and word-parallel variants;
+presets Crc8, Crc16Ccitt, Crc16Modbus, Crc32, Crc32C; Scrambler<Poly>; Lfsr (re-export).
+std::encoding
+Enc8b10b/Dec8b10b, Manchester, Nrzi, Hamming<K> (SECDED encoder/decoder), Parity,
+PriorityMux, Base64 (test tooling only).
+std::dsp
+Fir<T, Taps> (const coefficients, symmetric folding),IirBiquad<T>, Cic<Stages, R> decima-
+tor/interpolator, Nco<W> (DDS with phase accumulator and sine ROM),MovingAverage<T, N>,
+Accumulator, Fft<N, T> (radix-2 streaming, N≤ 4096), Fixed (re-export).
+std::clk and std::timer
+Divider<N>, Enable, Gate (the one legal clock-gating primitive),Strobe<Hz>, Watchdog<W>;
+Timer<W>, Prescaler, Pulse<Cycles>, Stopwatch, Rtc.
+std::video
+VgaTiming<Mode> (presets 640x480 to 1920x1080),Tmds encoder (DVI/HDMI),Framebuffer<W,
+H, T>, TextMode (font ROM and character buffer),Rgb565/Rgb888 structs and conversions.
+std::debug
+Ila<Probes, Depth> (trigger and capture, read out over UART or AXI-Lite),#[probe] attribute,
+Heartbeat, ErrorLatch<N>.
+29
+
+=====PAGE=====
+
+std::sim (tests only)
+rand<T>(), log, dump, StreamDriver<T>, StreamMonitor<T>, Scoreboard<T>, Axi4LiteDriver
+(write,read),Axi4StreamDriver,UartModel,SpiModel,I2cModel,ClockModel(jitter and skew
+for CDC tests),expect_eventually.
+std::target
+xilinx (Mmcm, Pll, Bufg, Iddr/Oddr, Iobuf, Idelay, Startup), lattice (SbPll, SbIo, EcpPll,
+EcpIo), intel (Pll, AltIobuf, Ddio), generic (behavioural fallbacks so everystd::target
+design also simulates).
+12.3 Composition in practice
+use std::{io::UartRx, fifo::AsyncFifo, stream::Gearbox, crc::Crc32}
+let rx = UartRx<ClkHz: 100_000_000, Baud: 3_000_000>(rxd) @ io
+let words = Gearbox<u8, u32>(in: rx.out) @ io
+let xfifo = AsyncFifo<u32, 512>(push: words.out, src: io.clock, dst: sys.clock)
+let crc = Crc32( in: xfifo.pop) @ sys
+Four lines, four domain-checked components, no glue signals.
+30
+
+=====PAGE=====
+
+13 Toolchain
+One binary,tern, does everything from project creation to formal proof. Its only required output
+is readable SystemVerilog, so Tern never needs vendor support to be usable.
+13.1 Pipeline
+Every command runs the same front half: parse, check (types, widths, drivers, latches, CDC,
+unused) and elaborate (generics,const fn, unrolling) into a typed intermediate representation
+(IR). The IR — modules, signals with domains, assignments, memories, assertions — is the only
+thing the back ends see, so the SystemVerilog emitter, the simulator, formal and the language
+server cannot disagree about a design. It is serialized as JSON with a documented schema and is
+a stable contract from version 1.0.
+13.2 Commands
+Command Does
+tern new <name> project skeleton withtern.toml, src/, tests/
+tern build [–target x] elaborate, check, emitbuild/<target>/*.sv,
+constraint fragments, memory init files, regmap headers
+tern check all compile-time checks without emitting; CDC report;
+unused signals
+tern test [filter] [–waves]
+[–seed n] [–cover]
+run test blocks on the built-in simulator
+tern sim <top> –vcd interactive stimulus REPL or a stimulus script against
+a top
+tern prove <module> [–depth n]
+[–induct]
+formal, via Yosys and SymbiYosys
+tern synth [–target x] drive Yosys / Vivado / Quartus with a generated
+script; utilization and timing summary
+tern fmt canonical formatting, no options
+tern lsp language server: diagnostics, go-to-definition, hover
+with width/domain/driver, instance tree
+tern doc [pkg] static HTML docs from/// comments with port tables
+and generics
+tern add <pkg>[@<ver>] dependency by short name (through the git index) or
+by git URL; writestern.lock
+tern update / tern vendor move to newer compatible tags; copy dependencies into
+vendor/
+tern publish push the version tag and prepare the index entry for a
+pull request
+tern import <file.sv> generate extern module declarations from an
+SystemVerilog file
+31
+
+=====PAGE=====
+
+13.3 Emitted SystemVerilog
+• One .sv per Tern module, names preserved. Generics becomeparameters where SystemVer-
+ilog allows and are monomorphized where it does not (T: type always monomorphizes:
+Fifo_u8_64).
+• Idiomatic output: always_ff/always_comb, logic, packed structs and enums,unique
+case. No tool-specific constructs;–std verilog2005 emits plain Verilog.
+• Line markers (// tern: fifo.tern:42 ) so synthesis and simulator messages map back;
+tern remap translates tool logs to Tern locations.
+• Attributes pass through unchanged; CDC primitives emit vendor attributes and a constraints
+fragment.
+13.4 Importing SystemVerilog
+extern module pll_wrapper("ip/pll_wrapper.sv") {
+in refclk: clock
+in rst: reset<async, high>
+out outclk: clock
+out locked: bool
+}
+extern module legacy_dma("rtl/dma.sv") <AW: uint = 32> {
+in clk: clock
+in rst: reset<sync, low>
+in s_axi: Axi4Lite<AW, 32> // maps to s_axi_awvalid etc. by convention;
+override with #[sv_name]
+...
+}
+An extern module is a typed black box: Tern checks the connections, trusts the inside, and passes
+the file through to the build.tern import writes the declaration from the SystemVerilog port
+list; the engineer adds the types (clock, reset<...>, bundles) that SystemVerilog cannot express.
+Tests that include extern modules run through the Verilator backend (tern test –backend
+verilator), which is also the fast path for large designs.
+13.5 Migration path
+1. tern new, thentern import the existing tree: every SystemVerilog module becomes an
+extern. The build works on day one.
+2. Rewrite leaf modules in Tern one at a time, with atest for each; the emitted SystemVerilog
+replaces the original in the same flow.
+3. Move interfaces to bundles as the modules on both sides are converted.
+4. Delete extern declarations as they empty out.
+13.6 Packages and the git-based registry
+# tern.toml
+[package]
+name = "my-soc"
+version = "0.3.0"
+[dependencies]
+32
+
+=====PAGE=====
+
+axi = "1.2" # short name, resolved
+through the index
+uart-ip = { git = "https://github.com/acme/tern-uart", tag = "v2.0.1" }
+vendor = { path = "../vendor-ip" }
+[features]
+debug_ila = false
+[target.arty]
+device = "xc7a35t"
+top = "Top"
+• A package is a git repository with atern.toml, src/ and tests/; versions are semver tags
+(v1.2.0). There is no upload step and no central server holding code.
+• The index is itself a git repository,tern-lang/registry, mirrored at tern-lang.com/registry:
+one file per package name mapping it to its git URL and published tags.tern add axi
+reads a shallow clone of the index kept in~/.tern/index, picks the newest matching tag
+and writestern.lock with the commit hash.
+• Git work is done by calling the systemgit executable, not a git library. Onlytern add, tern
+update, tern vendor and tern publish need it;build, check and test read dependencies
+from ~/.tern/cache/<name>/<commit> or vendor/ and never touch the network.
+• Publishing is a pull request that adds or updates the package’s index file.tern publish
+creates and pushes the version tag and writes the index entry on a branch of the local index
+clone; opening the pull request is one push (orgh pr create, used whengh is installed).
+• tern build is reproducible fromtern.lock; tern vendor copies every dependency into
+vendor/ for air-gapped flows;tern update moves to newer compatible tags.
+• Namespacing is by package name only; names are first come, first served on the index, with
+the git URL as the identity, so a fork can be used under its own URL without renaming.
+• std is versioned with the compiler and is not a dependency.
+13.7 Implementation in C
+The reference compiler is written in portable C11 that also compiles as C99. It links only against
+the C standard library and the operating system, and builds with one command:
+cc -std=c11 -O2 -o tern src/unity.c # any C11 compiler
+cc -std=c99 -O2 -o tern src/unity.c # the same tree as C99
+make # incremental build (POSIX make)
+build.bat # MSVC, cl /std:c11
+Language rules
+• Subset. C11 without compiler extensions, restricted to what also compiles with-std=c99:
+no _Generic, no<threads.h>, no<stdatomic.h>, no variable-length arrays, no anonymous
+structs or unions.TERN_STATIC_ASSERT expands to_Static_assert under C11 and to the
+negative-array-size idiom under C99.
+• Compilers. GCC, Clang and MSVC (2019 16.8 or newer,/std:c11) on Linux, macOS and
+Windows. TCC builds the tree as a smoke test that nothing compiler-specific crept in.
+• Zero third-party dependencies.Everything usually pulled from a library is in the tree:
+arena allocator, string interning, hash maps, an arbitrary-precision integer for compile-time
+arithmetic, a JSON reader and writer (IR and LSP), a TOML-subset reader, a VCD writer,
+UTF-8 handling. Yosys, SymbiYosys, Verilator andgit are optional external programs,
+called as subprocesses and found onPATH, never linked.
+33
+
+=====PAGE=====
+
+• One platform layer. os.h with os_posix.c and os_win32.c: files and directories,
+modification times, a monotonic clock, process spawn and wait, terminal detection. No
+other file includes an OS header; the rest of the tree uses only<stddef.h>, <stdint.h>,
+<stdarg.h>, <stdio.h>, <stdlib.h>, <string.h> and <limits.h>.
+• Build. A POSIXMakefile, build.bat for MSVC, andsrc/unity.c, which includes every
+translation unit, for the one-command build. No CMake, no configure step. The standard
+library’s .tern sources are embedded into the binary bytools/embed.c, built and run by
+the Makefile; its outputsrc/std_embed.c is committed so the one-command build needs
+nothing else.
+• Memory. Arenas per phase: one per source file for the AST, one for elaboration, one for
+the IR. Nothing on the hot path callsfree; a phase’s arena is released as a whole.
+• Parallelism without threads.tern test runs tests in parallel as worker child processes
+(tern test –worker) through the platform layer, so no threading library is needed and a
+crashing test cannot take down the runner.
+Source layout
+Directory Files Responsibility
+src/base/ arena.c , str.c, map.c,
+vec.h, bignum.c, json.c,
+utf8.c, diag.c
+arenas, interned strings, open-addressing hash
+maps, typed growable arrays (macros),
+arbitrary-precision integers, JSON, diagnostics
+with spans and elaboration paths
+src/os/ os.h , os_posix.c,
+os_win32.c
+the only code that touches the operating system
+src/syntax/ lexer.c , parser.c, ast.h hand-written lexer; recursive-descent parser
+with Pratt expressions; AST as tagged unions in
+the file arena
+src/sema/ resolve.c , types.c,
+domains.c
+name binding across packages, type and width
+checking, clock-domain typing
+src/elab/ consteval.c , elab.c,
+mono.c
+step-bounded const fn interpreter, generics,
+unrolling, monomorphization
+src/ir/ ir.h , ir_build.c,
+ir_json.c
+the typed IR and its JSON form
+src/check/ drivers.c , assign.c, cdc.c,
+unused.c
+multiple and missing drivers, full-assignment
+(no-latch) proof, CDC report, unused signals
+src/emit/ sv.c , constraints.c,
+regmap.c
+SystemVerilog and Verilog-2005,.xdc/.sdc
+fragments, regmap C headers, SVD and
+Markdown
+src/sim/ bitvec.c , netlist.c,
+eval.c, testrun.c, vcd.c
+built-in simulator: IR flattened to a netlist of
+bit-vector operations (values up to 64 bits in one
+uint64_t, wider ones as limb arrays), two-phase
+evaluation (combinational settle, then register
+update), test execution, VCD waveforms
+src/backend/ verilator.c , formal.c,
+synth.c
+generated scripts for the optional external tools
+src/pkg/ toml.c , lock.c, git.c tern.toml /tern.lock, dependency resolution,
+git subprocess calls
+src/lsp/ rpc.c , lsp.c language server over stdio (JSON-RPC)
+src/tools/ fmt.c , doc.c formatter, static HTML documentation
+src/main.c command-line entry
+34
+
+=====PAGE=====
+
+Quality
+• Diagnosticsaretheproduct: everyerrorcarriesaspan, theelaborationpath( Top > rx_fifo:
+Fifo<u8, 64>) and a one-line fix where one exists. The checker never stops at the first
+error.
+• Testing the compiler:tests/run.c, a golden-file runner in the same C, pairs each.tern
+fixture with expected diagnostics or expected SystemVerilog. CI also lints the emitted
+SystemVerilog with Verilator and synthesizes it with Yosys, builds with-Wall -Wextra
+-Wpedantic -Werror on GCC, Clang and MSVC in both C11 and C99 mode, runs under
+AddressSanitizer and UndefinedBehaviorSanitizer, and fuzzes the parser. Fuzzers and
+sanitizers are CI tools, never dependencies oftern.
+• The simulator’s first version is an interpreter; a second phase compiles the IR to C and
+builds it with the host C compiler ($CC, elsecc or cl) for 10–50× speed without changing
+the test API, falling back to the interpreter when no compiler is found.
+• The IR JSON schema is the stable contract for third-party tools (visualizers, linters, alterna-
+tive back ends) from 1.0.
+35
+
+=====PAGE=====
+
+14 Decisions
+The following questions were open in the first draft and are settled; the rest of this specification is
+written against them.
+# Question Decision
+1 X-propagation Tern stays 2-state. Reset gaps are found by the
+uninitialized-register check and per-seed randomization. An
+optional –xprop simulation mode may come later; 4-state
+never enters the language.
+2 Register assignment
+operator
+One =; the enclosing block gives it its meaning; the LSP shows
+the kind on hover.
+3 Signed/unsigned mixing Strict: an error until one side is cast.
+std::math::widen_signed covers the common case.
+4 Latches Never expressible in Tern; imported with extern module.
+5 Implementation language C: portable C11 that also compiles as C99, no third-party
+dependencies. The compiler, simulator, formatter and LSP are
+one C project.
+6 Driving internal signals
+from tests
+No force; a signal a test must drive is exposed with
+#[test_port].
+7 Internal tri-state Forbidden; tri<T> exists only on#[top] ports.
+8 Package registry Git-based: dependencies are git URLs pinned to tags or
+commits; a public index repository maps short names to URLs.
+9 Temporal property
+language
+The subset in the Verification chapter; repetition operators are
+added when real designs ask.
+10 Clock enables and gating Enables are inferred fromif in on blocks; true gating is
+std::clk::Gate, never inferred.
+11 Name and home The language is Tern; the project lives at tern-lang.com (docs,
+std reference, registry index).
+36
+
+=====PAGE=====
+
+A Grammar
+The grammar in EBNF.NL is a newline or a semicolon. Expressions and statements are abbreviated
+where they follow Rust/Go conventions; precedence is given in Table 3.2.
+file = "package" path NL { use } { item } ;
+use = "use" path [ "::" ( "*" | "{" ident { "," ident } "}" ) ] NL ;
+item = [ "pub" ] ( module | extern_mod | bundle | struct | enum | const | fn
+| type_alias | regmap ) | test | property | sequence ;
+module = attrs "module" ident [ generics ] [ where ] "{" { mod_stmt } "}" ;
+extern_mod = attrs "extern" "module" ident "(" string ")" [ generics ] "{" { port } "}" ;
+generics = "<" generic { "," generic } ">" ;
+generic = ident ":" ( "type" | type ) [ "=" expr ] ;
+where = "where" expr { "," expr } ;
+mod_stmt = port | domain | let | var | reg | mem | const | fn | enum | struct
+| type_alias | comb_block | on_block | assign | elab_if | elab_for
+| static_assert | property | sequence ;
+port = ( "in" | "out" ) ident ":" type [ attrs ] NL ;
+domain = "domain" ident "=" "(" ident [ "," ident ] ")" NL ;
+let = "let" pattern [ ":" type ] "=" expr NL ;
+var = "var" ident ":" type [ "=" expr ] NL ;
+reg = "reg" ident ":" type [ "=" expr ] [ "@" ident ] NL ;
+mem = attrs "mem" ident ":" "[" type ";" expr "]" [ "=" expr ] NL ;
+const = "const" ident ":" type "=" expr NL ;
+fn = [ "const" ] "fn" ident [ generics ] "(" [ params ] ")" " →" type block ;
+type_alias = "type" ident [ generics ] "=" type NL ;
+regmap = "regmap" ident "{" { reg_entry } "}" ;
+reg_entry = int ident ":" access ( type | "{" fields_at "}" | type " →" type ) NL ;
+access = "rw" | "ro" | "wo" | "w1c" | "rw1s" ;
+comb_block = "comb" block ;
+on_block = "on" ident block ;
+assign = lvalue "=" expr NL ;
+elab_if = "if" expr block [ "else" ( elab_if | block ) ] ;
+elab_for = "for" pattern "in" expr block ;
+static_assert = "static_assert" "(" expr [ "," string ] ")" NL ;
+block = "{" { stmt } [ expr ] "}" ;
+stmt = let | var | assign | if | match_stmt | for | while | assert | NL ;
+if = "if" expr block [ "else" ( if | block ) ] ;
+match_stmt = "match" expr "{" { pattern { "|" pattern } " ⇒" ( block | stmt ) "," } "}" ;
+for = "for" pattern "in" expr block ; (* const range only *)
+while = "while" expr block ; (* const fn only *)
+assert = ( "assert" | "expect" ) expr [ "," string ] NL ;
+expr = if_expr | match_expr | binary ;
+if_expr = "if" expr block "else" ( if_expr | block ) ;
+match_expr = "match" expr "{" { pattern { "|" pattern } " ⇒" expr "," } "}" ;
+binary = unary { binop unary } ;
+unary = [ "-" | "!" | "~" | "&" | "|" | "^" ] postfix ;
+postfix = primary { "." ident | "[" expr [ ":" expr ] "]" | "(" [ args ] ")" | "as" type }
+;
+primary = literal | path | "(" expr { "," expr } ")" | "[" [ expr { "," expr } ] "]"
+| struct_lit | instance | "sim" instance | block ;
+instance = path [ generic_args ] "(" [ named_args ] ")" [ "@" ident ] ;
+struct_lit = path "{" [ ident [ ":" expr ] { "," ident [ ":" expr ] } [ "," ".." ] ] "}" ;
+37
+
+=====PAGE=====
+
+pattern = "_" | ident | literal | "." ident [ "{" { ident "," } [ ".." ] "}" ]
+| "(" pattern { "," pattern } ")" | range ;
+range = expr ".." expr | expr "..=" expr ;
+type = path [ generic_args ] | "[" type ";" expr "]" | "struct" "{" fields "}"
+| "typeof" "(" expr ")" ;
+bundle = "bundle" ident [ generics ] "{" { [ "flip" ] ident ":" type NL | fn } "}" ;
+struct = "struct" ident [ generics ] "{" fields "}" ;
+enum = attrs "enum" ident "{" { ident [ "{" fields "}" ] "," } "}" ;
+test = "test" string block ;
+property = [ "assert" | "assume" | "cover" ] "property" ident "{" temporal "}" ;
+sequence = "sequence" ident "{" seq "}" ;
+temporal = [ "always" | "never" ] seq { ( "| →" | "| ⇒" ) seq } ;
+seq = expr { "##" ( int | "[" int ":" ( int | "$" ) "]" ) expr } ;
+attrs = { "#[" ident [ "(" args ")" ] "]" } ;
+NL = newline | ";" ;
+38
+
+=====PAGE=====
+
+B SystemVerilog to Tern cheat sheet
+SystemVerilog Tern
+logic [7:0] x; let x: u8 = ... / var x: u8 / reg x: u8
+= 0
+assign y = a & b; let y = a & b
+always_comb begin ... end comb { ... }
+always_ff @(posedge clk) if (rst)
+... else ...
+on clk { ... } with reset values on theregs
+q <= d; q = d inside on
+case (x) ... default: ...
+endcase
+match x { ..., _ => ... } (exhaustive)
+c ? a : b if c { a } else { b }
+{a, b} a ++ b
+x[3 +: 4] x[6:3]
+$clog2(N) clog2(N)
+’0, ’1 all0 , all1
+8’hFF 0xFFu8 or 0xFF in au8 context
+a + b (wraps) a +% b (wraps) ora + b (one bit wider)
+$signed(x) x as sint<N> or widen_signed(x)
+parameter int W = 8 module M<W: uint = 8>
+generate for (...) ...
+endgenerate
+for i in 0..N { ... }
+‘ifdef DEBUG if cfg::debug { ... }
+interface + modport bundle with flip
+m u_m (.clk(clk), .a(a), .y(y)); let m = M(a); ... = m.y
+typedef enum logic [1:0] {...} t; enum T { ... }
+typedef struct packed {...} t; struct T { ... }
+logic [7:0] ram [0:255]; mem ram: [u8; 256]
+assert property (@(posedge clk) a
+|=> b);
+property p { always a |=> b }
+initial begin ... $finish; end test "..." { ... }
+39
