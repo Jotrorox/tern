@@ -1,0 +1,10 @@
+(file
+  (module@2:1 Q
+    (in@3:5 a u8)
+    (out@4:5 y uint<(qpath (typeof a) WIDTH)>)
+    (const@5:5 W : uint = (+ (qpath (typeof a) WIDTH) (qpath [u8; 4] WIDTH)))
+    (const@6:5 M : uint = (qpath (typeof (index (. a b) 2)) MAX))
+    (const@7:5 N : uint = (+ uint<12>::MAX T::MIN))
+    (let@8:5 f = (call (qpath (typeof a) from_bits) 0))
+    (=@9:5 y a))
+  (comments 1))

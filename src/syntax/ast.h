@@ -190,7 +190,9 @@ typedef enum ExprKind {
     EXPR_SIM,             /* u.inner: sim M<..>(..) — inner is the EXPR_CALL */
     EXPR_TYPE,            /* u.type: a type in expression position ([u8; 4], struct {..}) */
     EXPR_TEMPORAL,        /* u.temporal: always e, never e, eventually[..n] e */
-    EXPR_DELAY            /* u.delay: a ##n b, a ##[lo:hi] b, a ##[1:$] b, ##1 b */
+    EXPR_DELAY,           /* u.delay: a ##n b, a ##[lo:hi] b, a ##[1:$] b, ##1 b */
+    EXPR_QPATH            /* u.qpath: a path on a type that is not a name:
+                           * typeof(x)::WIDTH, [u8; 4]::WIDTH (§9.4) */
 } ExprKind;
 
 typedef enum UnaryOp {
@@ -316,6 +318,10 @@ struct Expr {
             int ranged;           /* written with brackets */
             Expr *rhs;
         } delay;
+        struct {
+            Type *type;           /* TYPE_TYPEOF, TYPE_ARRAY, TYPE_STRUCT or TYPE_TUPLE */
+            Path path;            /* the members after `::` (nsegs >= 1) */
+        } qpath;
     } u;
 };
 

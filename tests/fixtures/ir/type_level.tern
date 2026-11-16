@@ -1,0 +1,44 @@
+// Type-level computation (§9.4): T::WIDTH / MAX / MIN on built-in, named,
+// generic and array types, on `typeof(expr)` and in type position.
+enum Mode { Off, Slow, Fast }
+struct Pixel { r: u8, g: u8, b: u8 }
+
+module Sized<T: type> {
+    in d: T
+    out q: T
+    out w: uint<clog2(T::WIDTH + 1)>
+    q = d
+    w = T::WIDTH
+}
+
+#[top]
+module TypeLevel {
+    in a: u8
+    in s: sint<6>
+    in p: Pixel
+    out wa: uint<typeof(a)::WIDTH>
+    out wide: uint<typeof(p)::WIDTH + 1>
+    out k: uint<5>
+    out lim: sint<6>
+    out ok: bool
+
+    const A_W: uint = typeof(a)::WIDTH
+    const U_MAX: uint = uint<12>::MAX
+    const S_MIN: sint = s8::MIN
+    const S_MAX: sint = typeof(s)::MAX
+    const ARR_W: uint = [u8; 4]::WIDTH
+    const MODE_W: uint = Mode::WIDTH
+    const PIX_W: uint = Pixel::WIDTH
+    type Same = typeof(a)
+
+    static_assert(A_W == 8 and U_MAX == 4095 and S_MIN == -128 and S_MAX == 31)
+    static_assert(ARR_W == 32 and MODE_W == 2 and PIX_W == 24)
+
+    let same: Same = a
+    let sz = Sized<Pixel>(d: p)
+    wa = same
+    wide = bits(sz.q) as uint<25>
+    k = sz.w
+    lim = if s > typeof(s)::MAX - 1 { typeof(s)::MIN } else { s }
+    ok = a < typeof(a)::MAX
+}

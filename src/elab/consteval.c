@@ -5687,6 +5687,23 @@ Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
         Ty *t = elab_eval_type(el, e->u.type, env);
         return t->kind == TY_ERROR ? val_error() : val_type(S, t);
     }
+    case EXPR_QPATH: {
+        Ty *t = elab_eval_type(el, e->u.qpath.type, env);
+        Value base;
+        uint32_t i;
+        if (t->kind == TY_ERROR)
+            return val_error();
+        base = val_type(S, t);
+        for (i = 0; i < e->u.qpath.path.nsegs && base.kind != VAL_ERROR; i++) {
+            PathSeg *s = &e->u.qpath.path.segs[i];
+            if (!s->name.name)
+                return val_error();
+            base = el_member(el, base, s->name.name, s->name.span, env);
+            if (s->has_args)
+                base = el_apply_generics(el, base, s, env, i + 1 == e->u.qpath.path.nsegs ? expect : NULL);
+        }
+        return base;
+    }
     case EXPR_TEMPORAL:
     case EXPR_DELAY:
         el_error(el, e->span, "temporal operators are only valid in a property");

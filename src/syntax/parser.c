@@ -1360,6 +1360,14 @@ static Expr *ps_postfix(Parser *p, Expr *e, uint32_t start)
             e = ps_done(p, c, start);
         } else if (k == TK_LBRACE && e->kind == EXPR_PATH && !p->ctx.no_struct) {
             e = ps_struct_lit(p, e, start);
+        } else if (k == TK_COLONCOLON && e->kind != EXPR_PATH && ps_is_name_tok(ps_peek(p, 1)) &&
+                   ast_type_from_expr(p->a, e)) {
+            /* typeof(x)::WIDTH, [u8; 4]::WIDTH: members of a type that is not a path */
+            Expr *q = ps_new_expr(p, EXPR_QPATH, start);
+            q->u.qpath.type = ast_type_from_expr(p->a, e);
+            ps_advance(p);
+            ps_path(p, &q->u.qpath.path, PS_PATH_EXPR);
+            e = ps_done(p, q, start);
         } else {
             break;
         }

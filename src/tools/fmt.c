@@ -1420,6 +1420,11 @@ static void fmt_expr(FmtState *st, const Expr *e)
     case EXPR_TYPE:
         fmt_type(st, e->u.type);
         break;
+    case EXPR_QPATH:
+        fmt_type(st, e->u.qpath.type);
+        fmt_str(st, "::");
+        fmt_path(st, &e->u.qpath.path);
+        break;
     case EXPR_TEMPORAL:
         fmt_str(st, e->u.temporal.op == TEMP_ALWAYS ? "always" : e->u.temporal.op == TEMP_NEVER ? "never"
                                                                                                    : "eventually");

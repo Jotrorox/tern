@@ -1,0 +1,10 @@
+// Members of types that are not paths (§9.4): typeof(e)::NAME, [T; N]::NAME.
+module Q {
+    in a: u8
+    out y: uint<typeof(a)::WIDTH>
+    const W: uint = typeof(a)::WIDTH + [u8; 4]::WIDTH
+    const M: uint = typeof(a.b[2])::MAX
+    const N: uint = uint<12>::MAX + T::MIN
+    let f = typeof(a)::from_bits(0)
+    y = a
+}

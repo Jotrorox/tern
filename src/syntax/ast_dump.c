@@ -393,6 +393,13 @@ static void ad_expr(AdState *d, const Expr *e)
         ad_type(d, e->u.type);
         sb_putc(d->sb, ')');
         break;
+    case EXPR_QPATH:
+        sb_puts(d->sb, "(qpath ");
+        ad_type(d, e->u.qpath.type);
+        sb_putc(d->sb, ' ');
+        ad_path(d, &e->u.qpath.path);
+        sb_putc(d->sb, ')');
+        break;
     case EXPR_TEMPORAL: {
         static const char *const names[] = {"always", "never", "eventually"};
         sb_printf(d->sb, "(%s ", names[e->u.temporal.op]);
