@@ -35,11 +35,13 @@ module Types  // tern: src/demo.tern:190
     always_ff @(posedge clk) begin  // tern: src/demo.tern:224
         if (rst) begin
             obj <= 42'd1;
+            arr <= 32'h4030201;
             last_cmd <= {Cmd_Idle, 48'd0};
         end else begin
             obj.pos.x <= obj.pos.x + 8'd1;  // tern: src/demo.tern:225
             obj.color <= px;  // tern: src/demo.tern:226
             obj.kind <= Kind_C;  // tern: src/demo.tern:227
+            arr[idx] <= val;  // tern: src/demo.tern:228
             if (cmd.tag != Cmd_Idle) begin  // tern: src/demo.tern:231
                 last_cmd <= cmd;
             end else begin
@@ -49,7 +51,6 @@ module Types  // tern: src/demo.tern:190
     end
 
     always_ff @(posedge clk) begin  // tern: src/demo.tern:224
-        arr[idx] <= val;  // tern: src/demo.tern:228
         pixels[1] <= px;  // tern: src/demo.tern:229
         pixels[0].g <= val;  // tern: src/demo.tern:230
     end

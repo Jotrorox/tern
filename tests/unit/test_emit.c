@@ -575,6 +575,7 @@ static void te_types(void)
         ir_bits_set(&init, 0, 1); /* kind = B */
         ir_set_init(D, m, objr, init);
     }
+    ir_set_init(D, m, arr, ir_bits_u64(TA, 32, 0x04030201));
     {
         IrBits idle = ir_bits_zero(TA, 50);
         ir_bits_set(&idle, 49, 1); /* tag 2 = Idle */
@@ -1027,6 +1028,7 @@ static void te_cdc(void)
     ir_set_init(D, fifo, rgray, ir_bits_u64(TA, 3, 0));
     ir_set_init(D, fifo, rq1, ir_bits_u64(TA, 3, 0));
     ir_set_init(D, fifo, rq2, ir_bits_u64(TA, 3, 0));
+    ir_set_init(D, fifo, odata, ir_bits_u64(TA, 8, 0));
     ir_add_process(D, fifo, IRP_CLOCKED, 0,
                    BL(ASG(fifo, wq1, S(fifo, rgray), 538), ASG(fifo, wq2, S(fifo, wq1), 539),
                       IF(S(fifo, wen),
@@ -1072,6 +1074,7 @@ static void te_cdc(void)
     top->sigs[flag].domain = 0;
     top->sigs[cfgp].domain = 1;
     ir_set_init(D, top, flag, ir_bits_u64(TA, 1, 0));
+    ir_set_init(D, top, cfgp, ir_bits_u64(TA, 4, 9)); /* power-on value (pix has no reset) */
     ir_add_process(D, top, IRP_CLOCKED, 0, BL(ASG(top, flag, UN(IROP_LNOT, S(top, flag)), 576), NULL), SP(575));
     CONT(top, w_cfg, S(top, cfg), 577);
     CONT(top, rd_q, S(top, srst), 578);
@@ -1250,15 +1253,15 @@ static const TeDesign te_designs[] = {
     {"uart_tx", te_uart, 1, 0, 0, 0, NULL},
     {"resets", te_resets, 1, 0, 0, 0, "soft_rst_n"},
     {"case_mux", te_case, 1, 0, 0, 0, NULL},
-    {"types", te_types, 0, 0, 0, 0, NULL},
+    {"types", te_types, 1, 0, 0, 0, NULL},
     {"memory", te_mem, 1, 0, SV_MEMINIT_MIF | SV_MEMINIT_COE, 0, NULL},
     {"hierarchy", te_hier, 0, 0, 0, EMIT_CONS_XDC | EMIT_CONS_SDC, NULL},
     {"arith", te_arith, 1, 0, 0, 0, NULL},
     {"resize", te_resize, 1, 0, 0, 0, NULL},
     {"assertions", te_asserts, 1, 1, 0, 0, NULL},
-    {"cdc", te_cdc, 0, 0, 0, EMIT_CONS_XDC | EMIT_CONS_SDC, NULL},
-    {"regmap", te_regmap, 0, 0, 0, 0, NULL},
-    {"names", te_names, 0, 0, 0, 0, NULL},
+    {"cdc", te_cdc, 1, 0, 0, EMIT_CONS_XDC | EMIT_CONS_SDC, NULL},
+    {"regmap", te_regmap, 1, 0, 0, 0, NULL},
+    {"names", te_names, 1, 0, 0, 0, NULL},
 };
 
 static char *te_path2(const char *a, const char *b) { return os_path_join(a, b); }

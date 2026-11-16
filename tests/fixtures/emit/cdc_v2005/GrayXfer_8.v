@@ -52,18 +52,14 @@ module GrayXfer_8 (  // tern: src/demo.tern:520
             rgray <= 3'd0;
             rq1_wgray <= 3'd0;
             rq2_wgray <= 3'd0;
+            odata <= 8'd0;
         end else begin
             rq1_wgray <= wgray;  // tern: src/demo.tern:544
             rq2_wgray <= rq1_wgray;  // tern: src/demo.tern:545
             if (rq2_wgray != rgray) begin  // tern: src/demo.tern:546
+                odata <= mem[rgray[1:0]];
                 rgray <= rgray ^ 3'd1;  // tern: src/demo.tern:547
             end
-        end
-    end
-
-    always @(posedge rclk) begin  // tern: src/demo.tern:543
-        if (rq2_wgray != rgray) begin  // tern: src/demo.tern:546
-            odata <= mem[rgray[1:0]];
         end
     end
 
