@@ -325,6 +325,7 @@ build/test_fmt: tests/unit/test_fmt.c $(TEST_DEPS) $(SYNTAX_SRCS) $(TOOLS_SRCS) 
 test: $(BIN) tests/run $(UNIT_TESTS)
 	for t in $(UNIT_TESTS); do ./$$t || exit 1; done
 	./$(BIN) parse std
+	./$(BIN) fmt --check std
 	./tests/run --tern ./$(BIN)
 
 # ----------------------------------------------------------------- fuzz ---

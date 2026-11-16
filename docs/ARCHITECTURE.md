@@ -299,7 +299,8 @@ crashed. A first line starting with `// skip` marks a fixture as skipped.
 Usage: `tests/run [-v] [-j N] [--tern path] [--no-std] [<filter>...]`.
 `UPDATE=1 make test` rewrites mismatching expectations.
 
-`make test` also runs `tern test --diag-format=short std` from the repository
+`make test` also checks that std is canonically formatted
+(`tern fmt --check std`, docs/style.md) and runs `tern test --diag-format=short std` from the repository
 root and requires exit status 0; while `tern test` is still the stub ("not
 implemented yet", exit 2) that case is reported as skipped.
 
