@@ -1354,6 +1354,16 @@ int pkg_project_open(const char *start_dir, PkgProject *p)
         return 0;
     mp = os_path_join(root, PKG_MANIFEST_FILE);
     free(root);
+    {
+        /* diagnostics name tern.toml relative to the current directory */
+        char *cwd = os_getcwd();
+        if (cwd) {
+            char *shown = pkg_path_rel(mp, cwd);
+            free(mp);
+            mp = shown;
+            free(cwd);
+        }
+    }
     if (pkg_manifest_load(mp, &p->manifest) != 0) {
         free(mp);
         pkg_manifest_free(&p->manifest);

@@ -25,8 +25,15 @@ static int cpkg_open(CpkgProject *p)
     }
     p->manifest_path = os_path_join(p->root, PKG_MANIFEST_FILE);
     p->lock_path = os_path_join(p->root, PKG_LOCK_FILE);
-    if (pkg_manifest_load(p->manifest_path, &p->m) != 0)
-        return -1;
+    {
+        /* diagnostics name the file relative to the current directory */
+        char *cwd = os_getcwd(), *shown = cwd ? pkg_path_rel(p->manifest_path, cwd) : xstrdup(p->manifest_path);
+        int r = pkg_manifest_load(shown, &p->m);
+        free(shown);
+        free(cwd);
+        if (r != 0)
+            return -1;
+    }
     return 0;
 }
 
