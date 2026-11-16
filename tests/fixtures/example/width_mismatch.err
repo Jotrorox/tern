@@ -1,0 +1,1 @@
+width_mismatch.tern:5:9: error: width mismatch: `a + 1` is uint<9>, `y` is uint<8>
