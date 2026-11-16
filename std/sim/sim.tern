@@ -338,7 +338,7 @@ where HalfPeriod >= 1, Jitter <= 15, Seed != 0, Seed < 65536
     reg lfsr: u16 = Seed
 
     let raw: uint<4> = lfsr[3:0]
-    let jitter_now: uint<CW> = if raw <= Jitter { raw } else { 0 }
+    let jitter_now: uint<CW> = if raw <= Jitter { raw as uint<CW> } else { 0 }
     let flip_now = cnt == 0
 
     on clk {

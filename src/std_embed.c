@@ -15257,7 +15257,7 @@ static const char *const tern_std_chunks_43[] = {
     "    reg lfsr: u16 = Seed\n"
     "\n"
     "    let raw: uint<4> = lfsr[3:0]\n"
-    "    let jitter_now: uint<CW> = if raw <= Jitter { raw } else { 0 }\n"
+    "    let jitter_now: uint<CW> = if raw <= Jitter { raw as uint<CW> } else { 0 }\n"
     "    let flip_now = cnt == 0\n"
     "\n"
     "    on clk {\n"
@@ -15372,8 +15372,8 @@ static const char *const tern_std_chunks_43[] = {
     "    expect dut.count == 3 and dut.violations == 0\n"
     "    expect dut.beats[0] == 7 and dut.beats[1] == 8 and dut.beats[2] == 9\n"
     "}\n"
-    "\n"
-    "test \"StreamMonitor counts protocol violations\" {\n",
+    "\n",
+    "test \"StreamMonitor counts protocol violations\" {\n"
     "    let dut = sim StreamMonitor<u8, 4, Strict: false>()\n"
     "    dut.reset()\n"
     "    dut.valid = true; dut.ready = false; dut.data = 1\n"
@@ -16694,6 +16694,10 @@ static const char *const tern_std_chunks_46[] = {
     "// holds valid/data until the beat fires, and no `valid` output depends\n"
     "// combinationally on a `ready` input of the same port.\n"
     "\n"
+    "// The handshake bundles live in std::prelude; they are re-exported here so\n"
+    "// that `use std::stream::Stream` (spec \302\2472) names the same type.\n"
+    "pub use std::prelude::{Valid, Stream}\n"
+    "\n"
     "// ---------------------------------------------------------------------------\n"
     "// Payload helper types\n"
     "// ---------------------------------------------------------------------------\n"
@@ -16798,13 +16802,13 @@ static const char *const tern_std_chunks_46[] = {
     "    expect !dut.out.valid\n"
     "    dut.step()\n"
     "    dut.in.valid = false\n"
-    "    dut.settle()\n"
+    "    dut.settle()\n",
     "    expect dut.out.valid and dut.out.data == 42\n"
     "    dut.step()\n"
     "    expect !dut.out.valid\n"
     "}\n"
     "\n"
-    "test \"skid: full throughput when the consumer is always ready\" {\n",
+    "test \"skid: full throughput when the consumer is always ready\" {\n"
     "    let dut = sim Skid<u8>()\n"
     "    dut.reset()\n"
     "    dut.out.ready = true\n"
@@ -16944,12 +16948,12 @@ static const char *const tern_std_chunks_46[] = {
     "test \"pipe: random back-pressure keeps order\" {\n"
     "    let dut = sim Pipe<u8, 4>()\n"
     "    dut.reset()\n"
-    "    var next_in: u8 = 0\n"
+    "    var next_in: u8 = 0\n",
     "    var next_out: u8 = 0\n"
     "    for _ in 0..500 {\n"
     "        dut.in = Stream { valid: rand<bool>(), data: next_in }\n"
     "        dut.out.ready = rand<bool>()\n"
-    "        dut.settle()\n",
+    "        dut.settle()\n"
     "        if dut.in.valid and dut.in.ready { next_in = next_in +% 1 }\n"
     "        if dut.out.valid and dut.out.ready {\n"
     "            expect dut.out.data == next_out\n"
@@ -17725,6 +17729,7 @@ static const char *const tern_std_chunks_48[] = {
     "/// Bidirectional pad (ALT_IOBUF): drives `o` while `oe` is high and always\n"
     "/// reads the pad on `i`. Instantiate it in the #[top] module with the top's\n"
     "/// `tri<bool>` port.\n"
+    "#[pad]\n"
     "pub module AltIobuf {\n"
     "    /// Value to drive.\n"
     "    in o: bool\n"
@@ -17956,6 +17961,7 @@ static const char *const tern_std_chunks_49[] = {
     "/// input): drives `o` while `oe` is high and always reads the pad on `i`.\n"
     "/// `PullUp` enables the internal pull-up. Instantiate it in the #[top] module\n"
     "/// with the top's `tri<bool>` port.\n"
+    "#[pad]\n"
     "pub module SbIo<PullUp: bool = false> {\n"
     "    /// Value to drive.\n"
     "    in o: bool\n"
@@ -18011,8 +18017,8 @@ static const char *const tern_std_chunks_49[] = {
     "        CLKOP_CPHASE: ClkopDiv - 1,\n"
     "        CLKOP_FPHASE: 0\n"
     "    >(\n"
-    "        CLKI: clk_in, RST: rst, STDBY: false, PHASESEL0: false, PHASESEL1: false,\n"
-    "        PHASEDIR: false, PHASESTEP: false, PHASELOADREG: false, PLLWAKESYNC: false,\n",
+    "        CLKI: clk_in, RST: rst, STDBY: false, PHASESEL0: false, PHASESEL1: false,\n",
+    "        PHASEDIR: false, PHASESTEP: false, PHASELOADREG: false, PLLWAKESYNC: false,\n"
     "        ENCLKOP: true\n"
     "    )\n"
     "    pll.CLKFB = pll.CLKOP\n"
@@ -18023,6 +18029,7 @@ static const char *const tern_std_chunks_49[] = {
     "/// ECP5 bidirectional pad (BB): drives `o` while `oe` is high and always\n"
     "/// reads the pad on `i`. Instantiate it in the #[top] module with the top's\n"
     "/// `tri<bool>` port.\n"
+    "#[pad]\n"
     "pub module EcpIo {\n"
     "    /// Value to drive.\n"
     "    in o: bool\n"
@@ -18535,6 +18542,7 @@ static const char *const tern_std_chunks_51[] = {
     "/// Bidirectional pad: drives `o` onto `pad` while `oe` is high and always\n"
     "/// reads the pad back on `i`. Instantiate it in the #[top] module with the\n"
     "/// top's `tri<bool>` port.\n"
+    "#[pad]\n"
     "pub module Iobuf {\n"
     "    /// Value to drive.\n"
     "    in o: bool\n"
@@ -20093,15 +20101,15 @@ const StdEmbedFile tern_std_files[] = {
     {"std/prelude/prelude.tern", tern_std_chunks_40, 2, 5194},
     {"std/sim/axi.tern", tern_std_chunks_41, 3, 8828},
     {"std/sim/models.tern", tern_std_chunks_42, 6, 20033},
-    {"std/sim/sim.tern", tern_std_chunks_43, 5, 19676},
+    {"std/sim/sim.tern", tern_std_chunks_43, 5, 19688},
     {"std/stream/packet.tern", tern_std_chunks_44, 5, 19228},
     {"std/stream/route.tern", tern_std_chunks_45, 4, 14932},
-    {"std/stream/stream.tern", tern_std_chunks_46, 3, 10577},
+    {"std/stream/stream.tern", tern_std_chunks_46, 3, 10758},
     {"std/target/generic/generic.tern", tern_std_chunks_47, 4, 15183},
-    {"std/target/intel/intel.tern", tern_std_chunks_48, 2, 6870},
-    {"std/target/lattice/lattice.tern", tern_std_chunks_49, 3, 9200},
+    {"std/target/intel/intel.tern", tern_std_chunks_48, 2, 6877},
+    {"std/target/lattice/lattice.tern", tern_std_chunks_49, 3, 9214},
     {"std/target/target.tern", tern_std_chunks_50, 1, 2768},
-    {"std/target/xilinx/xilinx.tern", tern_std_chunks_51, 5, 16259},
+    {"std/target/xilinx/xilinx.tern", tern_std_chunks_51, 5, 16266},
     {"std/timer/timer.tern", tern_std_chunks_52, 4, 14064},
     {"std/video/color.tern", tern_std_chunks_53, 1, 3364},
     {"std/video/framebuffer.tern", tern_std_chunks_54, 1, 3832},

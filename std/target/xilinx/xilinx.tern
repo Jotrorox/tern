@@ -415,6 +415,7 @@ pub module Oddr {
 /// Bidirectional pad: drives `o` onto `pad` while `oe` is high and always
 /// reads the pad back on `i`. Instantiate it in the #[top] module with the
 /// top's `tri<bool>` port.
+#[pad]
 pub module Iobuf {
     /// Value to drive.
     in o: bool

@@ -41,6 +41,10 @@ int cmd_remap(int argc, char **argv);
  * AST dump used by the golden tests (tests/fixtures/.../<name>.parse). */
 int cmd_parse(int argc, char **argv);
 
+/* Internal: `tern ir [--json] [--top M] <file>` prints the elaborated design
+ * (ir_dump / JSON) used by the golden tests (tests/fixtures/.../<name>.ir). */
+int cmd_ir(int argc, char **argv);
+
 /* Shared by `tern parse` and the interim `tern check` (cmd_parse.c): parses
  * the files/directories in argv[1..], reports syntax errors and, with
  * `--dump` (when allow_dump), prints each AST. Returns an exit status. */

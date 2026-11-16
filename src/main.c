@@ -25,8 +25,13 @@ static const MainCmd main_cmds[] = {
      "elaborate, check and emit build/<target>/*.sv, constraints, regmaps",
      "  --target <t>        build target from tern.toml ([target.<t>])\n"
      "  --std <s>           output dialect: sv (default) or verilog2005\n"},
-    {"check", cmd_check, "Project", "[<file.tern>...]",
-     "run every compile-time check without emitting; CDC report, unused signals", NULL},
+    {"check", cmd_check, "Project", "[<file.tern>...] [--top <m>] [--unused] [--strict]",
+     "run every compile-time check without emitting; CDC report, unused signals",
+     "  --top <m>           elaborate only module m (default: every #[top], else every\n"
+     "                      module without required generics, and the modules tests simulate)\n"
+     "  --unused            report unused signals\n"
+     "  --const-eval-limit <n>  compile-time evaluation step limit (default 10000000)\n"
+     "  --features <list>   enable/disable features: a,b,-c\n"},
     {"fmt", cmd_fmt, "Project", "[<file.tern>...]",
      "format sources canonically (no options)", NULL},
     {"doc", cmd_doc, "Project", "[<pkg>]",
@@ -89,6 +94,8 @@ static const MainCmd main_cmds[] = {
      "language server on stdio: diagnostics, go-to-definition, hover", NULL},
     {"parse", cmd_parse, NULL, "--dump <file.tern>",
      "(internal) print the AST of a file", NULL},
+    {"ir", cmd_ir, NULL, "[--json] [--top <m>] <file.tern>",
+     "(internal) print the elaborated IR of a design", NULL},
 };
 
 static const char *const main_groups[] = {"Project", "Verification", "Packages", "Interop"};
