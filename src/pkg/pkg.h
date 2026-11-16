@@ -60,7 +60,7 @@ struct TomlValue {
     const char *str;        /* TOML_STRING: NUL-terminated (may contain NULs: see str_len) */
     size_t str_len;
     int64_t num;            /* TOML_INT */
-    int boolean;            /* TOML_BOOL */
+    int bval;               /* TOML_BOOL */
     TomlValue *first, *last; /* children: table members / array items, in order */
     TomlValue *next;        /* next sibling */
     size_t count;           /* number of children */

@@ -150,7 +150,7 @@ static void test_toml_ok(void)
     TP_CHECK(toml_get(root, "o")->num == 15);
     TP_CHECK(toml_get(root, "b")->num == 5);
     TP_CHECK(toml_get(root, "big")->num == 1000000);
-    TP_CHECK(toml_get(root, "yes")->boolean == 1 && toml_get(root, "no")->boolean == 0);
+    TP_CHECK(toml_get(root, "yes")->bval == 1 && toml_get(root, "no")->bval == 0);
     v = toml_get(root, "arr");
     TP_CHECK(v && v->kind == TOML_ARRAY && v->count == 3 && v->last->num == 3);
     v = toml_get(root, "nested");

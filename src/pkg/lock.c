@@ -65,17 +65,21 @@ int pkg_version_parse(const char *s, PkgVersion *v, int allow_v)
         return -1;
     if (allow_v && (s[0] == 'v' || s[0] == 'V'))
         s++;
-    if (!(n = lock_num(s, &v->major)) || s[n] != '.')
+    n = lock_num(s, &v->major);
+    if (!n || s[n] != '.')
         return -1;
     s += n + 1;
-    if (!(n = lock_num(s, &v->minor)) || s[n] != '.')
+    n = lock_num(s, &v->minor);
+    if (!n || s[n] != '.')
         return -1;
     s += n + 1;
-    if (!(n = lock_num(s, &v->patch)))
+    n = lock_num(s, &v->patch);
+    if (!n)
         return -1;
     s += n;
     if (*s == '-') {
-        if (!(n = lock_pre(s + 1, v->pre, sizeof v->pre)))
+        n = lock_pre(s + 1, v->pre, sizeof v->pre);
+        if (!n)
             return -1;
         s += n + 1;
     }
@@ -399,7 +403,7 @@ int pkg_lock_read(const char *path, PkgLock *lock)
     }
     v = toml_get(doc, "vendored");
     if (v)
-        lock->vendored = v->kind == TOML_BOOL && v->boolean;
+        lock->vendored = v->kind == TOML_BOOL && v->bval;
     v = toml_get(doc, "package");
     if (v && v->kind != TOML_ARRAY) {
         diag_error(v->span, "`package` in tern.lock must be written as [[package]] tables");

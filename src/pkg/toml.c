@@ -653,7 +653,7 @@ static TomlValue *toml_parse_value(TomlParser *P, int depth)
     if (toml_word_at(P, "true") || toml_word_at(P, "false")) {
         int t = c == 't';
         TomlValue *v = toml_new(P, TOML_BOOL, P->p, t ? 4 : 5);
-        v->boolean = t;
+        v->bval = t;
         P->p += t ? 4 : 5;
         return v;
     }

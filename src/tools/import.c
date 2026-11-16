@@ -299,7 +299,7 @@ typedef struct ImpDecl {       /* the type part of a port declaration */
     int ndims;
     int user_type;             /* an identifier used as a type */
     size_t user_tok, user_end; /* its tokens [user_tok, user_end) */
-    int interface;             /* interface port `iface[.modport] name` */
+    int is_iface;              /* interface port `iface[.modport] name` */
     int unsupported;           /* real, string, chandle, event, ... */
     const char *unsupported_kw;
 } ImpDecl;
@@ -473,7 +473,7 @@ static size_t imp_parse_decl(Imp *I, size_t i, size_t end, ImpDecl *d)
             i = m;
             continue;
         }
-        if (imp_is_id(I, i) && !d->kw && !d->user_type && !d->interface && i + 1 < end &&
+        if (imp_is_id(I, i) && !d->kw && !d->user_type && !d->is_iface && i + 1 < end &&
             (imp_is_id(I, i + 1) || imp_eq(I, i + 1, ".") || imp_eq(I, i + 1, "::") || imp_eq(I, i + 1, "["))) {
             /* `my_t x`, `pkg::my_t x`, `axi_if.master m`, `my_t [3:0] x` */
             size_t j = i;
@@ -486,7 +486,7 @@ static size_t imp_parse_decl(Imp *I, size_t i, size_t end, ImpDecl *d)
             if (imp_eq(I, i + 1, "::") && imp_is_id(I, i + 2))
                 j = i + 2;
             if (imp_eq(I, j + 1, ".") && imp_is_id(I, j + 2) && !d->has_dir) {
-                d->interface = 1;
+                d->is_iface = 1;
                 d->has_type = 1;
                 d->user_tok = i;
                 d->user_end = j + 3;
@@ -497,7 +497,7 @@ static size_t imp_parse_decl(Imp *I, size_t i, size_t end, ImpDecl *d)
                 break;
             if (!d->has_dir && !d->has_type && imp_is_id(I, j + 1) && j == i) {
                 /* `iface name` without direction: an interface port */
-                d->interface = 1;
+                d->is_iface = 1;
             } else {
                 d->user_type = 1;
             }
@@ -560,7 +560,7 @@ static void imp_ansi_ports(Imp *I, ImpModule *m, size_t a, size_t b)
         } else if (!d.has_dir) {
             d.has_dir = 1;
             d.dir = have_prev ? prev.dir : 2;
-            if (!have_prev && !d.interface)
+            if (!have_prev && !d.is_iface)
                 diag_warning(imp_span(I, r.a), "port without a direction: SystemVerilog makes it `inout`");
         }
         p.d = d;
@@ -1221,7 +1221,7 @@ static int imp_type(ImpCtx *C, const ImpDecl *d, StrBuf *out, int *is_bool, cons
     int k;
     *is_bool = 0;
     *why = NULL;
-    if (d->interface) {
+    if (d->is_iface) {
         *why = "interface port: model it as a bundle and connect it with #[sv_name]";
         sb_append(out, I->L.s + I->t[d->user_tok].off, I->t[d->user_end - 1].off + I->t[d->user_end - 1].len - I->t[d->user_tok].off);
         return 0;

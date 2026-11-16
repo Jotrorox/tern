@@ -397,7 +397,7 @@ int pkg_index_read(const char *index_dir, const char *name, PkgIndexEntry *e)
             av.tag = arena_printf(&e->arena, "v%s", ver->str);
         if (commit && commit->kind == TOML_STRING && commit->str[0])
             av.commit = arena_strdup(&e->arena, commit->str);
-        av.yanked = yanked && yanked->kind == TOML_BOOL && yanked->boolean;
+        av.yanked = yanked && yanked->kind == TOML_BOOL && yanked->bval;
         vec_push(e->versions.items, av);
     }
     e->versions.git = e->git;

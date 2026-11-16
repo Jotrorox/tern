@@ -413,8 +413,8 @@ int pkg_manifest_parse(uint32_t src_id, const char *root, TernManifest *m)
                 continue;
             }
             ft->name = e->key;
-            ft->default_on = e->boolean;
-            ft->enabled = e->boolean;
+            ft->default_on = e->bval;
+            ft->enabled = e->bval;
             ft->span = e->key_span;
             m->nfeatures++;
         }
