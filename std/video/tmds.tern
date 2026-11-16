@@ -5,10 +5,13 @@ use std::math::widen_signed
 /// The four TMDS control symbols of DVI 1.0, indexed by `c = C1 ++ C0`
 /// (bit 0 of each symbol is transmitted first).
 pub const TMDS_CTRL_00: bit<10> = 0b1101010100
+
 /// Control symbol for C1 = 0, C0 = 1.
 pub const TMDS_CTRL_01: bit<10> = 0b0010101011
+
 /// Control symbol for C1 = 1, C0 = 0.
 pub const TMDS_CTRL_10: bit<10> = 0b0101010100
+
 /// Control symbol for C1 = 1, C0 = 1.
 pub const TMDS_CTRL_11: bit<10> = 0b1010101011
 

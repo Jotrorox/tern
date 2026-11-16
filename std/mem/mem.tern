@@ -112,7 +112,16 @@ test "single port ram: write-first returns the new data" {
 
 test "single port ram: random writes read back" {
     let dut = sim SinglePortRam<u16, 8>()
-    let vals = [rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>()]
+    let vals = [
+        rand<u16>(),
+        rand<u16>(),
+        rand<u16>(),
+        rand<u16>(),
+        rand<u16>(),
+        rand<u16>(),
+        rand<u16>(),
+        rand<u16>(),
+    ]
     dut.we = true
     for a in 0..8 {
         dut.addr = a
@@ -241,7 +250,10 @@ where Depth >= 2
 
     /// Writes through one port are visible through the other.
     property a_to_b {
-        always (we_a and !we_b) ##1 (!we_a and !we_b and addr_b == past(addr_a)) |=> bits(rdata_b) == bits(past(wdata_a, 2))
+        always (we_a and !we_b) ##1 (!we_a and !we_b and addr_b == past(addr_a)) |=> bits(rdata_b) == bits(past(
+            wdata_a,
+            2,
+        ))
     }
 }
 

@@ -11,7 +11,7 @@ pub struct RegReq<AW: uint, DW: uint> {
     /// Write data (don't care for reads).
     wdata: uint<DW>,
     /// Write byte strobes (zero for reads).
-    strb: bit<DW/8>,
+    strb: bit<DW / 8>,
     /// Write access (false: read).
     write: bool,
 }
@@ -56,7 +56,7 @@ where DW == 32 or DW == 64
     reg aw_addr: uint<AW> = 0
     reg w_full: bool = false
     reg w_data: uint<DW> = 0
-    reg w_strb: bit<DW/8> = all0
+    reg w_strb: bit<DW / 8> = all0
     reg ar_full: bool = false
     reg ar_addr: uint<AW> = 0
 
@@ -271,7 +271,7 @@ where DW == 32 or DW == 64
     reg ar_pend: bool = false
     reg addr: uint<AW> = 0
     reg wdata: uint<DW> = 0
-    reg strb: bit<DW/8> = all0
+    reg strb: bit<DW / 8> = all0
     reg rsp_valid: bool = false
     reg rsp_data: RegRsp<DW> = all0
 
@@ -328,7 +328,10 @@ test "Axi4LiteMaster issues a write and reports its response" {
     dut.m.b.valid = false
     dut.m.ar.ready = true
     dut.m.r.valid = false
-    dut.req = Stream { valid: true, data: RegReq { addr: 0x20, wdata: 0xAB, strb: 0b0001, write: true } }
+    dut.req = Stream {
+        valid: true,
+        data: RegReq { addr: 0x20, wdata: 0xAB, strb: 0b0001, write: true },
+    }
     expect dut.req.ready
     dut.step()
     dut.req.valid = false

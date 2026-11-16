@@ -84,7 +84,9 @@ pub const fn fx_mul(a: Fixed<IA, FA>, b: Fixed<IB, FB>) -> Fixed<IA + IB, FA + F
 /// an integer part that does not fit in `I2` bits wraps, or with `Sat`
 /// clamps to the most positive / most negative value of the target.
 /// Example: `fx_convert<4, 4, .HalfEven, true>(fx_mul(a, b))`.
-pub const fn fx_convert<I2: uint, F2: uint, R: Round = .Truncate, Sat: bool = false>(a: Fixed<I, F>) -> Fixed<I2, F2> {
+pub const fn fx_convert<I2: uint, F2: uint, R: Round = .Truncate, Sat: bool = false>(
+    a: Fixed<I, F>,
+) -> Fixed<I2, F2> {
     static_assert(I + F2 >= 1 and I2 + F2 >= 1, "fx_convert: empty format")
 
     // 1. align to F2 fraction bits in a width that cannot overflow

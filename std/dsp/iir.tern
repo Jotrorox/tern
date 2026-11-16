@@ -22,7 +22,16 @@ pub const fn fits_signed(v: sint, w: uint) -> bool {
 /// * One sample per cycle; `LATENCY` = 1. The state advances only on valid
 ///   input cycles.
 /// * Cascade sections for higher orders.
-pub module IirBiquad<T: type, CW: uint, Frac: uint, B0: sint, B1: sint, B2: sint, A1: sint, A2: sint>
+pub module IirBiquad<
+    T: type,
+    CW: uint,
+    Frac: uint,
+    B0: sint,
+    B1: sint,
+    B2: sint,
+    A1: sint,
+    A2: sint,
+>
 where Frac >= 1, Frac < CW
 {
     /// Cycles from a valid input sample to its output sample.
@@ -62,7 +71,13 @@ where Frac >= 1, Frac < CW
     let x0 = bits(in.data) as S
     let acc = (x0 * C_B0 + x1 * C_B1 + x2 * C_B2 - y1 * C_A1 - y2 * C_A2 + (1 << (Frac - 1))) as sint<AW>
     let shifted = acc >>> Frac
-    let y0: S = if shifted > S::MAX { S::MAX } else if shifted < S::MIN { S::MIN } else { shifted as S }
+    let y0: S = if shifted > S::MAX {
+        S::MAX
+    } else if shifted < S::MIN {
+        S::MIN
+    } else {
+        shifted as S
+    }
 
     on clk {
         valid_out = in.valid

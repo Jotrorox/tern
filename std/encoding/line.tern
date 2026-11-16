@@ -176,7 +176,10 @@ test "manchester: encoder to decoder loopback" {
     enc.reset()
     dec.reset()
     // preamble 1010 for alignment, then the payload
-    let tx = [true, false, true, false, true, true, false, false, true, false, true, true, false, false, false, true, false]
+    let tx = [
+        true, false, true, false, true, true, false, false, true, false, true, true, false, false,
+        false, true, false,
+    ]
     var n: uint = 0
     var rx: uint = 0
     var last4: uint = 0

@@ -86,7 +86,9 @@ pub module Ws2812<ClkHz: uint, ResetUs: uint = 280> {
     /// An accepted pixel starts with a high pulse in the next cycle.
     property accept_starts_bit { always in.fire() |=> state == .Bit and dout }
     /// No pixel is accepted mid-pixel.
-    property accept_only_at_pixel_boundary { always (state == .Bit and !(bit_end and last_bit)) |-> !in.ready }
+    property accept_only_at_pixel_boundary {
+        always (state == .Bit and !(bit_end and last_bit)) |-> !in.ready
+    }
 }
 
 test "Ws2812 encodes 0 and 1 bits with the datasheet high times" {

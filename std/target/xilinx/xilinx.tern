@@ -22,7 +22,7 @@ pub extern module MMCME2_BASE("") <
     CLKOUT3_DIVIDE: uint = 1,
     CLKOUT4_DIVIDE: uint = 1,
     CLKOUT5_DIVIDE: uint = 1,
-    CLKOUT6_DIVIDE: uint = 1
+    CLKOUT6_DIVIDE: uint = 1,
 > {
     /// Reference clock input.
     in CLKIN1: clock
@@ -62,7 +62,7 @@ pub extern module PLLE2_BASE("") <
     CLKOUT2_DIVIDE: uint = 1,
     CLKOUT3_DIVIDE: uint = 1,
     CLKOUT4_DIVIDE: uint = 1,
-    CLKOUT5_DIVIDE: uint = 1
+    CLKOUT5_DIVIDE: uint = 1,
 > {
     /// Reference clock input.
     in CLKIN1: clock
@@ -153,7 +153,7 @@ pub extern module IOBUF("") {
 /// defaults "FIXED" and "IDATAIN"). Needs an IDELAYCTRL in the same bank.
 pub extern module IDELAYE2("") <
     IDELAY_VALUE: uint = 0,
-    REFCLK_FREQUENCY: uint = 200
+    REFCLK_FREQUENCY: uint = 200,
 > {
     /// Data from the input buffer.
     in IDATAIN: bool
@@ -235,7 +235,15 @@ pub extern module STARTUPE2("") {
 ///   aligned to `clk_in`.
 /// * `locked` is asynchronous; synchronise it into each output domain (e.g.
 ///   `std::cdc::ResetSync`) before using it as a reset.
-pub module Mmcm<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+pub module Mmcm<
+    ClkInHz: uint,
+    Mult: uint,
+    Div: uint = 1,
+    Out0Div: uint = 1,
+    Out1Div: uint = 1,
+    Out2Div: uint = 1,
+    Out3Div: uint = 1,
+>
 where Mult >= 2, Mult <= 64, Div >= 1, Div <= 106,
       Out0Div >= 1, Out0Div <= 128, Out1Div >= 1, Out1Div <= 128,
       Out2Div >= 1, Out2Div <= 128, Out3Div >= 1, Out3Div <= 128
@@ -250,8 +258,14 @@ where Mult >= 2, Mult <= 64, Div >= 1, Div <= 106,
     pub const CLK2_HZ: uint = VCO_HZ / Out2Div
     /// Frequency of `clk3` in Hz.
     pub const CLK3_HZ: uint = VCO_HZ / Out3Div
-    static_assert(VCO_HZ >= 600_000_000 and VCO_HZ <= 1_200_000_000, "Mmcm: VCO must be 600..1200 MHz")
-    static_assert(ClkInHz / Div >= 10_000_000 and ClkInHz / Div <= 450_000_000, "Mmcm: phase detector must run at 10..450 MHz")
+    static_assert(
+        VCO_HZ >= 600_000_000 and VCO_HZ <= 1_200_000_000,
+        "Mmcm: VCO must be 600..1200 MHz",
+    )
+    static_assert(
+        ClkInHz / Div >= 10_000_000 and ClkInHz / Div <= 450_000_000,
+        "Mmcm: phase detector must run at 10..450 MHz",
+    )
 
     /// Reference clock at `ClkInHz`.
     in clk_in: clock
@@ -275,7 +289,7 @@ where Mult >= 2, Mult <= 64, Div >= 1, Div <= 106,
         CLKOUT0_DIVIDE_F: Out0Div,
         CLKOUT1_DIVIDE: Out1Div,
         CLKOUT2_DIVIDE: Out2Div,
-        CLKOUT3_DIVIDE: Out3Div
+        CLKOUT3_DIVIDE: Out3Div,
     >(CLKIN1: clk_in, RST: rst, PWRDWN: false)
     mmcm.CLKFBIN = mmcm.CLKFBOUT
 
@@ -295,7 +309,15 @@ where Mult >= 2, Mult <= 64, Div >= 1, Div <= 106,
 ///   `locked` is asynchronous (see [Mmcm]).
 /// * Same generics and ports as [Mmcm], `std::target::intel::Pll` and
 ///   `std::target::generic::Pll`.
-pub module Pll<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+pub module Pll<
+    ClkInHz: uint,
+    Mult: uint,
+    Div: uint = 1,
+    Out0Div: uint = 1,
+    Out1Div: uint = 1,
+    Out2Div: uint = 1,
+    Out3Div: uint = 1,
+>
 where Mult >= 2, Mult <= 64, Div >= 1, Div <= 56,
       Out0Div >= 1, Out0Div <= 128, Out1Div >= 1, Out1Div <= 128,
       Out2Div >= 1, Out2Div <= 128, Out3Div >= 1, Out3Div <= 128
@@ -310,8 +332,14 @@ where Mult >= 2, Mult <= 64, Div >= 1, Div <= 56,
     pub const CLK2_HZ: uint = VCO_HZ / Out2Div
     /// Frequency of `clk3` in Hz.
     pub const CLK3_HZ: uint = VCO_HZ / Out3Div
-    static_assert(VCO_HZ >= 800_000_000 and VCO_HZ <= 1_600_000_000, "Pll: VCO must be 800..1600 MHz")
-    static_assert(ClkInHz / Div >= 19_000_000 and ClkInHz / Div <= 450_000_000, "Pll: phase detector must run at 19..450 MHz")
+    static_assert(
+        VCO_HZ >= 800_000_000 and VCO_HZ <= 1_600_000_000,
+        "Pll: VCO must be 800..1600 MHz",
+    )
+    static_assert(
+        ClkInHz / Div >= 19_000_000 and ClkInHz / Div <= 450_000_000,
+        "Pll: phase detector must run at 19..450 MHz",
+    )
 
     /// Reference clock at `ClkInHz`.
     in clk_in: clock
@@ -335,7 +363,7 @@ where Mult >= 2, Mult <= 64, Div >= 1, Div <= 56,
         CLKOUT0_DIVIDE: Out0Div,
         CLKOUT1_DIVIDE: Out1Div,
         CLKOUT2_DIVIDE: Out2Div,
-        CLKOUT3_DIVIDE: Out3Div
+        CLKOUT3_DIVIDE: Out3Div,
     >(CLKIN1: clk_in, RST: rst, PWRDWN: false)
     pll.CLKFBIN = pll.CLKFBOUT
 
@@ -441,8 +469,16 @@ where Taps <= 31, RefMHz == 200 or RefMHz == 300 or RefMHz == 400
     out q: bool
 
     q = IDELAYE2<IDELAY_VALUE: Taps, REFCLK_FREQUENCY: RefMHz>(
-        IDATAIN: d, C: clk, CE: false, INC: false, LD: false, LDPIPEEN: false,
-        REGRST: false, CINVCTRL: false, CNTVALUEIN: 0, DATAIN: false
+        IDATAIN: d,
+        C: clk,
+        CE: false,
+        INC: false,
+        LD: false,
+        LDPIPEEN: false,
+        REGRST: false,
+        CINVCTRL: false,
+        CNTVALUEIN: 0,
+        DATAIN: false,
     ).DATAOUT
 }
 
@@ -477,8 +513,15 @@ pub module Startup {
     out cfg_mclk: clock
 
     let s = STARTUPE2(
-        CLK: clk, GSR: false, GTS: false, KEYCLEARB: true, PACK: false,
-        USRCCLKO: cclk_o, USRCCLKTS: !cclk_oe, USRDONEO: true, USRDONETS: true
+        CLK: clk,
+        GSR: false,
+        GTS: false,
+        KEYCLEARB: true,
+        PACK: false,
+        USRCCLKO: cclk_o,
+        USRCCLKTS: !cclk_oe,
+        USRDONEO: true,
+        USRDONETS: true,
     )
     eos = s.EOS
     cfg_mclk = s.CFGMCLK

@@ -11,7 +11,7 @@ pub struct AxiLiteOp<AW: uint, DW: uint> {
     /// Write data; for a read, the expected read data (see `check`).
     data: uint<DW>,
     /// Write byte strobes (ignored for reads).
-    strb: bit<DW/8>,
+    strb: bit<DW / 8>,
     /// For reads: compare the read data with `data`.
     check: bool,
 }
@@ -38,7 +38,13 @@ pub const fn axil_read<AW: uint, DW: uint>(addr: uint<AW>, data: uint<DW>) -> Ax
 /// * `done` goes high when every response has been received.
 /// * For accesses decided at test time instead of elaboration time, drive a
 ///   `std::bus::Axi4LiteMaster` request stream from the bench's ports.
-pub module Axi4LiteDriver<AW: uint, DW: uint, N: uint, Ops: [AxiLiteOp<AW, DW>; N], Strict: bool = true>
+pub module Axi4LiteDriver<
+    AW: uint,
+    DW: uint,
+    N: uint,
+    Ops: [AxiLiteOp<AW, DW>; N],
+    Strict: bool = true,
+>
 where N >= 1, DW == 32 or DW == 64
 {
     /// Clock.
@@ -118,7 +124,14 @@ where N >= 1, DW == 32 or DW == 64
 /// * Same handshake rules and `Throttle`/`Seed` gap insertion as
 ///   [StreamDriver]; `keep` is all ones, `user` is zero.
 /// * `done` goes high when every word has been accepted.
-pub module Axi4StreamDriver<DW: uint, N: uint, Items: [uint<DW>; N], PacketLen: uint = N, Throttle: uint = 0, Seed: uint = 0xACE1>
+pub module Axi4StreamDriver<
+    DW: uint,
+    N: uint,
+    Items: [uint<DW>; N],
+    PacketLen: uint = N,
+    Throttle: uint = 0,
+    Seed: uint = 0xACE1,
+>
 where N >= 1, PacketLen >= 1, (DW / 8) * 8 == DW, Throttle <= 15, Seed != 0, Seed < 65536
 {
     /// Clock.

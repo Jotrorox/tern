@@ -403,7 +403,9 @@ test "sqrt: exact squares and remainders" {
     let dut = sim Sqrt<16>()
     dut.reset()
     dut.out.ready = true
-    for (x, r, rem) in [(144, 12, 0), (150, 12, 6), (65535, 255, 510), (0, 0, 0), (1, 1, 0), (2, 1, 1)] {
+    for (x, r, rem) in [
+        (144, 12, 0), (150, 12, 6), (65535, 255, 510), (0, 0, 0), (1, 1, 0), (2, 1, 1),
+    ] {
         dut.in = Stream { valid: true, data: x }
         dut.step()
         dut.in.valid = false
@@ -492,7 +494,13 @@ where N >= 1, M >= 1, Acc >= N + M
             let base = if pfirst { 0 } else { sum }
             let s = base + p
             if Saturate {
-                sum = if s > hi { hi as sint<Acc> } else if s < lo { lo as sint<Acc> } else { s as sint<Acc> }
+                sum = if s > hi {
+                    hi as sint<Acc>
+                } else if s < lo {
+                    lo as sint<Acc>
+                } else {
+                    s as sint<Acc>
+                }
             } else {
                 sum = s as sint<Acc>
             }

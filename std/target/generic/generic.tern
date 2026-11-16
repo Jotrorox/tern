@@ -23,7 +23,15 @@ pub const PLL_LOCK_CYCLES: uint = 16
 /// every output is `clk_in` passed through; `locked` rises PLL_LOCK_CYCLES
 /// cycles after reset is released. The frequency constants are computed as
 /// the vendor wrapper computes them.
-pub module Pll<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+pub module Pll<
+    ClkInHz: uint,
+    Mult: uint,
+    Div: uint = 1,
+    Out0Div: uint = 1,
+    Out1Div: uint = 1,
+    Out2Div: uint = 1,
+    Out3Div: uint = 1,
+>
 where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 1
 {
     /// Nominal VCO frequency in Hz.
@@ -71,7 +79,15 @@ where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 
 }
 
 /// Fallback for `xilinx::Mmcm`: identical to [Pll].
-pub module Mmcm<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+pub module Mmcm<
+    ClkInHz: uint,
+    Mult: uint,
+    Div: uint = 1,
+    Out0Div: uint = 1,
+    Out1Div: uint = 1,
+    Out2Div: uint = 1,
+    Out3Div: uint = 1,
+>
 where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 1
 {
     /// Nominal VCO frequency in Hz.

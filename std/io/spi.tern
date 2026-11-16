@@ -128,7 +128,9 @@ where Mode <= 3, W >= 2, SckHz > 0
     /// SCK is at its idle level whenever the slave is deselected.
     property sck_idle_while_deselected { always cs_n |-> sck == CPOL }
     /// MOSI never changes on an edge on which the slave samples it.
-    property mosi_stable_on_sample_edges { always (state == .Xfer and half and sample) |=> stable(mosi) }
+    property mosi_stable_on_sample_edges {
+        always (state == .Xfer and half and sample) |=> stable(mosi)
+    }
     /// A word is delivered only at the end of a transfer.
     property out_only_after_last_edge { always out.valid |-> past(state) == .Xfer }
 }
@@ -352,7 +354,13 @@ where SckHz > 0
     let single = state == .Cmd or state == .Addr
     let data_clocks: uint<17> = (req.len as uint<17>) << 1
     // what follows the instruction (and the address, if any)
-    let after_addr: State = if req.len == 0 { .Hold } else if req.dummy != 0 { .Dummy } else { .Data }
+    let after_addr: State = if req.len == 0 {
+        .Hold
+    } else if req.dummy != 0 {
+        .Dummy
+    } else {
+        .Data
+    }
     let after_addr_cnt: uint<17> = if req.dummy != 0 { req.dummy as uint<17> } else { data_clocks }
 
     in.ready = state == .Idle
@@ -632,7 +640,10 @@ test "QspiMaster quad output fast read (0x6B, 1-1-4, 8 dummy clocks)" {
     let dut = sim QspiMaster<ClkHz: 8, SckHz: 1>()        // HALF_DIV = 4
     dut.reset()
     dut.io_i = 0
-    dut.in = Stream { valid: true, data: QspiCmd { cmd: 0x6B, addr: 0x01_2345, has_addr: true, dummy: 8, len: 4 } }
+    dut.in = Stream {
+        valid: true,
+        data: QspiCmd { cmd: 0x6B, addr: 0x01_2345, has_addr: true, dummy: 8, len: 4 },
+    }
     dut.step()
     dut.in.valid = false
     expect !dut.cs_n and dut.io_oe == 0b1101 and dut.io_o[3] and dut.io_o[2]
@@ -679,7 +690,10 @@ test "QspiMaster command without address or data (write enable)" {
     let dut = sim QspiMaster<ClkHz: 8, SckHz: 1>()
     dut.reset()
     dut.io_i = 0
-    dut.in = Stream { valid: true, data: QspiCmd { cmd: 0x06, addr: 0, has_addr: false, dummy: 0, len: 0 } }
+    dut.in = Stream {
+        valid: true,
+        data: QspiCmd { cmd: 0x06, addr: 0, has_addr: false, dummy: 0, len: 0 },
+    }
     dut.step()
     dut.in.valid = false
     var prev_sck = false

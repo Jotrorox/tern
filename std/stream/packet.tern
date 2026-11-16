@@ -25,8 +25,10 @@ pub module Gearbox<In: type, Out: type> {
 
     const IW: uint = In::WIDTH
     const OW: uint = Out::WIDTH
-    static_assert((OW / IW) * IW == OW or (IW / OW) * OW == IW,
-                  "Gearbox: widths must be integer multiples of each other")
+    static_assert(
+        (OW / IW) * IW == OW or (IW / OW) * OW == IW,
+        "Gearbox: widths must be integer multiples of each other",
+    )
 
     /// Cycles from the beat that completes an output word (narrow to wide)
     /// or from an input beat (wide to narrow) to the first output beat.
@@ -178,8 +180,10 @@ pub module GearboxLast<In: type, Out: type> {
 
     const IW: uint = In::WIDTH
     const OW: uint = Out::WIDTH
-    static_assert((OW / IW) * IW == OW or (IW / OW) * OW == IW,
-                  "GearboxLast: widths must be integer multiples of each other")
+    static_assert(
+        (OW / IW) * IW == OW or (IW / OW) * OW == IW,
+        "GearboxLast: widths must be integer multiples of each other",
+    )
 
     /// Cycles from the beat that completes an output word (narrow to wide)
     /// or from an input beat (wide to narrow) to the first output beat.

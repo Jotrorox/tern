@@ -27,7 +27,7 @@ pub extern module altpll("") <
     clk2_divide_by: uint = 1,
     clk3_multiply_by: uint = 1,
     clk3_divide_by: uint = 1,
-    width_clock: uint = 6
+    width_clock: uint = 6,
 > {
     /// Reference clocks; inclk[0] is used.
     in inclk: [clock; 2]
@@ -90,7 +90,15 @@ pub extern module altddio_out("") <width: uint = 1> {
 ///   `std::target::generic::Pll`, so a design can switch vendors by changing
 ///   one `use`.
 /// * `locked` is asynchronous; synchronise it before use as a reset.
-pub module Pll<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+pub module Pll<
+    ClkInHz: uint,
+    Mult: uint,
+    Div: uint = 1,
+    Out0Div: uint = 1,
+    Out1Div: uint = 1,
+    Out2Div: uint = 1,
+    Out3Div: uint = 1,
+>
 where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 1
 {
     /// Frequency of `clk0` in Hz.
@@ -101,8 +109,10 @@ where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 
     pub const CLK2_HZ: uint = ClkInHz * Mult / (Div * Out2Div)
     /// Frequency of `clk3` in Hz.
     pub const CLK3_HZ: uint = ClkInHz * Mult / (Div * Out3Div)
-    static_assert(CLK0_HZ <= 472_500_000 and CLK1_HZ <= 472_500_000 and CLK2_HZ <= 472_500_000 and CLK3_HZ <= 472_500_000,
-                  "Pll: output above the PLL output limit")
+    static_assert(
+        CLK0_HZ <= 472_500_000 and CLK1_HZ <= 472_500_000 and CLK2_HZ <= 472_500_000 and CLK3_HZ <= 472_500_000,
+        "Pll: output above the PLL output limit",
+    )
 
     /// Reference clock at `ClkInHz`.
     in clk_in: clock
@@ -121,10 +131,14 @@ where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 
 
     let pll = altpll<
         inclk0_input_frequency: period_ps(ClkInHz),
-        clk0_multiply_by: Mult, clk0_divide_by: Div * Out0Div,
-        clk1_multiply_by: Mult, clk1_divide_by: Div * Out1Div,
-        clk2_multiply_by: Mult, clk2_divide_by: Div * Out2Div,
-        clk3_multiply_by: Mult, clk3_divide_by: Div * Out3Div
+        clk0_multiply_by: Mult,
+        clk0_divide_by: Div * Out0Div,
+        clk1_multiply_by: Mult,
+        clk1_divide_by: Div * Out1Div,
+        clk2_multiply_by: Mult,
+        clk2_divide_by: Div * Out2Div,
+        clk3_multiply_by: Mult,
+        clk3_divide_by: Div * Out3Div,
     >(inclk: [clk_in, clk_in], areset: rst)
     clk0 = pll.clk[0]
     clk1 = pll.clk[1]

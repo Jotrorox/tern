@@ -33,45 +33,80 @@ pub struct VideoMode {
 /// 640x480 at 60 Hz (VESA/industry standard VGA), 25.175 MHz pixel clock,
 /// 800x525 total, both syncs negative. (25.2 MHz is also within tolerance.)
 pub const Vga640x480: VideoMode = VideoMode {
-    h_active: 640, h_front: 16, h_sync: 96, h_back: 48,
-    v_active: 480, v_front: 10, v_sync: 2, v_back: 33,
-    h_sync_positive: false, v_sync_positive: false,
+    h_active: 640,
+    h_front: 16,
+    h_sync: 96,
+    h_back: 48,
+    v_active: 480,
+    v_front: 10,
+    v_sync: 2,
+    v_back: 33,
+    h_sync_positive: false,
+    v_sync_positive: false,
     pixel_hz: 25_175_000,
 }
 
 /// 800x600 at 60 Hz (VESA SVGA), 40 MHz pixel clock, 1056x628 total,
 /// both syncs positive.
 pub const Svga800x600: VideoMode = VideoMode {
-    h_active: 800, h_front: 40, h_sync: 128, h_back: 88,
-    v_active: 600, v_front: 1, v_sync: 4, v_back: 23,
-    h_sync_positive: true, v_sync_positive: true,
+    h_active: 800,
+    h_front: 40,
+    h_sync: 128,
+    h_back: 88,
+    v_active: 600,
+    v_front: 1,
+    v_sync: 4,
+    v_back: 23,
+    h_sync_positive: true,
+    v_sync_positive: true,
     pixel_hz: 40_000_000,
 }
 
 /// 1024x768 at 60 Hz (VESA XGA), 65 MHz pixel clock, 1344x806 total,
 /// both syncs negative.
 pub const Xga1024x768: VideoMode = VideoMode {
-    h_active: 1024, h_front: 24, h_sync: 136, h_back: 160,
-    v_active: 768, v_front: 3, v_sync: 6, v_back: 29,
-    h_sync_positive: false, v_sync_positive: false,
+    h_active: 1024,
+    h_front: 24,
+    h_sync: 136,
+    h_back: 160,
+    v_active: 768,
+    v_front: 3,
+    v_sync: 6,
+    v_back: 29,
+    h_sync_positive: false,
+    v_sync_positive: false,
     pixel_hz: 65_000_000,
 }
 
 /// 1280x720 at 60 Hz (CEA-861 720p, VIC 4), 74.25 MHz pixel clock,
 /// 1650x750 total, both syncs positive.
 pub const Hd1280x720: VideoMode = VideoMode {
-    h_active: 1280, h_front: 110, h_sync: 40, h_back: 220,
-    v_active: 720, v_front: 5, v_sync: 5, v_back: 20,
-    h_sync_positive: true, v_sync_positive: true,
+    h_active: 1280,
+    h_front: 110,
+    h_sync: 40,
+    h_back: 220,
+    v_active: 720,
+    v_front: 5,
+    v_sync: 5,
+    v_back: 20,
+    h_sync_positive: true,
+    v_sync_positive: true,
     pixel_hz: 74_250_000,
 }
 
 /// 1920x1080 at 60 Hz (CEA-861 1080p, VIC 16), 148.5 MHz pixel clock,
 /// 2200x1125 total, both syncs positive.
 pub const Hd1920x1080: VideoMode = VideoMode {
-    h_active: 1920, h_front: 88, h_sync: 44, h_back: 148,
-    v_active: 1080, v_front: 4, v_sync: 5, v_back: 36,
-    h_sync_positive: true, v_sync_positive: true,
+    h_active: 1920,
+    h_front: 88,
+    h_sync: 44,
+    h_back: 148,
+    v_active: 1080,
+    v_front: 4,
+    v_sync: 5,
+    v_back: 36,
+    h_sync_positive: true,
+    v_sync_positive: true,
     pixel_hz: 148_500_000,
 }
 
@@ -166,9 +201,16 @@ pub module VgaTiming<Mode: VideoMode = Vga640x480> {
 
 /// A tiny mode for fast tests: 4+1+2+1 = 8 pixels by 3+1+1+1 = 6 lines.
 const TinyMode: VideoMode = VideoMode {
-    h_active: 4, h_front: 1, h_sync: 2, h_back: 1,
-    v_active: 3, v_front: 1, v_sync: 1, v_back: 1,
-    h_sync_positive: true, v_sync_positive: false,
+    h_active: 4,
+    h_front: 1,
+    h_sync: 2,
+    h_back: 1,
+    v_active: 3,
+    v_front: 1,
+    v_sync: 1,
+    v_back: 1,
+    h_sync_positive: true,
+    v_sync_positive: false,
     pixel_hz: 1_000,
 }
 

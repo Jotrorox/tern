@@ -45,7 +45,12 @@ pub fn hex_to_segments(v: uint<4>) -> bit<7> {
 ///   selects digit `i`. Polarity is set per board with `SegActiveLow` and
 ///   `AnActiveLow` (common-anode boards with PNP drivers use both low).
 /// * Outputs are combinational from the scan registers and the inputs.
-pub module SevenSegment<Digits: uint = 4, ScanCycles: uint = 50_000, SegActiveLow: bool = true, AnActiveLow: bool = true>
+pub module SevenSegment<
+    Digits: uint = 4,
+    ScanCycles: uint = 50_000,
+    SegActiveLow: bool = true,
+    AnActiveLow: bool = true,
+>
 where Digits >= 1, ScanCycles >= 2
 {
     const SW: uint = if Digits > 1 { clog2(Digits) } else { 1 }
@@ -107,8 +112,10 @@ where Digits >= 1, ScanCycles >= 2
 }
 
 test "hex_to_segments matches the standard patterns" {
-    let want = [0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07,
-                0x7F, 0x6F, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71]
+    let want = [
+        0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07,
+        0x7F, 0x6F, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71,
+    ]
     for v in 0..16 {
         expect hex_to_segments(v) == want[v]
     }
