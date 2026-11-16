@@ -9,6 +9,19 @@
  *   - Arithmetic operands are already resized to the result width (see IrOp).
  *   - Signal ids index IrModule.sigs; IR_NONE marks "absent".
  *   - All IR memory lives in the arena passed to ir_design_new().
+ *
+ * Changes to the original contract (made while implementing ir_build.c,
+ * ir_json.c and the simulator; additive only):
+ *   - IrDesign.build: private state of ir_build.c (the interning table for
+ *     anonymous types); NULL until the first ir_type_* call.
+ *   - The "builder API" section at the end: type constructors (anonymous
+ *     types are interned per design, so structurally equal types are the
+ *     same pointer), module/signal/process/instance/property builders that
+ *     append to the IrModule arrays in place, statement/lvalue/sequence
+ *     constructors, IrBits helpers and ir_from_json().
+ *   - Arrays that the ir_add_* helpers append to grow by doubling inside the
+ *     arena; an array a module was given by other means must not be appended
+ *     to with them (ir_from_json() allocates compatible arrays).
  */
 #ifndef TERN_IR_H
 #define TERN_IR_H
@@ -417,6 +430,7 @@ typedef struct IrDesign {
     IrRegmap *regmaps;
     uint32_t ncrossings;
     IrCrossing *crossings;
+    struct IrBuildState *build; /* ir_build.c private (type interning); may be NULL */
 } IrDesign;
 
 /* ------------------------------------------------- builder helpers ---- */
@@ -451,5 +465,133 @@ void ir_dump(const IrDesign *d, struct StrBuf *out);
 
 /* JSON (ir_json.c): documented schema in docs/ir-schema.md. */
 void ir_to_json(const IrDesign *d, struct StrBuf *out);
+/* Read a design written by ir_to_json (all memory in `a`; source files named
+ * in spans are registered with src_add() when not known yet). Returns NULL
+ * and reports a diag_error() on malformed input. */
+IrDesign *ir_from_json(Arena *a, const char *text, size_t len);
+
+/* ====================================================== builder API ==== */
+/* Everything below is implemented in ir_build.c.  Constructors assert the
+ * IR invariants (TERN_ASSERT) and compute result widths. */
+
+/* -- bits ------------------------------------------------------------- */
+IrBits ir_bits_ones(Arena *a, uint32_t width);
+IrBits ir_bits_copy(Arena *a, const IrBits *b);
+IrBits ir_bits_from_limbs(Arena *a, uint32_t width, const uint64_t *w); /* masks to width */
+/* zero-/sign-extend or truncate */
+IrBits ir_bits_resize(Arena *a, const IrBits *b, uint32_t width, int sign_extend);
+/* Verilog-style literal "<width>'h<hex>" (e.g. "8'h1f"); parse accepts 'h, 'd
+ * and 'b and returns 0 on malformed input. */
+void ir_bits_print(const IrBits *b, struct StrBuf *out);
+int ir_bits_parse(Arena *a, const char *s, size_t n, IrBits *out);
+
+/* -- types -------------------------------------------------------------- */
+/* Anonymous types are interned per design: the same arguments return the
+ * same pointer.  Named struct/enum types are created fresh and appended to
+ * d->types (callers create them in dependency order). */
+IrType *ir_type_bool(IrDesign *d);
+IrType *ir_type_bits(IrDesign *d, uint32_t width);
+IrType *ir_type_uint(IrDesign *d, uint32_t width);
+IrType *ir_type_sint(IrDesign *d, uint32_t width);
+IrType *ir_type_clock(IrDesign *d, int falling);
+IrType *ir_type_reset(IrDesign *d, int async, int active_low);
+IrType *ir_type_array(IrDesign *d, IrType *elem, uint32_t len);
+/* fields[0] is the MSB; the lsb members are computed (input lsb ignored). */
+IrType *ir_type_struct(IrDesign *d, const char *name, uint32_t nfields, const IrField *fields,
+                       Span loc);
+/* width = tag_width + the widest payload; variant tags are copied. */
+IrType *ir_type_enum(IrDesign *d, const char *name, uint32_t nvariants, const IrVariant *variants,
+                     uint32_t tag_width, IrEncoding enc, Span loc);
+int ir_type_is_signed(const IrType *t);                   /* IRT_SINT */
+const IrField *ir_type_field(const IrType *t, const char *name);   /* struct field or NULL */
+const IrVariant *ir_type_variant(const IrType *t, const char *name);
+void ir_type_print(const IrType *t, struct StrBuf *out); /* "uint<8>", "Pixel", "[u8; 4]"-style */
+
+/* -- design and modules --------------------------------------------------- */
+/* A new, empty module (not yet part of the design: add it with
+ * ir_design_add_module once its children have been added). Names are
+ * interned; tern_name/display default to name when NULL. */
+IrModule *ir_module_new(IrDesign *d, const char *name, const char *tern_name, const char *display,
+                        Span loc);
+void ir_design_add_module(IrDesign *d, IrModule *m);      /* appends (children first) */
+void ir_design_set_top(IrDesign *d, IrModule *m);         /* is_top = 1; moved to the end */
+IrModule *ir_design_find_module(const IrDesign *d, const char *name);
+void ir_design_add_regmap(IrDesign *d, const IrRegmap *r);    /* deep copy */
+void ir_design_add_crossing(IrDesign *d, const IrCrossing *c);
+
+/* Adds a signal and returns its id.  path NULL means path = name.  IN/OUT
+ * signals are appended to m->ports.  domain starts as IR_NONE.  The returned
+ * id stays valid; pointers into m->sigs only until the next ir_add_signal. */
+uint32_t ir_add_signal(IrDesign *d, IrModule *m, const char *name, const char *path,
+                       IrSigKind kind, IrType *type, Span loc);
+uint32_t ir_add_memory(IrDesign *d, IrModule *m, const char *name, IrType *elem, uint32_t depth,
+                       Span loc);
+void ir_set_init(IrDesign *d, IrModule *m, uint32_t sig, IrBits init); /* has_init = 1 (copied) */
+void ir_signal_add_attr(IrDesign *d, IrModule *m, uint32_t sig, const char *name, const char *args);
+void ir_module_add_attr(IrDesign *d, IrModule *m, const char *name, const char *args);
+uint32_t ir_add_param(IrDesign *d, IrModule *m, const char *name, IrBits value, int is_signed);
+uint32_t ir_add_domain(IrDesign *d, IrModule *m, const char *name, uint32_t clock, uint32_t reset,
+                       uint64_t hz);
+void ir_add_assign(IrDesign *d, IrModule *m, IrLvalue lhs, IrExpr *rhs, Span loc);
+/* Clocked: `regs` is computed from the assignment targets in `body`. */
+uint32_t ir_add_process(IrDesign *d, IrModule *m, IrProcKind kind, uint32_t domain, IrBlock body,
+                        Span loc);
+uint32_t ir_add_instance(IrDesign *d, IrModule *m, const char *name, IrModule *child, Span loc);
+/* Connect port `port` (child signal id) of instance `inst`; see IrConn. */
+void ir_connect(IrDesign *d, IrModule *m, uint32_t inst, uint32_t port, IrExpr *expr);
+/* Convenience: connect by port name/path; returns 0 if the child has no such port. */
+int ir_connect_name(IrDesign *d, IrModule *m, uint32_t inst, const char *port, IrExpr *expr);
+uint32_t ir_add_property(IrDesign *d, IrModule *m, const char *name, IrAssertKind kind,
+                         uint32_t domain, IrSeq *seq, Span loc);
+
+/* -- expressions (in addition to the constructors above) ---------------- */
+IrExpr *ir_const_u64(Arena *a, uint32_t width, uint64_t v, Span loc);
+IrExpr *ir_memread(Arena *a, const IrModule *m, uint32_t mem, IrExpr *addr, Span loc);
+IrExpr *ir_past(Arena *a, IrExpr *x, uint32_t cycles, Span loc);
+/* Struct field read; x->type must be an IRT_STRUCT with that field. */
+IrExpr *ir_field(Arena *a, IrExpr *x, const char *field, Span loc);
+
+/* -- lvalues ---------------------------------------------------------- */
+IrLvalue ir_lv_sig(const IrModule *m, uint32_t sig);
+IrLvalue ir_lv_slice(const IrModule *m, uint32_t sig, uint32_t lo, uint32_t width);
+IrLvalue ir_lv_index(const IrModule *m, uint32_t sig, uint32_t lo, uint32_t elem_width,
+                     IrExpr *index);
+
+/* -- statements and blocks ----------------------------------------------- */
+/* Heap-backed statement list (zero-init valid); ir_stmts_finish copies it
+ * into the arena as an IrBlock and frees the list. */
+typedef struct IrStmtList {
+    IrStmt **data;
+    size_t len, cap;
+} IrStmtList;
+void ir_stmts_push(IrStmtList *l, IrStmt *s);
+IrBlock ir_stmts_finish(Arena *a, IrStmtList *l);
+IrBlock ir_block(Arena *a, uint32_t n, IrStmt *const *stmts);   /* copies the array */
+IrBlock ir_block1(Arena *a, IrStmt *s);                          /* one statement */
+IrStmt *ir_stmt_assign(Arena *a, IrLvalue lhs, IrExpr *rhs, Span loc);
+IrStmt *ir_stmt_if(Arena *a, IrExpr *cond, IrBlock then_b, IrBlock else_b, Span loc);
+/* arms (and their vals) are copied */
+IrStmt *ir_stmt_case(Arena *a, IrExpr *subject, uint32_t narms, const IrCaseArm *arms, Span loc);
+IrStmt *ir_stmt_memwrite(Arena *a, const IrModule *m, uint32_t mem, IrExpr *addr, IrExpr *data,
+                         IrExpr *mask, Span loc);
+IrStmt *ir_stmt_assert(Arena *a, IrAssertKind kind, IrExpr *cond, const char *msg, Span loc);
+
+/* -- property sequences ------------------------------------------------ */
+IrSeq *ir_seq_expr(Arena *a, IrExpr *e);
+IrSeq *ir_seq_delay(Arena *a, IrSeq *x, uint32_t lo, uint32_t hi, IrSeq *y); /* hi IR_NONE: $ */
+IrSeq *ir_seq_binary(Arena *a, IrSeqKind kind, IrSeq *x, IrSeq *y); /* IMPL, IMPL_NEXT, UNTIL, AND, OR */
+IrSeq *ir_seq_unary(Arena *a, IrSeqKind kind, IrSeq *x);            /* ALWAYS, NEVER, NOT */
+IrSeq *ir_seq_eventually(Arena *a, IrSeq *x, uint32_t hi);          /* hi IR_NONE: unbounded */
+
+/* -- names ---------------------------------------------------------- */
+const char *ir_sig_kind_name(IrSigKind k);     /* "in", "out", "wire", "var", "reg", "mem" */
+const char *ir_op_name(IrOp op);               /* "add", "shl", ... (JSON names) */
+const char *ir_op_symbol(IrOp op);             /* "+", "<<", ... */
+const char *ir_expr_kind_name(IrExprKind k);   /* "const", "sig", ... */
+const char *ir_seq_kind_name(IrSeqKind k);
+const char *ir_assert_kind_name(IrAssertKind k);
+const char *ir_cdc_kind_name(IrCdcKind k);
+const char *ir_access_name(IrAccess a);
+const char *ir_encoding_name(IrEncoding e);
 
 #endif /* TERN_IR_H */
