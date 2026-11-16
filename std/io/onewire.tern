@@ -1,0 +1,318 @@
+package std::io
+
+// 1-Wire bus master (standard speed).
+//
+// DQ is open-drain: `dq_oe` pulls the line low, `dq_i` is the pad level
+// (asynchronous, synchronised here with two flip-flops). At the #[top] level
+// connect both to a `tri<bool>` pad with a pull-up (typically 4.7 kOhm).
+
+/// One 1-Wire operation.
+pub enum OneWireCmd {
+    /// Reset pulse and presence detect.
+    Reset,
+    /// One write time slot.
+    WriteBit { value: bool },
+    /// One read time slot.
+    ReadBit,
+    /// Eight write slots, LSB first.
+    WriteByte { byte: u8 },
+    /// Eight read slots, LSB first.
+    ReadByte,
+}
+
+/// Result of a Reset, ReadBit or ReadByte operation of [OneWire].
+pub struct OneWireResult {
+    /// ReadByte: the byte; ReadBit: the bit in bit 0; Reset: zero.
+    data: u8,
+    /// Reset: a device answered with a presence pulse.
+    presence: bool,
+}
+
+/// 1-Wire master with standard-speed timing, derived from a microsecond tick.
+///
+/// * Reset: DQ low for 480 us, released; presence is sampled 70 us after the
+///   release; the operation ends 480 us after the release.
+/// * Write slot: DQ low for 6 us (write 1) or 60 us (write 0), then released;
+///   every slot is 70 us (60 us slot + 10 us recovery).
+/// * Read slot: DQ low for 6 us, released, sampled at 15 us from the slot start.
+/// * Bytes go LSB first. Reset, ReadBit and ReadByte produce one `out` result;
+///   writes produce none. `in` is accepted only when idle (`busy` low).
+/// * Overdrive speed and strong pull-up (parasite power) are not supported.
+pub module OneWire<ClkHz: uint> {
+    /// Clock cycles per microsecond.
+    pub const US: uint = ClkHz / 1_000_000
+    static_assert(US >= 1, "OneWire needs a clock of at least 1 MHz")
+    const RESET_LOW_US: uint = 480
+    const PRESENCE_US: uint = 70
+    const RESET_WAIT_US: uint = 480
+    const SLOT_US: uint = 70
+    const W1_LOW_US: uint = 6
+    const W0_LOW_US: uint = 60
+    const READ_SAMPLE_US: uint = 15
+    /// Microseconds of one byte operation.
+    pub const BYTE_US: uint = 8 * SLOT_US
+
+    /// Clock.
+    in clk: clock
+    /// Reset: releases DQ.
+    in rst: reset
+    /// Operations, accepted when idle.
+    in in: Stream<OneWireCmd>
+    /// Results of Reset, ReadBit and ReadByte, valid for one cycle.
+    out out: Valid<OneWireResult>
+    /// An operation is in progress.
+    out busy: bool
+    /// Pull DQ low.
+    out dq_oe: bool
+    /// DQ level at the pad (asynchronous).
+    in dq_i: bool
+
+    enum State { Idle, ResetLow, ResetWait, Slot }
+
+    reg state: State = .Idle
+    reg div: uint<clog2(US + 1)> = 0
+    reg t: uint<10> = 0
+    reg dq_m: bool = true
+    reg dq_s: bool = true
+    reg oe: bool = false
+    reg sh: u8 = 0
+    reg rx: u8 = 0
+    reg nbits: uint<4> = 0
+    reg bitn: uint<4> = 0
+    reg reading: bool = false
+    reg presence: bool = false
+    reg out_valid: bool = false
+    reg out_data: OneWireResult = all0
+
+    let us_tick = div == US - 1
+    let wbit = reading or sh[0]
+    // last microsecond of the low phase of the current slot
+    let low_end: uint<10> = if wbit { W1_LOW_US - 1 } else { W0_LOW_US - 1 }
+
+    in.ready = state == .Idle
+    out.valid = out_valid
+    out.data = out_data
+    busy = state != .Idle
+    dq_oe = oe
+
+    on clk {
+        dq_m = dq_i
+        dq_s = dq_m
+        out_valid = false
+        div = if state == .Idle or us_tick { 0 } else { div +% 1 }
+        if us_tick {
+            // t = microseconds elapsed in the current phase, before this tick
+            t = t +% 1
+            match state {
+                .ResetLow => if t == RESET_LOW_US - 1 {
+                    oe = false
+                    t = 0
+                    state = .ResetWait
+                },
+                .ResetWait => {
+                    if t == PRESENCE_US - 1 { presence = !dq_s }
+                    if t == RESET_WAIT_US - 1 {
+                        state = .Idle
+                        out_valid = true
+                        out_data = OneWireResult { data: 0, presence: presence }
+                    }
+                },
+                .Slot => {
+                    if t == low_end { oe = false }
+                    if t == READ_SAMPLE_US - 1 and reading { rx = (dq_s as uint<1>) ++ rx[7:1] }
+                    if t == SLOT_US - 1 {
+                        t = 0
+                        sh = sh >> 1
+                        if bitn == nbits - 1 {
+                            state = .Idle
+                            if reading {
+                                out_valid = true
+                                out_data = OneWireResult { data: if nbits == 1 { rx >> 7 } else { rx }, presence: false }
+                            }
+                        } else {
+                            bitn = bitn +% 1
+                            oe = true                       // next slot starts
+                        }
+                    }
+                },
+                .Idle => {},
+            }
+        }
+        if in.fire() {
+            t = 0
+            bitn = 0
+            match in.data {
+                .Reset => {
+                    state = .ResetLow
+                    oe = true
+                    presence = false
+                },
+                .WriteBit { value } => {
+                    state = .Slot
+                    oe = true
+                    reading = false
+                    sh = value as uint<1>
+                    nbits = 1
+                },
+                .ReadBit => {
+                    state = .Slot
+                    oe = true
+                    reading = true
+                    nbits = 1
+                },
+                .WriteByte { byte } => {
+                    state = .Slot
+                    oe = true
+                    reading = false
+                    sh = byte
+                    nbits = 8
+                },
+                .ReadByte => {
+                    state = .Slot
+                    oe = true
+                    reading = true
+                    nbits = 8
+                },
+            }
+        }
+    }
+
+    /// DQ is released whenever the master is idle.
+    property releases_dq_when_idle { always state == .Idle |-> !dq_oe }
+    /// The reset pulse holds DQ low for its whole duration.
+    property reset_pulse_low { always state == .ResetLow |-> dq_oe }
+}
+
+test "OneWire reset detects a presence pulse" {
+    let dut = sim OneWire<1_000_000>()              // 1 cycle = 1 us
+    dut.reset()
+    dut.dq_i = true
+    dut.in = Stream { valid: true, data: OneWireCmd::Reset }
+    dut.step()
+    dut.in.valid = false
+    var low_us: u16 = 0
+    var since_release: u16 = 0
+    var got = false
+    var presence = false
+    for _ in 0..1200 {
+        dut.settle()
+        if dut.out.valid { got = true; presence = dut.out.data.presence }
+        if dut.dq_oe { low_us = low_us +% 1; since_release = 0 } else { since_release = since_release +% 1 }
+        // the device answers 20 us after the release with a 120 us presence pulse
+        let device_low = low_us >= 480 and since_release >= 20 and since_release < 140
+        dut.dq_i = !dut.dq_oe and !device_low
+        dut.step()
+    }
+    expect low_us >= 480 and low_us < 490
+    expect got and presence
+    expect !dut.busy
+}
+
+test "OneWire reset without a device reports no presence" {
+    let dut = sim OneWire<1_000_000>()
+    dut.reset()
+    dut.dq_i = true
+    dut.in = Stream { valid: true, data: OneWireCmd::Reset }
+    dut.step()
+    dut.in.valid = false
+    var got = false
+    var presence = true
+    for _ in 0..1200 {
+        dut.settle()
+        if dut.out.valid { got = true; presence = dut.out.data.presence }
+        dut.dq_i = !dut.dq_oe
+        dut.step()
+    }
+    expect got and !presence
+}
+
+test "OneWire writes a byte LSB first with 6 us / 60 us low pulses" {
+    let dut = sim OneWire<1_000_000>()
+    dut.reset()
+    dut.dq_i = true
+    dut.in = Stream { valid: true, data: OneWireCmd::WriteByte { byte: 0xA5 } }
+    dut.step()
+    dut.in.valid = false
+    var value: u8 = 0
+    var pulses: u8 = 0
+    var width: u16 = 0
+    var was_low = false
+    var results: u8 = 0
+    for _ in 0..700 {
+        dut.settle()
+        if dut.out.valid { results = results +% 1 }
+        if dut.dq_oe {
+            width = width +% 1
+        } else if was_low {
+            // end of a low pulse: short = 1, long = 0
+            expect width == 6 or width == 60
+            value = (if width < 15 { 0x80 } else { 0x00 }) | (value >> 1)
+            pulses = pulses +% 1
+            width = 0
+        }
+        was_low = dut.dq_oe
+        dut.dq_i = !dut.dq_oe
+        dut.step()
+    }
+    expect pulses == 8 and value == 0xA5
+    expect results == 0
+    expect !dut.busy
+}
+
+test "OneWire reads a byte LSB first, sampling 15 us into each slot" {
+    let dut = sim OneWire<1_000_000>()
+    dut.reset()
+    dut.dq_i = true
+    dut.in = Stream { valid: true, data: OneWireCmd::ReadByte }
+    dut.step()
+    dut.in.valid = false
+    let reply: u8 = 0x3C
+    var k: u8 = 0                                    // slot index
+    var slot_t: u16 = 0                              // us since the slot started
+    var prev_oe = true
+    var got = false
+    var data: u8 = 0
+    for _ in 0..700 {
+        dut.settle()
+        if dut.out.valid { got = true; data = dut.out.data.data }
+        if dut.dq_oe and !prev_oe { k = k +% 1; slot_t = 0 }
+        // device: a 0 bit holds DQ low for 30 us from the slot start
+        let bit_is_zero = k < 8 and !reply[k as uint<3>]
+        let device_low = bit_is_zero and slot_t < 30
+        dut.dq_i = !dut.dq_oe and !device_low
+        prev_oe = dut.dq_oe
+        slot_t = slot_t +% 1
+        dut.step()
+    }
+    expect got and data == 0x3C
+}
+
+test "OneWire single-bit operations use one slot" {
+    let dut = sim OneWire<1_000_000>()
+    dut.reset()
+    dut.dq_i = true
+    dut.in = Stream { valid: true, data: OneWireCmd::WriteBit { value: false } }
+    dut.step()
+    dut.in.valid = false
+    var low: u16 = 0
+    for _ in 0..100 {
+        dut.settle()
+        if dut.dq_oe { low = low +% 1 }
+        dut.dq_i = !dut.dq_oe
+        dut.step()
+    }
+    expect low == 60 and !dut.busy
+
+    dut.in = Stream { valid: true, data: OneWireCmd::ReadBit }
+    dut.step()
+    dut.in.valid = false
+    var got = false
+    var data: u8 = 0xFF
+    for _ in 0..100 {
+        dut.settle()
+        if dut.out.valid { got = true; data = dut.out.data.data }
+        dut.dq_i = !dut.dq_oe                        // nobody pulls: reads 1
+        dut.step()
+    }
+    expect got and data == 1
+}

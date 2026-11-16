@@ -1,0 +1,344 @@
+package std::bus
+
+/// One AxiDma transfer: where and how much.
+pub struct DmaCmd<AW: uint, LenW: uint> {
+    /// Start byte address; must be aligned to DW/8 bytes.
+    addr: uint<AW>,
+    /// Number of DW-wide beats to move; 0 completes immediately.
+    beats: uint<LenW>,
+}
+
+/// Simple two-channel DMA engine with an AXI4 master port.
+///
+/// * MM2S (memory to stream): each command on `mm2s_cmd` reads `beats` words
+///   starting at `addr` and sends them on `mm2s`, with `last` on the final beat
+///   of the command.
+/// * S2MM (stream to memory): each command on `s2mm_cmd` takes `beats` words
+///   from `s2mm` and writes them starting at `addr`; `s2mm.keep` becomes the
+///   write strobes. The length comes from the command; `s2mm.last` is ignored.
+///
+/// Both channels run concurrently (MM2S uses AR/R, S2MM uses AW/W/B). Each
+/// splits its transfer into INCR bursts of at most `MaxBurst` beats that never
+/// cross a 4 KiB boundary, with one burst outstanding per channel. AWVALID and
+/// the burst's W beats are issued together. Completion is reported for one
+/// cycle on `mm2s_done` / `s2mm_done` with the last non-OKAY response of the
+/// transfer (OKAY if none). All transactions use ID 0 and PROT 0.
+///
+/// The command ports are plain streams so a descriptor register map
+/// (RegisterFile with `wo DmaCmd -> Stream<DmaCmd>` entries) or a sequencer
+/// can drive them.
+pub module AxiDma<AW: uint = 32, DW: uint = 32, IDW: uint = 4, LenW: uint = 16, MaxBurst: uint = 16>
+where DW >= 8, DW <= 1024, DW.is_pow2(), MaxBurst >= 1, MaxBurst <= 256, MaxBurst.is_pow2(), AW >= 12
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; abandons transfers in progress.
+    in rst: reset
+    /// AXI4 master port to memory.
+    out m: Axi4<AW, DW, IDW>
+    /// MM2S commands; accepted when the channel is idle.
+    in mm2s_cmd: Stream<DmaCmd<AW, LenW>>
+    /// MM2S data out.
+    out mm2s: Axi4Stream<DW>
+    /// MM2S completion: valid for one cycle per command, data is the response code.
+    out mm2s_done: Valid<bit<2>>
+    /// S2MM commands; accepted when the channel is idle.
+    in s2mm_cmd: Stream<DmaCmd<AW, LenW>>
+    /// S2MM data in.
+    in s2mm: Axi4Stream<DW>
+    /// S2MM completion: valid for one cycle per command, data is the response code.
+    out s2mm_done: Valid<bit<2>>
+
+    /// Bytes per beat.
+    const Bytes: uint = DW / 8
+    /// log2(Bytes): AxSIZE and the address shift per beat.
+    const Shift: uint = clog2(Bytes)
+    /// AxSIZE of every burst.
+    const SIZE: uint<3> = clog2(Bytes)
+
+    /// Beats in the next burst: what is left, capped by MaxBurst and by the
+    /// distance to the next 4 KiB boundary.
+    fn burst_beats(addr: uint<AW>, left: uint<LenW>) -> uint<9> {
+        let room_bytes = 4096u13 -% (addr as uint<12>)
+        let room = room_bytes >> Shift
+        let cap = if room < MaxBurst { room as uint<9> } else { MaxBurst as uint<9> }
+        if left < cap { left as uint<9> } else { cap }
+    }
+
+    // ---- MM2S: AR/R ----
+    enum RdState { Idle, Addr, Data, Done }
+
+    reg rd_state: RdState = .Idle
+    reg rd_addr: uint<AW> = 0
+    reg rd_left: uint<LenW> = 0
+    reg rd_resp: bit<2> = RESP_OKAY
+
+    let rd_burst = burst_beats(rd_addr, rd_left)
+
+    mm2s_cmd.ready = rd_state == .Idle
+    m.ar.valid = rd_state == .Addr
+    m.ar.data = Axi4Addr {
+        id: 0,
+        addr: rd_addr,
+        len: (rd_burst -% 1) as uint<8>,
+        size: SIZE,
+        burst: BURST_INCR,
+        prot: 0b000,
+    }
+    mm2s.valid = rd_state == .Data and m.r.valid
+    mm2s.data = m.r.data.data
+    mm2s.keep = all1
+    mm2s.last = rd_left == 0 and m.r.data.last
+    mm2s.user = all0
+    m.r.ready = rd_state == .Data and mm2s.ready
+    mm2s_done = Valid { valid: rd_state == .Done, data: rd_resp }
+
+    on clk {
+        match rd_state {
+            .Idle => if mm2s_cmd.fire() {
+                rd_addr = mm2s_cmd.data.addr
+                rd_left = mm2s_cmd.data.beats
+                rd_resp = RESP_OKAY
+                rd_state = if mm2s_cmd.data.beats == 0 { .Done } else { .Addr }
+            },
+            .Addr => if m.ar.fire() {
+                rd_addr = rd_addr +% ((rd_burst as uint<AW>) << Shift)
+                rd_left = (rd_left -% rd_burst) as uint<LenW>
+                rd_state = .Data
+            },
+            .Data => if m.r.fire() {
+                if m.r.data.resp != RESP_OKAY { rd_resp = m.r.data.resp }
+                if m.r.data.last {
+                    rd_state = if rd_left == 0 { .Done } else { .Addr }
+                }
+            },
+            .Done => rd_state = .Idle,
+        }
+    }
+
+    // ---- S2MM: AW/W/B ----
+    enum WrState { Idle, Start, Burst, Resp, Done }
+
+    reg wr_state: WrState = .Idle
+    reg wr_addr: uint<AW> = 0
+    reg wr_left: uint<LenW> = 0
+    reg wr_len: uint<9> = 0
+    reg wr_beats: uint<9> = 0
+    reg aw_pend: bool = false
+    reg wr_resp: bit<2> = RESP_OKAY
+
+    let wr_burst = burst_beats(wr_addr, wr_left)
+    let w_open = wr_state == .Burst and wr_beats != 0
+
+    s2mm_cmd.ready = wr_state == .Idle
+    m.aw.valid = aw_pend
+    m.aw.data = Axi4Addr {
+        id: 0,
+        addr: wr_addr,
+        len: (wr_len -% 1) as uint<8>,
+        size: SIZE,
+        burst: BURST_INCR,
+        prot: 0b000,
+    }
+    m.w.valid = w_open and s2mm.valid
+    m.w.data = Axi4W { data: s2mm.data, strb: s2mm.keep, last: wr_beats == 1 }
+    s2mm.ready = w_open and m.w.ready
+    m.b.ready = wr_state == .Resp
+    s2mm_done = Valid { valid: wr_state == .Done, data: wr_resp }
+
+    on clk {
+        match wr_state {
+            .Idle => if s2mm_cmd.fire() {
+                wr_addr = s2mm_cmd.data.addr
+                wr_left = s2mm_cmd.data.beats
+                wr_resp = RESP_OKAY
+                wr_state = if s2mm_cmd.data.beats == 0 { .Done } else { .Start }
+            },
+            .Start => {
+                wr_len = wr_burst
+                wr_beats = wr_burst
+                aw_pend = true
+                wr_state = .Burst
+            },
+            .Burst => {
+                let beats_after = if m.w.fire() { wr_beats -% 1 } else { wr_beats }
+                let aw_done = !aw_pend or m.aw.fire()
+                if m.aw.fire() { aw_pend = false }
+                wr_beats = beats_after
+                if aw_done and beats_after == 0 { wr_state = .Resp }
+            },
+            .Resp => if m.b.fire() {
+                if m.b.data.resp != RESP_OKAY { wr_resp = m.b.data.resp }
+                let left_after = (wr_left -% wr_len) as uint<LenW>
+                wr_addr = wr_addr +% ((wr_len as uint<AW>) << Shift)
+                wr_left = left_after
+                wr_state = if left_after == 0 { .Done } else { .Start }
+            },
+            .Done => wr_state = .Idle,
+        }
+    }
+
+    property ar_held { always (m.ar.valid and !m.ar.ready) |=> m.ar.valid and stable(m.ar.data) }
+    property aw_held { always (m.aw.valid and !m.aw.ready) |=> m.aw.valid and stable(m.aw.data) }
+    property no_4k_crossing_rd {
+        always m.ar.valid |-> (m.ar.data.addr as uint<12>) + (((m.ar.data.len as uint<16>) + 1) << Shift) <= 4096
+    }
+    property no_4k_crossing_wr {
+        always m.aw.valid |-> (m.aw.data.addr as uint<12>) + (((m.aw.data.len as uint<16>) + 1) << Shift) <= 4096
+    }
+    property burst_len_limit { always m.ar.valid |-> m.ar.data.len < MaxBurst }
+}
+
+test "AxiDma MM2S reads a buffer into the stream" {
+    let dut = sim AxiDma<32, 32, 4>()
+    dut.reset()
+    dut.mm2s.ready = true
+    dut.m.ar.ready = false
+    dut.m.r.valid = false
+    dut.m.aw.ready = false
+    dut.m.w.ready = false
+    dut.m.b.valid = false
+    dut.s2mm_cmd.valid = false
+    dut.s2mm.valid = false
+    dut.mm2s_cmd = Stream { valid: true, data: DmaCmd { addr: 0x100, beats: 4 } }
+    dut.step()
+    dut.mm2s_cmd.valid = false
+    dut.step_until(dut.m.ar.valid, max: 10)
+    expect dut.m.ar.data.addr == 0x100 and dut.m.ar.data.len == 3
+    expect dut.m.ar.data.size == 2 and dut.m.ar.data.burst == BURST_INCR
+    dut.step(2)
+    expect dut.m.ar.valid and dut.m.ar.data.addr == 0x100   // held until ready
+    dut.m.ar.ready = true
+    dut.step()
+    dut.m.ar.ready = false
+    for i in 0..4 {
+        dut.m.r.valid = true
+        dut.m.r.data = Axi4R { id: 0, data: 0xA0 + i, resp: RESP_OKAY, last: i == 3 }
+        dut.settle()
+        expect dut.mm2s.valid and dut.mm2s.data == 0xA0 + i
+        expect dut.mm2s.last == (i == 3)
+        expect !dut.mm2s_done.valid
+        dut.step()
+    }
+    dut.m.r.valid = false
+    dut.settle()
+    expect dut.mm2s_done.valid and dut.mm2s_done.data == RESP_OKAY
+    dut.step()
+    expect !dut.mm2s_done.valid and dut.mm2s_cmd.ready
+}
+
+test "AxiDma splits bursts at a 4 KiB boundary" {
+    let dut = sim AxiDma<32, 32, 4>()
+    dut.reset()
+    dut.mm2s.ready = true
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.m.aw.ready = false
+    dut.m.w.ready = false
+    dut.m.b.valid = false
+    dut.s2mm_cmd.valid = false
+    dut.s2mm.valid = false
+    dut.mm2s_cmd = Stream { valid: true, data: DmaCmd { addr: 0xFF8, beats: 4 } }
+    dut.step()
+    dut.mm2s_cmd.valid = false
+    for (addr, len) in [(0xFF8, 1), (0x1000, 1)] {
+        dut.step_until(dut.m.ar.valid, max: 10)
+        expect dut.m.ar.data.addr == addr and dut.m.ar.data.len == len
+        dut.step()
+        for k in 0..2 {
+            dut.m.r.valid = true
+            dut.m.r.data = Axi4R { id: 0, data: k, resp: RESP_OKAY, last: k == 1 }
+            dut.settle()
+            expect dut.mm2s.last == (addr == 0x1000 and k == 1)
+            dut.step()
+        }
+        dut.m.r.valid = false
+    }
+    dut.settle()
+    expect dut.mm2s_done.valid
+}
+
+test "AxiDma MM2S reports an error response" {
+    let dut = sim AxiDma<32, 32, 4>()
+    dut.reset()
+    dut.mm2s.ready = true
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.m.aw.ready = false
+    dut.m.w.ready = false
+    dut.m.b.valid = false
+    dut.s2mm_cmd.valid = false
+    dut.s2mm.valid = false
+    dut.mm2s_cmd = Stream { valid: true, data: DmaCmd { addr: 0x0, beats: 2 } }
+    dut.step()
+    dut.mm2s_cmd.valid = false
+    dut.step_until(dut.m.ar.valid, max: 10)
+    dut.step()
+    for k in 0..2 {
+        dut.m.r.valid = true
+        dut.m.r.data = Axi4R { id: 0, data: 0, resp: if k == 0 { RESP_SLVERR } else { RESP_OKAY }, last: k == 1 }
+        dut.step()
+    }
+    dut.m.r.valid = false
+    dut.settle()
+    expect dut.mm2s_done.valid and dut.mm2s_done.data == RESP_SLVERR
+}
+
+test "AxiDma S2MM writes a stream to memory" {
+    let dut = sim AxiDma<32, 32, 4>()
+    dut.reset()
+    dut.mm2s_cmd.valid = false
+    dut.mm2s.ready = true
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.m.aw.ready = false
+    dut.m.w.ready = true
+    dut.m.b.valid = false
+    dut.s2mm.valid = false
+    dut.s2mm_cmd = Stream { valid: true, data: DmaCmd { addr: 0x200, beats: 3 } }
+    dut.step()
+    dut.s2mm_cmd.valid = false
+    dut.step_until(dut.m.aw.valid, max: 10)
+    expect dut.m.aw.data.addr == 0x200 and dut.m.aw.data.len == 2 and dut.m.aw.data.size == 2
+    // W beats flow before the AW handshake
+    for i in 0..3 {
+        dut.s2mm = Axi4Stream { valid: true, data: 0x10 + i, keep: 0b1111, last: i == 2, user: 0 }
+        dut.settle()
+        expect dut.m.w.valid and dut.s2mm.ready
+        expect dut.m.w.data.data == 0x10 + i and dut.m.w.data.strb == 0b1111
+        expect dut.m.w.data.last == (i == 2)
+        dut.step()
+    }
+    dut.s2mm.valid = false
+    dut.settle()
+    expect !dut.m.w.valid and !dut.s2mm.ready
+    expect dut.m.aw.valid
+    dut.m.aw.ready = true
+    dut.step()
+    dut.m.aw.ready = false
+    dut.m.b.valid = true
+    dut.m.b.data = Axi4B { id: 0, resp: RESP_OKAY }
+    dut.step()
+    dut.m.b.valid = false
+    dut.settle()
+    expect dut.s2mm_done.valid and dut.s2mm_done.data == RESP_OKAY
+}
+
+test "AxiDma zero-length commands complete immediately" {
+    let dut = sim AxiDma<32, 32, 4>()
+    dut.reset()
+    dut.mm2s.ready = true
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.m.aw.ready = true
+    dut.m.w.ready = true
+    dut.m.b.valid = false
+    dut.s2mm.valid = false
+    dut.mm2s_cmd = Stream { valid: true, data: DmaCmd { addr: 0x40, beats: 0 } }
+    dut.s2mm_cmd = Stream { valid: true, data: DmaCmd { addr: 0x80, beats: 0 } }
+    dut.step()
+    dut.mm2s_cmd.valid = false
+    dut.s2mm_cmd.valid = false
+    expect dut.mm2s_done.valid and dut.s2mm_done.valid
+    expect !dut.m.ar.valid and !dut.m.aw.valid
+}

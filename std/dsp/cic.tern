@@ -1,0 +1,198 @@
+package std::dsp
+
+/// Direction of the rate change of a [Cic] filter.
+pub enum CicMode {
+    /// Integrators at the input rate, combs at input rate / R: one output per R inputs.
+    Decimate,
+    /// Combs at the input rate, integrators at R times that: R outputs per input.
+    Interpolate,
+}
+
+/// Cascaded integrator-comb filter (Hogenauer), differential delay 1.
+///
+/// The generic order follows the spec listing `Cic<Stages, R>`; the sample
+/// type `T` (read as two's complement) comes third and defaults to `s16`.
+///
+/// * `.Decimate` (default): accepts one sample per cycle (`in.ready` is
+///   always high) and emits one sample per `R` input samples. DC gain is
+///   `R^Stages`.
+/// * `.Interpolate`: accepts one sample, then emits `R` samples on `R`
+///   consecutive cycles; `in.ready` is low while a burst is in progress
+///   (except on its last cycle, so back-to-back bursts run at full rate).
+///   DC gain is `R^(Stages - 1)`.
+/// * Arithmetic is modular in `OW = T::WIDTH + Stages · clog2(R)` bits, the
+///   Hogenauer register width, so internal wrap-around cancels exactly and
+///   the output is the exact filter result. Scale it down with a shift.
+/// * Output is registered: `LATENCY` = 1 from the input (or burst) cycle
+///   that produces an output to that output.
+pub module Cic<Stages: uint, R: uint, T: type = s16, Mode: CicMode = .Decimate>
+where Stages >= 1, Stages <= 8, R >= 2
+{
+    /// Cycles from the cycle that produces an output to `out.valid`.
+    pub const LATENCY: uint = 1
+    const SW: uint = T::WIDTH
+    /// Register growth in bits (exact for power-of-two R, an upper bound otherwise).
+    pub const GROWTH: uint = Stages * clog2(R)
+    /// Output width.
+    pub const OW: uint = SW + GROWTH
+
+    /// Clock.
+    in clk: clock
+    /// Reset: clears integrators, combs and the rate counter.
+    in rst: reset
+    /// Input samples.
+    in in: Stream<T>
+    /// Output samples at the converted rate, full precision.
+    out out: Valid<sint<OW>>
+
+    reg phase: uint<clog2(R)> = 0
+    reg result: sint<OW> = 0
+    reg result_valid: bool = false
+    reg integ: [sint<OW>; Stages] = all0
+    reg dly: [sint<OW>; Stages] = all0
+    let x = (bits(in.data) as sint<SW>) as sint<OW>
+    let last_phase = phase == R - 1
+
+    if Mode == .Decimate {
+        in.ready = true
+        let tick = in.valid and last_phase
+        // Comb section, evaluated once per R inputs on the newest integrator value.
+        var cv: [sint<OW>; Stages + 1]
+        comb {
+            cv[0] = integ[Stages - 1]
+            for k in 0..Stages { cv[k + 1] = cv[k] -% dly[k] }
+        }
+        on clk {
+            result_valid = tick
+            if in.valid {
+                // Pipelined integrators: each stage adds the previous stage's
+                // registered value (a pure delay, which a CIC tolerates).
+                integ[0] = integ[0] +% x
+                for k in 1..Stages { integ[k] = integ[k] +% integ[k - 1] }
+                phase = if last_phase { 0 } else { phase +% 1 }
+            }
+            if tick {
+                for k in 0..Stages { dly[k] = cv[k] }
+                result = cv[Stages]
+            }
+        }
+        /// Exactly one output per R accepted inputs, one cycle after the R-th.
+        property one_output_per_r_inputs {
+            always out.valid == past(in.valid and last_phase, 1)
+        }
+    } else {
+        reg busy: bool = false
+        reg pulse: sint<OW> = 0
+        in.ready = !busy or last_phase
+        // Comb section at the input rate.
+        var cv: [sint<OW>; Stages + 1]
+        comb {
+            cv[0] = x
+            for k in 0..Stages { cv[k + 1] = cv[k] -% dly[k] }
+        }
+        // Zero stuffing: the comb output enters the integrators on the first
+        // cycle of a burst, zero on the other R - 1.
+        let inject: sint<OW> = if phase == 0 { pulse } else { 0 }
+        var iv: [sint<OW>; Stages + 1]
+        comb {
+            iv[0] = inject
+            for k in 0..Stages { iv[k + 1] = integ[k] +% iv[k] }
+        }
+        on clk {
+            result_valid = busy
+            if busy {
+                for k in 0..Stages { integ[k] = iv[k + 1] }
+                result = iv[Stages]
+                phase = if last_phase { 0 } else { phase +% 1 }
+                if last_phase { busy = false }
+            }
+            if in.fire() {
+                for k in 0..Stages { dly[k] = cv[k] }
+                pulse = cv[Stages]
+                busy = true
+                phase = 0
+            }
+        }
+        /// Outputs appear exactly on the cycles after a burst cycle.
+        property output_follows_burst {
+            always out.valid == past(busy, 1)
+        }
+        /// No input is accepted in the middle of a burst.
+        property no_input_mid_burst {
+            always (busy and !last_phase) |-> !in.ready
+        }
+    }
+
+    out.valid = result_valid
+    out.data = result
+
+    /// The rate counter never leaves 0..R-1.
+    property phase_in_range {
+        always phase < R
+    }
+}
+
+test "cic decimator emits one sample per R inputs" {
+    let dut = sim Cic<1, 4>()
+    dut.reset()
+    var outputs = 0
+    for _ in 0..40 {
+        dut.in = Stream { valid: true, data: 1 }
+        expect dut.in.ready
+        dut.step()
+        if dut.out.valid { outputs = outputs + 1 }
+    }
+    expect outputs == 10
+}
+
+test "cic decimator DC gain is R^Stages" {
+    let dut = sim Cic<2, 4>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: 1 }
+    dut.step(60)
+    dut.step_until(dut.out.valid, max: 8)
+    expect dut.out.data == 16
+}
+
+test "cic decimator handles negative input and gaps" {
+    let dut = sim Cic<3, 2, s8>()
+    dut.reset()
+    for _ in 0..64 {
+        dut.in = Stream { valid: true, data: -3 }
+        dut.step()
+        dut.in.valid = false
+        dut.step()
+    }
+    dut.in.valid = true
+    dut.step_until(dut.out.valid, max: 8)
+    expect dut.out.data == -3 * 8
+}
+
+test "cic interpolator emits R samples per input with gain R^(Stages-1)" {
+    let dut = sim Cic<2, 4, s16, .Interpolate>()
+    dut.reset()
+    var outputs = 0
+    for _ in 0..80 {
+        dut.in = Stream { valid: true, data: 1 }
+        dut.step()
+        if dut.out.valid { outputs = outputs + 1 }
+    }
+    expect outputs >= 76
+    expect dut.out.valid and dut.out.data == 4
+}
+
+test "cic interpolator stalls the input during a burst" {
+    let dut = sim Cic<1, 4, s16, .Interpolate>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: 5 }
+    expect dut.in.ready
+    dut.step()
+    dut.in.valid = false
+    expect !dut.in.ready
+    dut.step(2)
+    expect !dut.in.ready
+    dut.step()
+    expect dut.in.ready           // last cycle of the burst
+    // one-stage interpolator is a sample-and-hold: four copies of the input
+    expect dut.out.valid and dut.out.data == 5
+}

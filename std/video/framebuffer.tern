@@ -1,0 +1,115 @@
+package std::video
+
+/// A pixel write into a [Framebuffer]: coordinates and value.
+pub struct PixelWrite<T: type, XW: uint, YW: uint> {
+    x: uint<XW>,
+    y: uint<YW>,
+    pixel: T,
+}
+
+/// A pixel read address for a [Framebuffer].
+pub struct PixelAddr<XW: uint, YW: uint> {
+    x: uint<XW>,
+    y: uint<YW>,
+}
+
+/// Frame buffer of `W` x `H` pixels of type `T` in one simple-dual-port RAM.
+///
+/// * Write port `in`: one pixel per cycle; `in.ready` is always high.
+/// * Read port `rd` -> `pixel`: synchronous, `LATENCY` = 1. Drive `rd` from a
+///   [VgaTiming] (`x`, `y` truncated to `XW`/`YW`, `valid` = `active`) and
+///   delay the syncs by one cycle to stay aligned.
+/// * Addressing is `y ++ x` with `x` padded to a power of two, so no
+///   multiplier is needed and every index is in range; the RAM therefore has
+///   `2^(clog2 W + clog2 H)` entries (e.g. 1024 x 512 for 640 x 480).
+///   Coordinates outside W x H address unused padding.
+/// * Writes and reads may happen in the same cycle; reading the pixel being
+///   written returns the old value (`rdw: .OldData`).
+/// * Contents are not reset.
+pub module Framebuffer<W: uint, H: uint, T: type>
+where W >= 2, H >= 2
+{
+    /// Read latency in cycles.
+    pub const LATENCY: uint = 1
+    /// Width of an x coordinate.
+    pub const XW: uint = clog2(W)
+    /// Width of a y coordinate.
+    pub const YW: uint = clog2(H)
+    /// Number of RAM entries (with padding).
+    pub const DEPTH: uint = 1 << (XW + YW)
+
+    /// Clock (normally the pixel clock; cross with std::cdc::AsyncFifo to write from another domain).
+    in clk: clock
+    /// Reset (affects only the read-valid pipeline, not the contents).
+    in rst: reset
+    /// Pixel writes.
+    in in: Stream<PixelWrite<T, XW, YW>>
+    /// Read address; `valid` requests a pixel.
+    in rd: Valid<PixelAddr<XW, YW>>
+    /// The requested pixel, `LATENCY` cycles after `rd`.
+    out pixel: Valid<T>
+
+    mem buf: [T; DEPTH]
+    reg rd_valid: bool = false
+
+    in.ready = true
+    let rdata = buf.read(rd.data.y ++ rd.data.x, rdw: .OldData)
+
+    on clk {
+        if in.valid { buf[in.data.y ++ in.data.x] = in.data.pixel }
+        rd_valid = rd.valid
+    }
+
+    pixel.valid = rd_valid
+    pixel.data = rdata
+
+    /// Every read request is answered exactly one cycle later.
+    property read_latency {
+        always pixel.valid == past(rd.valid, 1)
+    }
+}
+
+test "framebuffer reads back written pixels" {
+    let dut = sim Framebuffer<8, 4, u8>()
+    dut.reset()
+    dut.rd.valid = false
+    for (x, y, v) in [(0, 0, 0x11), (7, 0, 0x22), (3, 2, 0x33), (7, 3, 0x44)] {
+        dut.in = Stream { valid: true, data: PixelWrite { x: x, y: y, pixel: v } }
+        dut.step()
+    }
+    dut.in.valid = false
+    for (x, y, v) in [(0, 0, 0x11), (7, 0, 0x22), (3, 2, 0x33), (7, 3, 0x44)] {
+        dut.rd = Valid { valid: true, data: PixelAddr { x: x, y: y } }
+        dut.step()
+        expect dut.pixel.valid and dut.pixel.data == v
+    }
+    dut.rd.valid = false
+    dut.step()
+    expect !dut.pixel.valid
+}
+
+test "framebuffer read during write returns the old pixel" {
+    let dut = sim Framebuffer<4, 4, u8>()
+    dut.reset()
+    dut.rd.valid = false
+    dut.in = Stream { valid: true, data: PixelWrite { x: 1, y: 1, pixel: 5 } }
+    dut.step()
+    dut.in = Stream { valid: true, data: PixelWrite { x: 1, y: 1, pixel: 9 } }
+    dut.rd = Valid { valid: true, data: PixelAddr { x: 1, y: 1 } }
+    dut.step()
+    expect dut.pixel.data == 5
+    dut.in.valid = false
+    dut.step()
+    expect dut.pixel.data == 9
+}
+
+test "framebuffer write port never stalls" {
+    let dut = sim Framebuffer<4, 4, Rgb565>()
+    dut.reset()
+    dut.rd.valid = false
+    dut.in = Stream { valid: true, data: PixelWrite { x: 2, y: 3, pixel: Rgb565 { r: 1, g: 2, b: 3 } } }
+    for _ in 0..10 {
+        expect dut.in.ready
+        dut.step()
+    }
+}

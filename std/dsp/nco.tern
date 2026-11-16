@@ -1,0 +1,179 @@
+package std::dsp
+
+use std::math::widen_signed
+
+/// One sine/cosine sample pair produced by an [Nco].
+pub struct SinCos<OW: uint> {
+    sin: sint<OW>,
+    cos: sint<OW>,
+}
+
+/// Quarter-wave sine table with a half-step offset:
+/// entry k = round(amp · sin(π/2 · (k + 1/2) / N)), amp = 2^(OW-1) - 1.
+/// The half-step offset makes the table exactly mirror-symmetric, so the
+/// other three quadrants are reproduced without an off-by-one.
+pub const fn quarter_sine<N: uint, OW: uint>() -> [uint<OW - 1>; N] {
+    var t: [uint<OW - 1>; N]
+    let amp = (1 << (OW - 1)) - 1
+    for k in 0..N {
+        t[k] = ((sin_quarter_q60(2 * k + 1, 2 * N) * amp + ONE_Q60 / 2) / ONE_Q60) as uint<OW - 1>
+    }
+    t
+}
+
+/// Numerically controlled oscillator (direct digital synthesis).
+///
+/// * A `W`-bit phase accumulator advances by `phase_inc` on every cycle with
+///   `en` high: f_out = f_clk · phase_inc / 2^W (for `en` always high).
+/// * The top `LutBits` bits of `phase + phase_offset` address a sine ROM that
+///   stores one quarter wave (`2^(LutBits-2)` entries of `OW - 1` bits, built
+///   at elaboration by [quarter_sine]); quadrant symmetry rebuilds the full
+///   wave. Cosine is the same ROM read a quarter turn ahead (a second read
+///   port).
+/// * Amplitude is ±(2^(OW-1) - 1). Because the table is sampled at half-step
+///   offsets, phase 0 gives a small positive value (amp · sin(π / 2^LutBits)),
+///   not exactly 0. Phase truncation (no dithering) limits the spurious-free
+///   dynamic range to about 6 dB per LutBits bit.
+/// * Each output sample is for the phase before the increment of the same
+///   `en` cycle. `LATENCY` = 2 (ROM read, sign stage).
+pub module Nco<W: uint = 32, LutBits: uint = 10, OW: uint = 16>
+where W >= LutBits, LutBits >= 3, OW >= 4
+{
+    /// Cycles from an `en` cycle to its output sample.
+    pub const LATENCY: uint = 2
+    /// Entries in the quarter-wave ROM.
+    pub const QUARTER: uint = 1 << (LutBits - 2)
+
+    /// Clock.
+    in clk: clock
+    /// Reset: phase accumulator back to 0.
+    in rst: reset
+    /// Phase increment per enabled cycle (the frequency tuning word).
+    in phase_inc: uint<W>
+    /// Phase offset added before the lookup (phase modulation, I/Q offset).
+    in phase_offset: uint<W>
+    /// Advance the phase and produce one sample this cycle.
+    in en: bool
+    /// Sine and cosine of the phase, `LATENCY` cycles after `en`.
+    out out: Valid<SinCos<OW>>
+    /// Current value of the phase accumulator.
+    out phase: uint<W>
+
+    #[ram(block)] mem rom: [uint<OW - 1>; QUARTER] = quarter_sine<QUARTER, OW>()
+
+    // ROM index of a phase: quadrants 1 and 3 read the table backwards.
+    fn rom_index(p: uint<W>) -> uint<LutBits - 2> {
+        let k = p[W - 3:W - LutBits]
+        if p[W - 2] { ~k } else { k }
+    }
+
+    fn apply_sign(mag: uint<OW - 1>, negative: bool) -> sint<OW> {
+        let v = widen_signed(mag)
+        if negative { (-v) as sint<OW> } else { v }
+    }
+
+    reg acc: uint<W> = 0
+    let p_sin = acc +% phase_offset
+    let p_cos = p_sin +% (1u<W> << (W - 2))
+    let mag_sin = rom.read(rom_index(p_sin))
+    let mag_cos = rom.read(rom_index(p_cos))
+
+    reg neg_sin: bool = false
+    reg neg_cos: bool = false
+    reg read_valid: bool = false
+    reg sin_out: sint<OW> = 0
+    reg cos_out: sint<OW> = 0
+    reg out_valid: bool = false
+
+    on clk {
+        if en { acc = acc +% phase_inc }
+        read_valid = en
+        neg_sin = p_sin[W - 1]
+        neg_cos = p_cos[W - 1]
+        out_valid = read_valid
+        sin_out = apply_sign(mag_sin, neg_sin)
+        cos_out = apply_sign(mag_cos, neg_cos)
+    }
+
+    out.valid = out_valid
+    out.data = SinCos { sin: sin_out, cos: cos_out }
+    phase = acc
+
+    /// One output sample per enabled cycle, LATENCY cycles later.
+    property latency_is_fixed {
+        always out.valid == past(en, LATENCY)
+    }
+    /// The phase only moves when enabled.
+    property phase_holds_when_disabled {
+        always !en |=> stable(acc)
+    }
+}
+
+test "quarter_sine table endpoints" {
+    let t = quarter_sine<64, 12>()
+    expect t[0] == 25        // round(2047 · sin(π/256))
+    expect t[63] == 2047     // round(2047 · cos(π/256))
+    expect t[31] < t[32]     // monotonic across the middle
+}
+
+test "nco quarter-turn steps give the four cardinal points" {
+    let dut = sim Nco<16, 8, 12>()
+    dut.reset()
+    dut.phase_inc = 0x4000
+    dut.phase_offset = 0
+    dut.en = true
+    dut.step(2)
+    // phase 0°
+    expect dut.out.valid
+    expect dut.out.data.sin == 25 and dut.out.data.cos == 2047
+    dut.step()
+    // 90°
+    expect dut.out.data.sin == 2047 and dut.out.data.cos == -25
+    dut.step()
+    // 180°
+    expect dut.out.data.sin == -25 and dut.out.data.cos == -2047
+    dut.step()
+    // 270°
+    expect dut.out.data.sin == -2047 and dut.out.data.cos == 25
+}
+
+test "nco sine sums to zero over a whole period" {
+    let dut = sim Nco<16, 8, 12>()
+    dut.reset()
+    dut.phase_inc = 0x1000       // 16 samples per period
+    dut.phase_offset = 0
+    dut.en = true
+    dut.step(2)
+    var sum = 0
+    for _ in 0..16 {
+        expect dut.out.valid
+        sum = sum + dut.out.data.sin
+        dut.step()
+    }
+    expect sum == 0
+}
+
+test "nco holds its phase while disabled" {
+    let dut = sim Nco<16, 8, 12>()
+    dut.reset()
+    dut.phase_inc = 0x0123
+    dut.phase_offset = 0
+    dut.en = true
+    dut.step(3)
+    let p = dut.phase
+    expect p == 3 * 0x0123
+    dut.en = false
+    dut.step(5)
+    expect dut.phase == p
+    expect !dut.out.valid
+}
+
+test "nco phase offset shifts the output" {
+    let dut = sim Nco<16, 8, 12>()
+    dut.reset()
+    dut.phase_inc = 0
+    dut.phase_offset = 0x4000    // +90°: sin output becomes cos
+    dut.en = true
+    dut.step(2)
+    expect dut.out.data.sin == 2047
+}

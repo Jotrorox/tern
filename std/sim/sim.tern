@@ -1,0 +1,587 @@
+package std::sim
+
+// std::sim: test-bench components. Nothing here is meant for synthesis.
+//
+// `rand<T>()`, `log(...)` and `dut.dump(...)` are compiler intrinsics usable in
+// any `test` block. The modules below are ordinary Tern modules written to be
+// instantiated next to a design under test inside a small bench module that
+// the test then simulates:
+//
+//     module Bench {
+//         in clk: clock
+//         in rst: reset
+//         out done: bool
+//         out errors: u32
+//         let drv = StreamDriver<u8, 4, [1, 2, 3, 4]>(en: true)
+//         let dut = MyFilter(in: drv.out)
+//         let sb  = Scoreboard<u8, 8>(expected: ..., actual: ...)
+//         done = drv.done
+//         errors = sb.mismatched
+//     }
+//     test "filter" { let tb = sim Bench(); tb.reset(); tb.step_until(tb.done, max: 100); expect tb.errors == 0 }
+//
+// Checkers report problems in two ways: as counters on their outputs, and (with
+// `Strict` = true, the default) as an immediate `assert` that stops the test at
+// the offending cycle. Use `Strict: false` to inspect failures yourself.
+//
+// Files: sim.tern (StreamDriver, StreamMonitor, Scoreboard, ExpectEventually,
+// ClockModel, lfsr16_next), axi.tern (Axi4LiteDriver, Axi4StreamDriver),
+// models.tern (UartModel, SpiModel, I2cModel).
+
+/// Next state of the 16-bit maximal-length Galois LFSR x^16 + x^14 + x^13 + x^11 + 1
+/// (taps 0xB400). Used by the drivers for reproducible pseudo-random gaps;
+/// a zero state stays zero, so seed with a non-zero value.
+pub fn lfsr16_next(x: u16) -> u16 {
+    if x[0] { (x >> 1) ^ 0xB400 } else { x >> 1 }
+}
+
+/// Plays a compile-time list of items onto a stream, in order, honouring
+/// backpressure.
+///
+/// * While `en` is high, `out.valid` is raised for each item in turn; once
+///   raised it stays high with stable data until the beat is accepted (the
+///   Stream rule every std component relies on).
+/// * `Throttle` (0 ..= 15) inserts pseudo-random idle cycles between items:
+///   before each item the driver waits while a 4-bit LFSR sample is below
+///   `Throttle`, i.e. with probability about Throttle/16 per cycle. The
+///   sequence is fixed by `Seed`, so a failure reproduces exactly.
+/// * `sent` counts accepted items; `done` is high once all `N` were accepted.
+pub module StreamDriver<T: type, N: uint, Items: [T; N], Throttle: uint = 0, Seed: uint = 0xACE1>
+where N >= 1, Throttle <= 15, Seed != 0, Seed < 65536
+{
+    /// Clock.
+    in clk: clock
+    /// Reset: restart from the first item.
+    in rst: reset
+    /// Start/continue offering items.
+    in en: bool
+    /// The driven stream.
+    out out: Stream<T>
+    /// Number of items accepted so far.
+    out sent: uint<clog2(N + 1)>
+    /// All items have been accepted.
+    out done: bool
+
+    reg idx: uint<clog2(N + 1)> = 0
+    reg valid_q: bool = false
+    reg lfsr: u16 = Seed
+
+    var item: T = all0
+    comb {
+        for i in 0..N {
+            if idx == i { item = Items[i] }
+        }
+    }
+
+    let gap = lfsr[3:0] < Throttle
+    let next_idx = if out.fire() { idx +% 1 } else { idx }
+
+    out.valid = valid_q
+    out.data = item
+    sent = idx
+    done = idx == N
+
+    on clk {
+        lfsr = lfsr16_next(lfsr)
+        idx = next_idx
+        if !valid_q or out.fire() {
+            valid_q = en and next_idx != N and !gap
+        }
+    }
+
+    /// Valid is held, with stable data, until the beat is accepted.
+    property holds_until_ready { always (out.valid and !out.ready) |=> out.valid and stable(out.data) }
+    /// Nothing is offered after the last item.
+    property silent_when_done { always done |-> !out.valid }
+}
+
+/// Passive stream monitor: observes a handshake without driving it, records
+/// the transferred beats and checks the Stream protocol.
+///
+/// * Connect `valid`, `ready` and `data` to the observed stream's fields (the
+///   monitor only has inputs, so it can tap any link).
+/// * `beat` repeats every transfer (valid and ready both high) as a Valid;
+///   `count` counts transfers; the first `Depth` beats are kept in `beats`
+///   (readable from a test by path, e.g. `tb.mon.beats[3]`).
+/// * `violations` counts protocol errors: `valid` dropped, or `data` changed,
+///   while a beat was offered and not yet accepted. With `Strict` each one
+///   also fails an assertion.
+pub module StreamMonitor<T: type, Depth: uint = 16, Strict: bool = true>
+where Depth.is_pow2()
+{
+    /// Clock.
+    in clk: clock
+    /// Reset: counters and record cleared.
+    in rst: reset
+    /// Observed `valid`.
+    in valid: bool
+    /// Observed `ready`.
+    in ready: bool
+    /// Observed `data`.
+    in data: T
+    /// Each transferred beat, as a one-cycle Valid.
+    out beat: Valid<T>
+    /// Number of transferred beats.
+    out count: u32
+    /// Number of protocol violations seen.
+    out violations: u32
+
+    reg beats: [T; Depth] = all0
+    reg wr: uint<clog2(Depth)> = 0
+    reg full: bool = false
+    reg count_q: u32 = 0
+    reg violations_q: u32 = 0
+    reg pending: bool = false          // a beat was offered and not accepted last cycle
+    reg pending_data: T = all0
+
+    let fire = valid and ready
+    let violation = pending and (!valid or data != pending_data)
+
+    beat = Valid { valid: fire, data: data }
+    count = count_q
+    violations = violations_q
+
+    on clk {
+        pending = valid and !ready
+        pending_data = data
+        if fire {
+            count_q = count_q +% 1
+            if !full {
+                beats[wr] = data
+                wr = wr +% 1
+                if wr == Depth - 1 { full = true }
+            }
+        }
+        if violation { violations_q = violations_q +% 1 }
+        assert !(Strict and violation), "StreamMonitor: valid dropped or data changed before ready"
+    }
+
+    /// `beat` is exactly the handshake.
+    property beat_is_handshake { always beat.valid == (valid and ready) }
+}
+
+/// In-order scoreboard: compares a stream of actual values against a stream
+/// of expected values.
+///
+/// * Every `expected` beat is queued (up to `Depth` outstanding); every
+///   `actual` beat is compared against the oldest queued value. When the queue
+///   is empty and both arrive in the same cycle they are compared directly.
+/// * `matched` / `mismatched` count comparisons; an `actual` beat with
+///   nothing to compare against counts as mismatched (`unexpected` pulses).
+///   On a mismatch `last_expected`/`last_actual` keep the two values.
+/// * `pending` is the number of expected values still waiting; `ok` is high
+///   when nothing mismatched and nothing is pending: check it at the end of a
+///   test. `overflow` is sticky: an expected value was dropped (queue full).
+/// * With `Strict`, a mismatch or an unexpected value also fails an assertion
+///   at that cycle.
+pub module Scoreboard<T: type, Depth: uint = 16, Strict: bool = true>
+where Depth.is_pow2()
+{
+    /// Clock.
+    in clk: clock
+    /// Reset: queue and counters cleared.
+    in rst: reset
+    /// Reference values, in order.
+    in expected: Valid<T>
+    /// Values produced by the design under test, in order.
+    in actual: Valid<T>
+    /// Comparisons that matched.
+    out matched: u32
+    /// Comparisons that failed, including unexpected values.
+    out mismatched: u32
+    /// Expected values not yet compared.
+    out pending: uint<clog2(Depth) + 1>
+    /// One-cycle pulse: an actual value arrived with nothing to compare against.
+    out unexpected: bool
+    /// Sticky: an expected value was dropped because the queue was full.
+    out overflow: bool
+    /// No mismatch so far and nothing pending.
+    out ok: bool
+    /// Expected value of the most recent mismatch.
+    out last_expected: T
+    /// Actual value of the most recent mismatch.
+    out last_actual: T
+
+    reg q: [T; Depth] = all0
+    reg rd: uint<clog2(Depth)> = 0
+    reg wr: uint<clog2(Depth)> = 0
+    reg n: uint<clog2(Depth) + 1> = 0
+    reg matched_q: u32 = 0
+    reg mismatched_q: u32 = 0
+    reg overflow_q: bool = false
+    reg last_expected_q: T = all0
+    reg last_actual_q: T = all0
+
+    let empty = n == 0
+    let full = n == Depth
+    let reference = if empty { expected.data } else { q[rd] }
+    let comparable = !empty or expected.valid
+    let unexpected_now = actual.valid and !comparable
+    let mismatch = actual.valid and comparable and actual.data != reference
+    let pop = actual.valid and !empty
+    let push_req = expected.valid and !(actual.valid and empty)
+    let push = push_req and (!full or pop)
+
+    matched = matched_q
+    mismatched = mismatched_q
+    pending = n
+    unexpected = unexpected_now
+    overflow = overflow_q
+    ok = mismatched_q == 0 and n == 0 and !overflow_q
+    last_expected = last_expected_q
+    last_actual = last_actual_q
+
+    on clk {
+        if push {
+            q[wr] = expected.data
+            wr = wr +% 1
+        }
+        if pop { rd = rd +% 1 }
+        n = if push and !pop { n +% 1 } else if pop and !push { n -% 1 } else { n }
+        if push_req and !push { overflow_q = true }
+        if actual.valid and comparable and !mismatch { matched_q = matched_q +% 1 }
+        if mismatch or unexpected_now {
+            mismatched_q = mismatched_q +% 1
+            last_expected_q = reference
+            last_actual_q = actual.data
+        }
+        assert !(Strict and (mismatch or unexpected_now)), "Scoreboard: actual value differs from expected"
+    }
+
+    /// The queue never holds more than Depth values.
+    property bounded { always pending <= Depth }
+}
+
+/// Checks that `cond` becomes true within `Max` cycles after each `trigger`.
+///
+/// * A `trigger` while idle opens a window of `Max` (at least 2) cycles, counting the
+///   trigger cycle as the first; `cond` in any cycle of the window closes it
+///   successfully (`cond` in the trigger cycle itself counts). Triggers while
+///   a window is open are ignored.
+/// * If the window expires, `failed` becomes high (sticky) and, with `Strict`,
+///   an assertion fails at that cycle.
+/// * The same check is available directly in a test as
+///   `dut.step_until(cond, max: n)`, which fails at `n`; use this module when
+///   the check belongs inside a bench, next to the design.
+pub module ExpectEventually<Max: uint, Strict: bool = true>
+where Max >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Reset: no window open, no failure.
+    in rst: reset
+    /// Opens a window.
+    in trigger: bool
+    /// The awaited condition.
+    in cond: bool
+    /// A window is open and `cond` has not been seen yet.
+    out waiting: bool
+    /// Sticky: a window expired without `cond`.
+    out failed: bool
+
+    reg open: bool = false
+    reg left: uint<clog2(Max + 1)> = 0      // cycles left in the window, after this one
+    reg failed_q: bool = false
+
+    let expire = open and !cond and left == 0
+
+    waiting = open and !cond
+    failed = failed_q
+
+    on clk {
+        if open {
+            if cond { open = false } else if left == 0 { open = false; failed_q = true } else { left = left -% 1 }
+        } else if trigger and !cond {
+            open = true
+            left = Max - 2
+        }
+        assert !(Strict and expire), "ExpectEventually: condition not reached in time"
+    }
+
+    /// Once failed, always failed.
+    property failure_sticky { always failed |=> failed }
+}
+
+/// Generated clock for multi-clock (CDC) tests, with programmable period,
+/// phase offset and pseudo-random jitter.
+///
+/// * `clk` is the simulation base clock and sets the time resolution (for
+///   example 1 GHz for 1 ns steps). `clk_out` toggles every `HalfPeriod`
+///   base cycles, plus a pseudo-random extra 0 ..= `Jitter` cycles per half
+///   period (fixed by `Seed`), so a design's two domains drift against each
+///   other the way real, unrelated clocks do.
+/// * `Phase` delays the first edge by that many base cycles (skew between two
+///   ClockModels driven from the same base clock).
+/// * `level` is the same waveform as a plain `bool`, and `rising` pulses in
+///   the base-clock cycle before `clk_out` rises (for scoreboards in the base
+///   domain).
+/// * Test-only: the output is a clock derived from logic, which is legal for
+///   simulation benches but never for synthesis (use std::target or std::clk).
+pub module ClockModel<HalfPeriod: uint, Jitter: uint = 0, Phase: uint = 0, Seed: uint = 0xACE1>
+where HalfPeriod >= 1, Jitter <= 15, Seed != 0, Seed < 65536
+{
+    const CW: uint = clog2(HalfPeriod + Jitter + Phase + 1)
+
+    /// Simulation base clock (time resolution).
+    in clk: clock
+    /// Reset: output low, phase delay restarted.
+    in rst: reset
+    /// Generated clock.
+    out clk_out: clock
+    /// The generated waveform as data.
+    out level: bool
+    /// High in the base cycle before each rising edge of `clk_out`.
+    out rising: bool
+
+    reg q: bool = false
+    reg cnt: uint<CW> = Phase
+    reg lfsr: u16 = Seed
+
+    let raw: uint<4> = lfsr[3:0]
+    let jitter_now: uint<CW> = if raw <= Jitter { raw } else { 0 }
+    let flip_now = cnt == 0
+
+    on clk {
+        lfsr = lfsr16_next(lfsr)
+        if flip_now {
+            q = !q
+            cnt = (HalfPeriod - 1) +% jitter_now
+        } else {
+            cnt = cnt -% 1
+        }
+    }
+
+    level = q
+    rising = flip_now and !q
+    clk_out = q as clock
+
+    /// A half period never exceeds HalfPeriod + Jitter base cycles.
+    property half_period_bounded { always cnt <= HalfPeriod + Jitter + Phase }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "lfsr16_next has period 65535" {
+    var x: u16 = 1
+    var n = 0
+    for _ in 0..65535 {
+        x = lfsr16_next(x)
+        n = n + 1
+        if x == 1 { expect n == 65535 }
+    }
+    expect x == 1
+}
+
+test "StreamDriver plays its items in order" {
+    let items = [10, 20, 30, 40]
+    let dut = sim StreamDriver<u8, 4, [10, 20, 30, 40]>()
+    dut.en = true
+    dut.reset()
+    dut.out.ready = true
+    var got = 0
+    for _ in 0..10 {
+        dut.settle()
+        if dut.out.valid {
+            expect dut.out.data == items[got]
+            got = got + 1
+        }
+        dut.step()
+    }
+    expect got == 4 and dut.done and dut.sent == 4
+    expect !dut.out.valid
+}
+
+test "StreamDriver holds data under backpressure" {
+    let dut = sim StreamDriver<u8, 3, [1, 2, 3]>()
+    dut.en = true
+    dut.reset()
+    dut.out.ready = false
+    dut.step(3)
+    expect dut.out.valid and dut.out.data == 1
+    dut.step(5)
+    expect dut.out.valid and dut.out.data == 1
+    dut.out.ready = true
+    dut.step()
+    expect dut.sent == 1 and dut.out.valid and dut.out.data == 2
+}
+
+test "StreamDriver throttle inserts gaps but delivers everything" {
+    let dut = sim StreamDriver<u8, 8, [0, 1, 2, 3, 4, 5, 6, 7], Throttle: 8>()
+    dut.en = true
+    dut.reset()
+    dut.out.ready = true
+    var idle = 0
+    var next = 0
+    for _ in 0..200 {
+        dut.settle()
+        if dut.out.valid {
+            expect dut.out.data == next
+            next = next + 1
+        } else if !dut.done {
+            idle = idle + 1
+        }
+        dut.step()
+    }
+    expect next == 8 and dut.done
+    expect idle > 0
+}
+
+test "StreamDriver waits for en" {
+    let dut = sim StreamDriver<u8, 2, [5, 6]>()
+    dut.en = false
+    dut.reset()
+    dut.out.ready = true
+    dut.step(10)
+    expect !dut.out.valid and dut.sent == 0
+    dut.en = true
+    dut.step_until(dut.done, max: 10)
+}
+
+test "StreamMonitor records beats" {
+    let dut = sim StreamMonitor<u8, 4>()
+    dut.reset()
+    for (v, r, d) in [(true, true, 7), (false, true, 0), (true, false, 8), (true, true, 8), (true, true, 9)] {
+        dut.valid = v
+        dut.ready = r
+        dut.data = d
+        dut.settle()
+        expect dut.beat.valid == (v and r)
+        dut.step()
+    }
+    expect dut.count == 3 and dut.violations == 0
+    expect dut.beats[0] == 7 and dut.beats[1] == 8 and dut.beats[2] == 9
+}
+
+test "StreamMonitor counts protocol violations" {
+    let dut = sim StreamMonitor<u8, 4, Strict: false>()
+    dut.reset()
+    dut.valid = true; dut.ready = false; dut.data = 1
+    dut.step()
+    dut.data = 2                                       // data changed before ready
+    dut.step()
+    dut.valid = false                                  // valid dropped before ready
+    dut.step()
+    expect dut.violations == 2
+}
+
+test "Scoreboard matches in order, with and without queueing" {
+    let dut = sim Scoreboard<u16, 4>()
+    dut.reset()
+    dut.actual.valid = false
+    for v in [1, 2, 3] {
+        dut.expected = Valid { valid: true, data: v }
+        dut.step()
+    }
+    dut.expected.valid = false
+    expect dut.pending == 3
+    for v in [1, 2, 3] {
+        dut.actual = Valid { valid: true, data: v }
+        dut.step()
+    }
+    dut.actual.valid = false
+    // same-cycle comparison with an empty queue
+    dut.expected = Valid { valid: true, data: 9 }
+    dut.actual = Valid { valid: true, data: 9 }
+    dut.step()
+    dut.expected.valid = false
+    dut.actual.valid = false
+    dut.step()
+    expect dut.matched == 4 and dut.mismatched == 0 and dut.pending == 0 and dut.ok
+}
+
+test "Scoreboard reports mismatches and unexpected values" {
+    let dut = sim Scoreboard<u16, 4, Strict: false>()
+    dut.reset()
+    dut.expected = Valid { valid: true, data: 5 }
+    dut.actual.valid = false
+    dut.step()
+    dut.expected.valid = false
+    dut.actual = Valid { valid: true, data: 6 }
+    dut.step()
+    expect dut.mismatched == 1 and dut.last_expected == 5 and dut.last_actual == 6
+    dut.actual = Valid { valid: true, data: 7 }
+    dut.settle()
+    expect dut.unexpected
+    dut.step()
+    dut.actual.valid = false
+    dut.step()
+    expect dut.mismatched == 2 and !dut.ok
+}
+
+test "Scoreboard flags overflow" {
+    let dut = sim Scoreboard<u8, 2, Strict: false>()
+    dut.reset()
+    dut.actual.valid = false
+    for v in [1, 2, 3] {
+        dut.expected = Valid { valid: true, data: v }
+        dut.step()
+    }
+    expect dut.overflow and dut.pending == 2 and !dut.ok
+}
+
+test "ExpectEventually passes when the condition arrives in time" {
+    let dut = sim ExpectEventually<Max: 4>()
+    dut.reset()
+    dut.cond = false
+    dut.trigger = true
+    dut.step()
+    dut.trigger = false
+    dut.step(2)
+    dut.cond = true                                    // 4th cycle of the window
+    dut.step()
+    dut.cond = false
+    dut.step(10)
+    expect !dut.failed and !dut.waiting
+}
+
+test "ExpectEventually fails when the window expires" {
+    let dut = sim ExpectEventually<Max: 4, Strict: false>()
+    dut.reset()
+    dut.cond = false
+    dut.trigger = true
+    dut.step()
+    dut.trigger = false
+    dut.step(2)
+    expect !dut.failed and dut.waiting
+    dut.step()
+    expect dut.failed
+    dut.cond = true
+    dut.step(3)
+    expect dut.failed                                  // sticky
+}
+
+test "ClockModel toggles every HalfPeriod base cycles" {
+    let dut = sim ClockModel<HalfPeriod: 3>()
+    dut.reset()
+    var last = dut.level
+    var edges = 0
+    for _ in 0..60 {
+        dut.step()
+        if dut.level != last { edges = edges + 1 }
+        last = dut.level
+    }
+    expect edges == 20
+}
+
+test "ClockModel jitter stays within bounds and Phase delays the first edge" {
+    let dut = sim ClockModel<HalfPeriod: 4, Jitter: 3, Phase: 10, Seed: 0x1234>()
+    dut.reset()
+    dut.step(10)
+    expect !dut.level
+    dut.step()
+    expect dut.level                                   // first edge after Phase cycles
+    var run = 0
+    var last = dut.level
+    for _ in 0..500 {
+        dut.step()
+        if dut.level == last {
+            run = run + 1
+        } else {
+            expect run + 1 >= 4 and run + 1 <= 7       // HalfPeriod ..= HalfPeriod + Jitter
+            run = 0
+        }
+        last = dut.level
+    }
+}

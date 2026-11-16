@@ -1,0 +1,661 @@
+package std::io
+
+// SD card in SPI mode.
+//
+// Supported subset (documented, deliberately small):
+// * Power-up: 80 clocks with CS_N high at SlowHz, then CMD0 (retried up to 16
+//   times), CMD8 (0x1AA, voltage check; an "illegal command" answer marks a
+//   v1 card), CMD55 + ACMD41 until the card leaves idle (HCS set for v2 cards,
+//   up to 4096 tries), CMD58 (OCR: CCS = block addressed SDHC/SDXC), and CMD16
+//   (512-byte blocks) for byte-addressed cards. Then the clock switches to
+//   FastHz.
+// * Single-block read (CMD17) and single-block write (CMD24) of 512 bytes.
+//   Block numbers are converted to byte addresses for SDSC cards.
+// * Every command frame carries a correct CRC7. Data CRC16 is not checked on
+//   reads and is sent as 0xFFFF on writes (CRC checking is off in SPI mode
+//   unless enabled with CMD59).
+// * Not supported: multi-block transfers, CMD59, CSD/CID/status reads, card
+//   detect and power control, MMC cards.
+//
+// The SD card responder used by the tests lives at the end of this file
+// (SdCardModel, not public).
+
+/// CRC7 (x^7 + x^3 + 1) over the first 40 bits of an SD command frame, MSB first.
+pub const fn sd_crc7(data: bit<40>) -> bit<7> {
+    var crc: bit<7> = 0
+    for i in 0..40 {
+        let fb = data[39 - i] != crc[6]
+        crc = (crc << 1) ^ (if fb { 0x09 } else { 0x00 })
+    }
+    crc
+}
+
+/// A complete 48-bit SD command frame: start bits `01`, command index,
+/// argument, CRC7 and end bit `1`; byte 0 is bits [47:40].
+pub fn sd_frame(idx: uint<6>, arg: u32) -> bit<48> {
+    let body = 0b01u2 ++ idx ++ arg
+    body ++ sd_crc7(body) ++ 1u1
+}
+
+/// A block request for [Sdio].
+pub struct SdCmd {
+    /// Write the block (data from `in`) instead of reading it (data on `out`).
+    write: bool,
+    /// Block number (512-byte units).
+    block: u32,
+}
+
+/// Status of [Sdio].
+pub enum SdError {
+    /// No error.
+    None,
+    /// CMD0 never answered "idle": no card, or not in SPI mode.
+    NoCard,
+    /// CMD8 echoed a wrong check pattern or voltage range.
+    BadVoltage,
+    /// An initialisation command was rejected.
+    InitFailed,
+    /// ACMD41 kept answering "idle".
+    InitTimeout,
+    /// CMD17/CMD24 was rejected (address error, ...); the card stays usable.
+    CmdRejected,
+    /// Read error token, or timeout waiting for a data token or for busy.
+    DataError,
+    /// The card rejected the written block (data response other than "accepted").
+    WriteRejected,
+}
+
+/// SD card controller in SPI mode (SPI mode 0): initialisation plus
+/// single-block reads and writes; see the subset at the top of this file.
+///
+/// * After reset it initialises the card on its own. `ready` goes high when
+///   the card can take block commands on `cmd`; `sdhc` tells the addressing
+///   mode. An initialisation failure is sticky (`error` != None, `ready` low)
+///   until reset; give the card >= 1 ms of power before releasing reset.
+/// * Read: `cmd` with `write = false`; the 512 bytes appear on `out` in order.
+///   SCK pauses between bytes while `out` is not ready, so the consumer may
+///   stall freely.
+/// * Write: `cmd` with `write = true`; 512 bytes are taken from `in` (SCK
+///   pauses while `in` is not valid), then the controller waits for the card's
+///   data response and busy phase.
+/// * `error` describes the last command; it is cleared when the next command
+///   is accepted. CmdRejected, DataError and WriteRejected return to `ready`.
+/// * Between commands CS_N is high and one byte of clocks is sent (Ncs).
+pub module Sdio<ClkHz: uint, SlowHz: uint = 400_000, FastHz: uint = 25_000_000>
+where SlowHz <= FastHz, SlowHz > 0
+{
+    /// Clock cycles per half SCK period during initialisation.
+    pub const SLOW_HALF: uint = ClkHz / (2 * SlowHz)
+    /// Clock cycles per half SCK period after initialisation.
+    pub const FAST_HALF: uint = ClkHz / (2 * FastHz)
+    static_assert(FAST_HALF >= 1, "FastHz must be at most ClkHz / 2")
+    static_assert(SlowHz <= 400_000, "SD cards must be initialised at 400 kHz or less")
+    const CMD0_TRIES: uint = 16
+    const ACMD41_TRIES: uint = 4095
+    const POLL_LIMIT: uint = 65535
+
+    /// Clock.
+    in clk: clock
+    /// Reset: restarts the initialisation.
+    in rst: reset
+    /// Block requests, accepted while `ready`.
+    in cmd: Stream<SdCmd>
+    /// Data of a block write, 512 bytes per request.
+    in in: Stream<u8>
+    /// Data of a block read, 512 bytes per request.
+    out out: Stream<u8>
+    /// Initialised and idle: `cmd` is accepted.
+    out ready: bool
+    /// Error of the initialisation or of the last command.
+    out error: SdError
+    /// The card is block addressed (SDHC/SDXC).
+    out sdhc: bool
+    /// SPI clock (mode 0: idles low).
+    out sck: bool
+    /// Master out (idles high).
+    out mosi: bool
+    /// Master in; should have a pull-up.
+    in miso: bool
+    /// Card select, active low.
+    out cs_n: bool
+
+    enum Step { Cmd0, Cmd8, Cmd55, Acmd41, Cmd58, Cmd16, Cmd17, Cmd24, Idle }
+    enum Phase { PowerUp, Gap, Frame, R1, Extra, Dispatch, Token, Data, Crc, WToken, WData, WCrc, WBusy, Idle, Fail }
+
+    // ---- byte engine: one SPI mode-0 byte, MSB first ----
+    reg bx_busy: bool = false
+    reg bx_sh: u8 = 0xFF
+    reg bx_rx: u8 = 0xFF
+    reg bx_cnt: uint<3> = 0
+    reg bx_tick: uint<clog2(SLOW_HALF + 1)> = 0
+    reg sck_q: bool = false
+    reg fast: bool = false
+    let half_max: uint<clog2(SLOW_HALF + 1)> = if fast { FAST_HALF - 1 } else { SLOW_HALF - 1 }
+    let bx_half = bx_tick == half_max
+
+    // ---- command sequencer ----
+    reg phase: Phase = .PowerUp
+    reg step: Step = .Cmd0
+    reg cnt: u16 = 0
+    reg tries: uint<12> = 0
+    reg frame: bit<48> = 0
+    reg r1: u8 = 0xFF
+    reg ext: u32 = 0
+    reg v2: bool = false
+    reg ccs: bool = false
+    reg err: SdError = .None
+    reg out_valid: bool = false
+    reg out_data: u8 = 0
+
+    cmd.ready = phase == .Idle and !bx_busy
+    in.ready = phase == .WData and !bx_busy and cnt != 512
+    out.valid = out_valid
+    out.data = out_data
+    ready = phase == .Idle
+    error = err
+    sdhc = ccs
+    sck = sck_q
+    mosi = bx_sh[7]
+    cs_n = phase in [.PowerUp, .Gap, .Idle, .Fail]
+
+    on clk {
+        // byte engine
+        bx_tick = if !bx_busy or bx_half { 0 } else { bx_tick +% 1 }
+        if bx_busy and bx_half {
+            sck_q = !sck_q
+            if !sck_q {
+                bx_rx = bx_rx[6:0] ++ (miso as uint<1>)          // rising edge: sample
+            } else if bx_cnt == 7 {
+                bx_busy = false                                  // 8th falling edge: done
+                bx_cnt = 0
+                bx_sh = 0xFF
+            } else {
+                bx_cnt = bx_cnt +% 1
+                bx_sh = bx_sh << 1                               // falling edge: next bit
+            }
+        }
+
+        if out.fire() { out_valid = false }
+
+        // Sequencer: runs whenever the engine is idle. `bx_rx` holds the
+        // card's answer to the byte sent last; "send b" is
+        // `bx_busy = true; bx_sh = b`.
+        if !bx_busy {
+            match phase {
+                .PowerUp => if cnt == 10 {
+                    cnt = 0
+                    step = .Cmd0
+                    frame = sd_frame(0, 0)
+                    phase = .Frame
+                } else {
+                    bx_busy = true; bx_sh = 0xFF
+                    cnt = cnt +% 1
+                },
+                .Gap => if cnt == 0 {
+                    bx_busy = true; bx_sh = 0xFF
+                    cnt = 1
+                } else {
+                    cnt = 0
+                    phase = if step == .Idle { .Idle } else { .Frame }
+                },
+                .Frame => if cnt == 6 {
+                    cnt = 0
+                    phase = .R1
+                } else {
+                    bx_busy = true; bx_sh = frame[47:40]
+                    frame = frame << 8
+                    cnt = cnt +% 1
+                },
+                .R1 => if cnt != 0 and !bx_rx[7] {
+                    r1 = bx_rx
+                    cnt = 0
+                    phase = if (step == .Cmd8 and bx_rx == 0x01) or step == .Cmd58 { .Extra } else { .Dispatch }
+                } else if cnt == 9 {
+                    r1 = 0xFF                                     // no response (Ncr > 8)
+                    cnt = 0
+                    phase = .Dispatch
+                } else {
+                    bx_busy = true; bx_sh = 0xFF
+                    cnt = cnt +% 1
+                },
+                .Extra => {
+                    // the four bytes after R1 of R3 (CMD58) / R7 (CMD8)
+                    if cnt != 0 { ext = ext[23:0] ++ bx_rx }
+                    if cnt == 4 {
+                        cnt = 0
+                        phase = .Dispatch
+                    } else {
+                        bx_busy = true; bx_sh = 0xFF
+                        cnt = cnt +% 1
+                    }
+                },
+                .Dispatch => match step {
+                    .Cmd0 => if r1 == 0x01 {
+                        step = .Cmd8; frame = sd_frame(8, 0x1AA); phase = .Gap
+                    } else if tries == CMD0_TRIES - 1 {
+                        err = .NoCard; phase = .Fail
+                    } else {
+                        tries = tries +% 1; frame = sd_frame(0, 0); phase = .Gap
+                    },
+                    .Cmd8 => if r1 == 0x01 {
+                        if ext[11:0] == 0x1AA {
+                            v2 = true; tries = 0
+                            step = .Cmd55; frame = sd_frame(55, 0); phase = .Gap
+                        } else {
+                            err = .BadVoltage; phase = .Fail
+                        }
+                    } else if r1[2] {
+                        // illegal command: a version 1 card
+                        v2 = false; tries = 0
+                        step = .Cmd55; frame = sd_frame(55, 0); phase = .Gap
+                    } else {
+                        err = .InitFailed; phase = .Fail
+                    },
+                    .Cmd55 => if r1 == 0x00 or r1 == 0x01 {
+                        step = .Acmd41
+                        frame = sd_frame(41, if v2 { 0x4000_0000 } else { 0 })
+                        phase = .Gap
+                    } else {
+                        err = .InitFailed; phase = .Fail
+                    },
+                    .Acmd41 => if r1 == 0x00 {
+                        step = .Cmd58; frame = sd_frame(58, 0); phase = .Gap
+                    } else if r1 == 0x01 and tries != ACMD41_TRIES {
+                        tries = tries +% 1
+                        step = .Cmd55; frame = sd_frame(55, 0); phase = .Gap
+                    } else {
+                        err = if r1 == 0x01 { .InitTimeout } else { .InitFailed }
+                        phase = .Fail
+                    },
+                    .Cmd58 => if r1 == 0x00 {
+                        ccs = v2 and ext[30]
+                        if v2 and ext[30] {
+                            step = .Idle; fast = true; phase = .Gap
+                        } else {
+                            step = .Cmd16; frame = sd_frame(16, 512); phase = .Gap
+                        }
+                    } else {
+                        err = .InitFailed; phase = .Fail
+                    },
+                    .Cmd16 => if r1 == 0x00 {
+                        step = .Idle; fast = true; phase = .Gap
+                    } else {
+                        err = .InitFailed; phase = .Fail
+                    },
+                    .Cmd17 => if r1 == 0x00 {
+                        phase = .Token
+                    } else {
+                        err = .CmdRejected; step = .Idle; phase = .Gap
+                    },
+                    .Cmd24 => if r1 == 0x00 {
+                        phase = .WToken
+                    } else {
+                        err = .CmdRejected; step = .Idle; phase = .Gap
+                    },
+                    .Idle => phase = .Idle,
+                },
+                // ---- block read ----
+                .Token => if cnt != 0 and bx_rx == 0xFE {
+                    cnt = 0
+                    phase = .Data
+                } else if (cnt != 0 and bx_rx[7:5] == 0) or cnt == POLL_LIMIT {
+                    err = .DataError; cnt = 0; step = .Idle; phase = .Gap
+                } else {
+                    bx_busy = true; bx_sh = 0xFF
+                    cnt = cnt +% 1
+                },
+                .Data => if !out_valid {
+                    if cnt != 0 {
+                        out_valid = true
+                        out_data = bx_rx
+                    }
+                    if cnt == 512 {
+                        cnt = 0
+                        phase = .Crc
+                    } else {
+                        bx_busy = true; bx_sh = 0xFF
+                        cnt = cnt +% 1
+                    }
+                },
+                .Crc => if cnt == 2 {
+                    cnt = 0; step = .Idle; phase = .Gap
+                } else {
+                    bx_busy = true; bx_sh = 0xFF
+                    cnt = cnt +% 1
+                },
+                // ---- block write ----
+                .WToken => if cnt == 2 {
+                    cnt = 0
+                    phase = .WData
+                } else {
+                    bx_busy = true; bx_sh = if cnt == 0 { 0xFF } else { 0xFE }   // Nwr, then start token
+                    cnt = cnt +% 1
+                },
+                .WData => if cnt == 512 {
+                    cnt = 0
+                    phase = .WCrc
+                } else if in.valid {
+                    bx_busy = true; bx_sh = in.data
+                    cnt = cnt +% 1
+                },
+                .WCrc => if cnt == 3 {
+                    // two CRC bytes, then the data response xxx0_0101 = accepted
+                    cnt = 0
+                    if bx_rx[4:0] != 0b00101 { err = .WriteRejected }
+                    phase = .WBusy
+                } else {
+                    bx_busy = true; bx_sh = 0xFF
+                    cnt = cnt +% 1
+                },
+                .WBusy => if cnt != 0 and bx_rx != 0x00 {
+                    cnt = 0; step = .Idle; phase = .Gap
+                } else if cnt == POLL_LIMIT {
+                    err = .DataError; cnt = 0; step = .Idle; phase = .Gap
+                } else {
+                    bx_busy = true; bx_sh = 0xFF
+                    cnt = cnt +% 1
+                },
+                .Idle => if cmd.valid {
+                    err = .None
+                    step = if cmd.data.write { .Cmd24 } else { .Cmd17 }
+                    frame = sd_frame(if cmd.data.write { 24 } else { 17 },
+                                     if ccs { cmd.data.block } else { cmd.data.block << 9 })
+                    phase = .Frame
+                },
+                .Fail => {},
+            }
+        }
+    }
+
+    /// CS_N only changes between bytes.
+    property cs_changes_only_between_bytes { always bx_busy |-> stable(cs_n) }
+    /// SCK idles low between bytes.
+    property sck_idles_low { always !bx_busy |-> !sck }
+    /// Data is delivered only during a block read.
+    property out_only_while_reading { always rose(out.valid) |-> past(phase) == .Data }
+}
+
+// ---------------------------------------------------------------------------
+// Test-only SD card model and bench (not public, never synthesized by users).
+
+/// Behavioural SPI-mode SD card (SDHC, block addressed) for the tests:
+/// answers CMD0, CMD8, CMD55, ACMD41 (idle on the first call), CMD58,
+/// CMD17 (data byte i = i) and CMD24 (accepts the block, two busy bytes).
+/// Runs in the host's clock domain and sees SCK edges one cycle late.
+module SdCardModel {
+    in clk: clock
+    in rst: reset
+    /// SCK from the host.
+    in sck: bool
+    /// MOSI from the host.
+    in mosi: bool
+    /// CS_N from the host.
+    in cs_n: bool
+    /// MISO to the host.
+    out miso: bool
+    /// Wrapping sum of the last written block.
+    out wr_sum: u8
+    /// First byte of the last written block.
+    out wr_first: u8
+    /// Argument of the last CMD17/CMD24.
+    out last_arg: u32
+    /// Commands received.
+    out cmd_count: u8
+
+    enum Mode { Cmd, Resp, RdData, WrToken, WrData, Busy }
+
+    reg sck_d: bool = false
+    reg bc: uint<3> = 0
+    reg rx: u8 = 0
+    reg tx: u8 = 0xFF
+    reg sh: u8 = 0xFF
+    reg miso_q: bool = true
+    reg mode: Mode = .Cmd
+    reg after: Mode = .Cmd
+    reg ccnt: uint<3> = 0
+    reg idx: uint<6> = 0
+    reg arg: u32 = 0
+    reg q: bit<40> = all1
+    reg qn: uint<3> = 0
+    reg idle: bool = true
+    reg dc: u16 = 0
+    reg wsum: u8 = 0
+    reg wfirst: u8 = 0
+    reg larg: u32 = 0
+    reg ncmd: u8 = 0
+
+    let rise = sck and !sck_d
+    let fall = !sck and sck_d
+    let b: u8 = rx[6:0] ++ (mosi as uint<1>)          // the byte completed by this rise
+
+    miso = miso_q
+    wr_sum = wsum
+    wr_first = wfirst
+    last_arg = larg
+    cmd_count = ncmd
+
+    on clk {
+        sck_d = sck
+        if cs_n {
+            bc = 0
+            miso_q = true
+            tx = 0xFF
+            sh = 0xFF
+            mode = .Cmd
+            ccnt = 0
+        } else {
+            if rise {
+                rx = b
+                bc = bc +% 1
+                if bc == 7 {
+                    // a byte is complete: choose the byte to send next
+                    tx = 0xFF
+                    match mode {
+                        .Cmd => if ccnt == 0 {
+                            if b[7:6] == 0b01 { idx = b[5:0]; ccnt = 1 }
+                        } else if ccnt != 5 {
+                            arg = arg[23:0] ++ b
+                            ccnt = ccnt +% 1
+                        } else {
+                            // CRC byte: answer after one byte of Ncr
+                            ccnt = 0
+                            ncmd = ncmd +% 1
+                            mode = .Resp
+                            after = .Cmd
+                            qn = 1
+                            match idx {
+                                0 => { idle = true; q = 0x01_FFFF_FFFF },
+                                8 => { q = 0x01_0000_01AA; qn = 5 },
+                                55 => q = if idle { 0x01_FFFF_FFFF } else { 0x00_FFFF_FFFF },
+                                41 => if idle { idle = false; q = 0x01_FFFF_FFFF } else { q = 0x00_FFFF_FFFF },
+                                58 => { q = 0x00_C0FF_8000; qn = 5 },
+                                17 => { q = 0x00_FFFF_FFFF; after = .RdData; dc = 0; larg = arg },
+                                24 => { q = 0x00_FFFF_FFFF; after = .WrToken; larg = arg },
+                                _ => q = 0x04_FFFF_FFFF,
+                            }
+                        },
+                        .Resp => {
+                            tx = q[39:32]
+                            q = q << 8
+                            qn = qn -% 1
+                            if qn == 1 { mode = after }
+                        },
+                        .RdData => {
+                            // one byte of Nac, the start token, 512 bytes, 2 CRC bytes
+                            if dc == 1 { tx = 0xFE }
+                            else if dc >= 2 and dc < 514 { tx = (dc -% 2) as u8 }
+                            if dc == 515 { mode = .Cmd } else { dc = dc +% 1 }
+                        },
+                        .WrToken => if b == 0xFE {
+                            mode = .WrData
+                            dc = 0
+                            wsum = 0
+                        },
+                        .WrData => {
+                            if dc < 512 { wsum = wsum +% b }
+                            if dc == 0 { wfirst = b }
+                            if dc == 513 {
+                                tx = 0xE5                         // data accepted
+                                mode = .Busy
+                                dc = 0
+                            } else {
+                                dc = dc +% 1
+                            }
+                        },
+                        .Busy => if dc == 2 {
+                            mode = .Cmd
+                        } else {
+                            tx = 0x00
+                            dc = dc +% 1
+                        },
+                    }
+                }
+            }
+            if fall {
+                if bc == 0 {
+                    miso_q = tx[7]
+                    sh = tx << 1
+                } else {
+                    miso_q = sh[7]
+                    sh = sh << 1
+                }
+            }
+        }
+    }
+}
+
+/// Sdio (SlowHz half period 8 cycles, FastHz 4) connected to SdCardModel.
+module SdBench {
+    in clk: clock
+    in rst: reset
+    in cmd: Stream<SdCmd>
+    in in: Stream<u8>
+    out out: Stream<u8>
+    /// Force MISO high (no card).
+    in no_card: bool
+    out ready: bool
+    out error: SdError
+    out sdhc: bool
+    out wr_sum: u8
+    out wr_first: u8
+    out last_arg: u32
+
+    let host = Sdio<ClkHz: 64, SlowHz: 4, FastHz: 8>(cmd: cmd, in: in)
+    let card = SdCardModel(sck: host.sck, mosi: host.mosi, cs_n: host.cs_n)
+    host.miso = card.miso or no_card
+    out = host.out
+    ready = host.ready
+    error = host.error
+    sdhc = host.sdhc
+    wr_sum = card.wr_sum
+    wr_first = card.wr_first
+    last_arg = card.last_arg
+}
+
+test "sd_frame builds command frames with the right CRC7" {
+    expect sd_frame(0, 0) == 0x40_0000_0000_95
+    expect sd_frame(8, 0x1AA) == 0x48_0000_01AA_87
+    expect sd_frame(55, 0)[7:0] == 0x65
+    expect sd_frame(41, 0x4000_0000)[7:0] == 0x77
+    expect sd_frame(58, 0)[7:0] == 0xFD
+    expect sd_frame(17, 0)[7:0] == 0x55
+    expect sd_crc7(0x40_0000_0000) == 0x4A
+}
+
+test "Sdio initialises an SDHC card" {
+    let dut = sim SdBench()
+    dut.reset()
+    dut.no_card = false
+    dut.cmd.valid = false
+    dut.in.valid = false
+    dut.out.ready = true
+    dut.step_until(dut.ready, max: 30_000)
+    expect dut.error == .None
+    expect dut.sdhc
+}
+
+test "Sdio reads a block in order" {
+    let dut = sim SdBench()
+    dut.reset()
+    dut.no_card = false
+    dut.cmd.valid = false
+    dut.in.valid = false
+    dut.out.ready = true
+    dut.step_until(dut.ready, max: 30_000)
+    dut.cmd = Stream { valid: true, data: SdCmd { write: false, block: 5 } }
+    dut.step()
+    dut.cmd.valid = false
+    for i in 0..512 {
+        dut.step_until(dut.out.valid, max: 2_000)
+        expect dut.out.data == i as u8
+        dut.step()
+    }
+    dut.step_until(dut.ready, max: 2_000)
+    expect dut.error == .None
+    expect dut.last_arg == 5                          // block addressing on SDHC
+}
+
+test "Sdio read data tolerates backpressure" {
+    let dut = sim SdBench()
+    dut.reset()
+    dut.no_card = false
+    dut.cmd.valid = false
+    dut.in.valid = false
+    dut.out.ready = true
+    dut.step_until(dut.ready, max: 30_000)
+    dut.cmd = Stream { valid: true, data: SdCmd { write: false, block: 1 } }
+    dut.step()
+    dut.cmd.valid = false
+    var n: u16 = 0
+    for _ in 0..200_000 {
+        let r = rand<bool>()
+        dut.out.ready = r
+        dut.settle()
+        if dut.out.valid and r {
+            expect dut.out.data == n as u8
+            n = n +% 1
+        }
+        dut.step()
+    }
+    expect n == 512
+    expect dut.ready and dut.error == .None
+}
+
+test "Sdio writes a block" {
+    let dut = sim SdBench()
+    dut.reset()
+    dut.no_card = false
+    dut.cmd.valid = false
+    dut.in.valid = false
+    dut.out.ready = true
+    dut.step_until(dut.ready, max: 30_000)
+    dut.cmd = Stream { valid: true, data: SdCmd { write: true, block: 7 } }
+    dut.step()
+    dut.cmd.valid = false
+    var sum: u8 = 0
+    for i in 0..512 {
+        let v = (i * 3) as u8
+        sum = sum +% v
+        dut.in = Stream { valid: true, data: v }
+        dut.step_until(dut.in.ready, max: 2_000)
+        dut.step()
+    }
+    dut.in.valid = false
+    dut.step_until(dut.ready, max: 5_000)
+    expect dut.error == .None
+    expect dut.last_arg == 7
+    expect dut.wr_first == 0 and dut.wr_sum == sum
+}
+
+test "Sdio reports a missing card" {
+    let dut = sim SdBench()
+    dut.reset()
+    dut.no_card = true
+    dut.cmd.valid = false
+    dut.in.valid = false
+    dut.out.ready = true
+    dut.step_until(dut.error == .NoCard, max: 100_000)
+    expect !dut.ready
+    dut.step(1_000)
+    expect dut.error == .NoCard                       // sticky until reset
+}

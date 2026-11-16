@@ -1,0 +1,157 @@
+package std::io
+
+/// Quadrature (incremental rotary encoder) decoder, 4x resolution.
+///
+/// * `a` and `b` are asynchronous pin inputs; each passes through a two-flop
+///   synchroniser.
+/// * Every valid transition of the Gray-code sequence moves `count` by one:
+///   up when A leads B ((a, b) = 00 -> 10 -> 11 -> 01 -> 00), down for the
+///   reverse sequence. `count` wraps (two's complement).
+/// * `step` pulses for each count change, aligned with the new `count`; `up`
+///   holds the direction of the last step.
+/// * A transition where both inputs change at once cannot be decoded (the
+///   encoder moved faster than the clock can follow); it pulses `error` and
+///   leaves `count` unchanged.
+/// * Pin changes during the first three cycles after reset only initialise
+///   the synchronisers and are not counted.
+pub module QuadratureDecoder<W: uint = 16>
+where W >= 2
+{
+    /// Cycles from a pin edge to the matching `count` change.
+    pub const LATENCY: uint = 3
+
+    /// Clock.
+    in clk: clock
+    /// Reset: count to zero.
+    in rst: reset
+    /// Encoder channel A (asynchronous).
+    in a: bool
+    /// Encoder channel B (asynchronous).
+    in b: bool
+    /// Position, in quadrature edges, wrapping.
+    out count: sint<W>
+    /// One-cycle pulse for every count change.
+    out step: bool
+    /// Direction of the last step: true = up (A leads B).
+    out up: bool
+    /// One-cycle pulse: both channels changed at once; the edge was not counted.
+    out error: bool
+
+    reg a1: bool = false
+    reg a2: bool = false
+    reg a3: bool = false
+    reg b1: bool = false
+    reg b2: bool = false
+    reg b3: bool = false
+    reg warm: uint<2> = 0                // counts the synchroniser fill after reset
+    reg count_r: sint<W> = 0
+    reg step_r: bool = false
+    reg up_r: bool = true
+    reg error_r: bool = false
+
+    let ready = warm == 3
+    let da = a2 != a3
+    let db = b2 != b3
+    let moved = ready and (da xor db)
+    let forward = a2 xor b3             // new A xor previous B: true for A-leads-B transitions
+
+    on clk {
+        a1 = a; a2 = a1; a3 = a2
+        b1 = b; b2 = b1; b3 = b2
+        if !ready { warm = warm +% 1 }
+        step_r = moved
+        error_r = ready and da and db
+        if moved {
+            count_r = if forward { count_r +% 1 } else { count_r -% 1 }
+            up_r = forward
+        }
+    }
+
+    count = count_r
+    step = step_r
+    up = up_r
+    error = error_r
+
+    /// The count changes by exactly one on a step and not at all otherwise.
+    property count_moves_only_on_step { always !step |-> count == past(count, 1) }
+    /// A step and an error never coincide.
+    property step_xor_error { never step and error }
+}
+
+test "QuadratureDecoder counts up when A leads B" {
+    let dut = sim QuadratureDecoder<8>()
+    dut.a = false
+    dut.b = false
+    dut.reset()
+    dut.step(4)
+    for (a, b) in [(true, false), (true, true), (false, true), (false, false)] {
+        dut.a = a
+        dut.b = b
+        dut.step(4)
+    }
+    expect dut.count == 4
+    expect dut.up
+    expect !dut.error
+}
+
+test "QuadratureDecoder counts down for the reverse sequence" {
+    let dut = sim QuadratureDecoder<8>()
+    dut.a = false
+    dut.b = false
+    dut.reset()
+    dut.step(4)
+    for (a, b) in [(false, true), (true, true), (true, false), (false, false), (false, true)] {
+        dut.a = a
+        dut.b = b
+        dut.step(4)
+    }
+    expect dut.count == -5
+    expect !dut.up
+}
+
+test "QuadratureDecoder count wraps around" {
+    let dut = sim QuadratureDecoder<2>()                // sint<2>: -2 ..= 1
+    dut.a = false
+    dut.b = false
+    dut.reset()
+    dut.step(4)
+    for (a, b) in [(true, false), (true, true)] {
+        dut.a = a
+        dut.b = b
+        dut.step(4)
+    }
+    expect dut.count == -2                             // 1 + 1 wraps
+}
+
+test "QuadratureDecoder step pulse is aligned with the count, LATENCY cycles after the edge" {
+    let dut = sim QuadratureDecoder<8>()
+    dut.a = false
+    dut.b = false
+    dut.reset()
+    dut.step(4)
+    dut.a = true
+    dut.step(2)
+    expect !dut.step and dut.count == 0
+    dut.step()                                         // third cycle: LATENCY = 3
+    expect dut.step and dut.count == 1
+    dut.step()
+    expect !dut.step and dut.count == 1
+}
+
+test "QuadratureDecoder flags a double transition as an error" {
+    let dut = sim QuadratureDecoder<8>()
+    dut.a = false
+    dut.b = false
+    dut.reset()
+    dut.step(4)
+    dut.a = true
+    dut.b = true                                       // 00 -> 11: undecodable
+    var errors = 0
+    for _ in 0..6 {
+        dut.step()
+        if dut.error { errors = errors + 1 }
+        expect !dut.step
+    }
+    expect errors == 1
+    expect dut.count == 0
+}

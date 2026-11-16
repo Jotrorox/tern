@@ -1,0 +1,268 @@
+package std::sim
+
+use std::bus::{Axi4Lite, Axi4LiteMaster, Axi4Stream, RegReq}
+
+/// One AXI4-Lite access for [Axi4LiteDriver].
+pub struct AxiLiteOp<AW: uint, DW: uint> {
+    /// Write (true) or read (false).
+    write: bool,
+    /// Byte address.
+    addr: uint<AW>,
+    /// Write data; for a read, the expected read data (see `check`).
+    data: uint<DW>,
+    /// Write byte strobes (ignored for reads).
+    strb: bit<DW/8>,
+    /// For reads: compare the read data with `data`.
+    check: bool,
+}
+
+/// Builds a write operation for an [Axi4LiteDriver] op list (all bytes strobed).
+pub const fn axil_write<AW: uint, DW: uint>(addr: uint<AW>, data: uint<DW>) -> AxiLiteOp<AW, DW> {
+    AxiLiteOp { write: true, addr: addr, data: data, strb: all1, check: false }
+}
+
+/// Builds a read operation that expects `data` back.
+pub const fn axil_read<AW: uint, DW: uint>(addr: uint<AW>, data: uint<DW>) -> AxiLiteOp<AW, DW> {
+    AxiLiteOp { write: false, addr: addr, data: data, strb: all0, check: true }
+}
+
+/// AXI4-Lite bus-functional master: plays a compile-time list of writes and
+/// reads against a slave and checks the responses.
+///
+/// * While `en` is high the operations in `Ops` are issued in order, one at a
+///   time (each waits for its B or R response), through
+///   `std::bus::Axi4LiteMaster`.
+/// * A response other than OKAY, or read data different from the expected
+///   `data` of a read with `check`, counts in `errors` (and fails an
+///   assertion with `Strict`). `rdata` holds the most recent read data.
+/// * `done` goes high when every response has been received.
+/// * For accesses decided at test time instead of elaboration time, drive a
+///   `std::bus::Axi4LiteMaster` request stream from the bench's ports.
+pub module Axi4LiteDriver<AW: uint, DW: uint, N: uint, Ops: [AxiLiteOp<AW, DW>; N], Strict: bool = true>
+where N >= 1, DW == 32 or DW == 64
+{
+    /// Clock.
+    in clk: clock
+    /// Reset: restart from the first operation.
+    in rst: reset
+    /// Start/continue issuing operations.
+    in en: bool
+    /// AXI4-Lite master port; connect the slave under test.
+    out m: Axi4Lite<AW, DW>
+    /// Number of completed operations.
+    out completed: uint<clog2(N + 1)>
+    /// All operations completed.
+    out done: bool
+    /// Error responses plus read-data mismatches.
+    out errors: u32
+    /// Data of the most recent read.
+    out rdata: uint<DW>
+
+    let master = Axi4LiteMaster<AW, DW>()
+
+    reg idx: uint<clog2(N + 1)> = 0
+    reg completed_q: uint<clog2(N + 1)> = 0
+    reg outstanding: bool = false
+    reg current: AxiLiteOp<AW, DW> = all0
+    reg errors_q: u32 = 0
+    reg rdata_q: uint<DW> = 0
+
+    var op: AxiLiteOp<AW, DW> = all0
+    comb {
+        for i in 0..N {
+            if idx == i { op = Ops[i] }
+        }
+    }
+
+    master.req.valid = en and !outstanding and idx != N
+    master.req.data = RegReq {
+        addr: op.addr,
+        wdata: op.data,
+        strb: if op.write { op.strb } else { all0 },
+        write: op.write,
+    }
+    m = master.m
+
+    let rsp = master.rsp
+    let bad_resp = rsp.data.resp != 0
+    let bad_data = !current.write and current.check and rsp.data.rdata != current.data
+    let error_now = rsp.valid and (bad_resp or bad_data)
+
+    completed = completed_q
+    done = completed_q == N
+    errors = errors_q
+    rdata = rdata_q
+
+    on clk {
+        if master.req.fire() {
+            idx = idx +% 1
+            outstanding = true
+            current = op
+        }
+        if rsp.valid {
+            outstanding = false
+            completed_q = completed_q +% 1
+            if !current.write { rdata_q = rsp.data.rdata }
+        }
+        if error_now { errors_q = errors_q +% 1 }
+        assert !(Strict and error_now), "Axi4LiteDriver: error response or unexpected read data"
+    }
+
+    /// One operation at a time.
+    property one_outstanding { always outstanding |-> !master.req.valid }
+}
+
+/// Plays a compile-time list of data words onto an AXI4-Stream, with TLAST
+/// every `PacketLen` beats (and on the final word).
+///
+/// * Same handshake rules and `Throttle`/`Seed` gap insertion as
+///   [StreamDriver]; `keep` is all ones, `user` is zero.
+/// * `done` goes high when every word has been accepted.
+pub module Axi4StreamDriver<DW: uint, N: uint, Items: [uint<DW>; N], PacketLen: uint = N, Throttle: uint = 0, Seed: uint = 0xACE1>
+where N >= 1, PacketLen >= 1, (DW / 8) * 8 == DW, Throttle <= 15, Seed != 0, Seed < 65536
+{
+    /// Clock.
+    in clk: clock
+    /// Reset: restart from the first word.
+    in rst: reset
+    /// Start/continue sending.
+    in en: bool
+    /// The driven AXI4-Stream.
+    out out: Axi4Stream<DW>
+    /// Number of words accepted so far.
+    out sent: uint<clog2(N + 1)>
+    /// All words have been accepted.
+    out done: bool
+
+    reg idx: uint<clog2(N + 1)> = 0
+    reg beat: uint<clog2(PacketLen + 1)> = 0      // position within the packet
+    reg valid_q: bool = false
+    reg lfsr: u16 = Seed
+
+    var item: uint<DW> = 0
+    comb {
+        for i in 0..N {
+            if idx == i { item = Items[i] }
+        }
+    }
+
+    let last_now = beat == PacketLen - 1 or idx == N - 1
+    let gap = lfsr[3:0] < Throttle
+    let next_idx = if out.fire() { idx +% 1 } else { idx }
+
+    out.valid = valid_q
+    out.data = item
+    out.keep = all1
+    out.last = last_now
+    out.user = all0
+    sent = idx
+    done = idx == N
+
+    on clk {
+        lfsr = lfsr16_next(lfsr)
+        idx = next_idx
+        if out.fire() { beat = if last_now { 0 } else { beat +% 1 } }
+        if !valid_q or out.fire() {
+            valid_q = en and next_idx != N and !gap
+        }
+    }
+
+    /// Valid is held, with stable payload, until the beat is accepted.
+    property holds_until_ready {
+        always (out.valid and !out.ready) |=> out.valid and stable(out.data) and stable(out.last)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const TestOps: [AxiLiteOp<32, 32>; 3] = [
+    axil_write<32, 32>(0x10, 0xDEAD_BEEF),
+    axil_read<32, 32>(0x10, 0xDEAD_BEEF),
+    axil_read<32, 32>(0x14, 0x0000_0000),
+]
+
+test "Axi4LiteDriver issues its operations in order and checks read data" {
+    let dut = sim Axi4LiteDriver<32, 32, 3, TestOps>()
+    dut.en = true
+    dut.reset()
+    dut.m.aw.ready = true
+    dut.m.w.ready = true
+    dut.m.ar.ready = true
+    dut.m.b.valid = false
+    dut.m.r.valid = false
+    // write: AW and W, then a B response
+    dut.step_until(dut.m.aw.valid and dut.m.w.valid, max: 10)
+    expect dut.m.aw.data == 0x10 and dut.m.w.data.data == 0xDEAD_BEEF and dut.m.w.data.strb == 0b1111
+    dut.step()
+    dut.m.b = Stream { valid: true, data: 0b00 }
+    dut.step_until(dut.completed == 1, max: 10)
+    dut.m.b.valid = false
+    // first read
+    dut.step_until(dut.m.ar.valid, max: 10)
+    expect dut.m.ar.data == 0x10
+    dut.step()
+    dut.m.r.valid = true
+    dut.m.r.data.data = 0xDEAD_BEEF
+    dut.m.r.data.resp = 0b00
+    dut.step_until(dut.completed == 2, max: 10)
+    dut.m.r.valid = false
+    // second read
+    dut.step_until(dut.m.ar.valid, max: 10)
+    expect dut.m.ar.data == 0x14
+    dut.step()
+    dut.m.r.valid = true
+    dut.m.r.data.data = 0
+    dut.step_until(dut.done, max: 10)
+    dut.m.r.valid = false
+    expect dut.errors == 0 and dut.rdata == 0
+}
+
+test "Axi4LiteDriver counts a wrong read value and an error response" {
+    let dut = sim Axi4LiteDriver<32, 32, 3, TestOps, Strict: false>()
+    dut.en = true
+    dut.reset()
+    dut.m.aw.ready = true
+    dut.m.w.ready = true
+    dut.m.ar.ready = true
+    dut.m.b = Stream { valid: true, data: 0b10 }       // SLVERR for the write
+    dut.m.r.valid = true
+    dut.m.r.data.data = 0x1234_5678                    // wrong for both reads
+    dut.m.r.data.resp = 0b00
+    dut.step_until(dut.done, max: 50)
+    expect dut.errors == 3
+    expect dut.rdata == 0x1234_5678
+}
+
+test "Axi4StreamDriver marks packet boundaries with last" {
+    let dut = sim Axi4StreamDriver<16, 5, [1, 2, 3, 4, 5], PacketLen: 2>()
+    dut.en = true
+    dut.reset()
+    dut.out.ready = true
+    let want_last = [false, true, false, true, true]
+    var got = 0
+    for _ in 0..12 {
+        dut.settle()
+        if dut.out.valid {
+            expect dut.out.data == got + 1
+            expect dut.out.last == want_last[got]
+            expect dut.out.keep == 0b11
+            got = got + 1
+        }
+        dut.step()
+    }
+    expect got == 5 and dut.done
+}
+
+test "Axi4StreamDriver holds a beat under backpressure" {
+    let dut = sim Axi4StreamDriver<8, 2, [0xAA, 0xBB]>()
+    dut.en = true
+    dut.reset()
+    dut.out.ready = false
+    dut.step(4)
+    expect dut.out.valid and dut.out.data == 0xAA and !dut.out.last
+    dut.out.ready = true
+    dut.step()
+    expect dut.out.valid and dut.out.data == 0xBB and dut.out.last
+}

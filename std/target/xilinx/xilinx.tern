@@ -1,0 +1,502 @@
+package std::target::xilinx
+
+use std::target::exact_period_ns
+
+// Xilinx 7-series primitives (UG953) and thin Tern wrappers around them.
+// Frequency limits in the static_asserts are those of the slowest (-1) speed
+// grade (DS181/DS182).
+
+// ---------------------------------------------------------------------------
+// Raw primitives (vendor library: unisims)
+// ---------------------------------------------------------------------------
+
+/// 7-series mixed-mode clock manager, base variant. Real-valued parameters
+/// (CLKFBOUT_MULT_F, CLKIN1_PERIOD, CLKOUT0_DIVIDE_F) take integers here.
+pub extern module MMCME2_BASE("") <
+    CLKFBOUT_MULT_F: uint = 5,
+    DIVCLK_DIVIDE: uint = 1,
+    CLKIN1_PERIOD: uint = 0,
+    CLKOUT0_DIVIDE_F: uint = 1,
+    CLKOUT1_DIVIDE: uint = 1,
+    CLKOUT2_DIVIDE: uint = 1,
+    CLKOUT3_DIVIDE: uint = 1,
+    CLKOUT4_DIVIDE: uint = 1,
+    CLKOUT5_DIVIDE: uint = 1,
+    CLKOUT6_DIVIDE: uint = 1
+> {
+    /// Reference clock input.
+    in CLKIN1: clock
+    /// Feedback clock input.
+    in CLKFBIN: clock
+    /// Asynchronous reset, active high.
+    in RST: reset<async, high>
+    /// Power down.
+    in PWRDWN: bool
+    /// Feedback clock output.
+    out CLKFBOUT: clock
+    /// Clock output 0.
+    out CLKOUT0: clock
+    /// Clock output 1.
+    out CLKOUT1: clock
+    /// Clock output 2.
+    out CLKOUT2: clock
+    /// Clock output 3.
+    out CLKOUT3: clock
+    /// Clock output 4.
+    out CLKOUT4: clock
+    /// Clock output 5.
+    out CLKOUT5: clock
+    /// Clock output 6.
+    out CLKOUT6: clock
+    /// The outputs are stable (asynchronous).
+    out LOCKED: bool
+}
+
+/// 7-series phase-locked loop, base variant.
+pub extern module PLLE2_BASE("") <
+    CLKFBOUT_MULT: uint = 5,
+    DIVCLK_DIVIDE: uint = 1,
+    CLKIN1_PERIOD: uint = 0,
+    CLKOUT0_DIVIDE: uint = 1,
+    CLKOUT1_DIVIDE: uint = 1,
+    CLKOUT2_DIVIDE: uint = 1,
+    CLKOUT3_DIVIDE: uint = 1,
+    CLKOUT4_DIVIDE: uint = 1,
+    CLKOUT5_DIVIDE: uint = 1
+> {
+    /// Reference clock input.
+    in CLKIN1: clock
+    /// Feedback clock input.
+    in CLKFBIN: clock
+    /// Asynchronous reset, active high.
+    in RST: reset<async, high>
+    /// Power down.
+    in PWRDWN: bool
+    /// Feedback clock output.
+    out CLKFBOUT: clock
+    /// Clock output 0.
+    out CLKOUT0: clock
+    /// Clock output 1.
+    out CLKOUT1: clock
+    /// Clock output 2.
+    out CLKOUT2: clock
+    /// Clock output 3.
+    out CLKOUT3: clock
+    /// Clock output 4.
+    out CLKOUT4: clock
+    /// Clock output 5.
+    out CLKOUT5: clock
+    /// The outputs are stable (asynchronous).
+    out LOCKED: bool
+}
+
+/// Global clock buffer.
+pub extern module BUFG("") {
+    /// Clock input.
+    in I: clock
+    /// Buffered global clock.
+    out O: clock
+}
+
+/// Input DDR register (IDDR, DDR_CLK_EDGE = OPPOSITE_EDGE, the default):
+/// Q1 captures D on the rising edge of C, Q2 on the falling edge.
+pub extern module IDDR("") {
+    /// Rising-edge data.
+    out Q1: bool
+    /// Falling-edge data.
+    out Q2: bool
+    /// Clock.
+    in C: clock
+    /// Clock enable.
+    in CE: bool
+    /// Data from the input buffer.
+    in D: bool
+    /// Synchronous reset.
+    in R: bool
+    /// Synchronous set.
+    in S: bool
+}
+
+/// Output DDR register (ODDR, DDR_CLK_EDGE = OPPOSITE_EDGE, the default):
+/// D1 is sampled on the rising edge of C and driven while C is high, D2 is
+/// sampled on the falling edge and driven while C is low.
+pub extern module ODDR("") {
+    /// DDR output to the output buffer.
+    out Q: bool
+    /// Clock.
+    in C: clock
+    /// Clock enable.
+    in CE: bool
+    /// Rising-edge data.
+    in D1: bool
+    /// Falling-edge data.
+    in D2: bool
+    /// Synchronous reset.
+    in R: bool
+    /// Synchronous set.
+    in S: bool
+}
+
+/// Bidirectional I/O buffer.
+pub extern module IOBUF("") {
+    /// Value to drive.
+    in I: bool
+    /// Tri-state control, high = high impedance.
+    in T: bool
+    /// Value read from the pad.
+    out O: bool
+    /// The pad (a #[top] tri port).
+    in IO: tri<bool>
+}
+
+/// Input delay element in FIXED mode (IDELAY_TYPE and DELAY_SRC at their
+/// defaults "FIXED" and "IDATAIN"). Needs an IDELAYCTRL in the same bank.
+pub extern module IDELAYE2("") <
+    IDELAY_VALUE: uint = 0,
+    REFCLK_FREQUENCY: uint = 200
+> {
+    /// Data from the input buffer.
+    in IDATAIN: bool
+    /// Delayed data.
+    out DATAOUT: bool
+    /// Control clock (unused in FIXED mode).
+    in C: clock
+    /// Increment/decrement enable (unused in FIXED mode).
+    in CE: bool
+    /// Increment (unused in FIXED mode).
+    in INC: bool
+    /// Load (unused in FIXED mode).
+    in LD: bool
+    /// Pipelined load enable (unused in FIXED mode).
+    in LDPIPEEN: bool
+    /// Pipeline register reset (unused in FIXED mode).
+    in REGRST: bool
+    /// Dynamic clock inversion (unused).
+    in CINVCTRL: bool
+    /// Tap value to load (unused in FIXED mode).
+    in CNTVALUEIN: bit<5>
+    /// Fabric data input (unused with DELAY_SRC = IDATAIN).
+    in DATAIN: bool
+    /// Current tap value.
+    out CNTVALUEOUT: bit<5>
+}
+
+/// Calibration block for IDELAYE2/ODELAYE2 taps.
+pub extern module IDELAYCTRL("") {
+    /// 200 MHz (or 300/400 MHz) reference clock.
+    in REFCLK: clock
+    /// Asynchronous reset, active high.
+    in RST: reset<async, high>
+    /// Calibrated.
+    out RDY: bool
+}
+
+/// Configuration start-up block: user access to CCLK and the end-of-startup flag.
+pub extern module STARTUPE2("") {
+    /// Configuration logic clock.
+    out CFGCLK: clock
+    /// Internal configuration oscillator (about 65 MHz).
+    out CFGMCLK: clock
+    /// End of start-up.
+    out EOS: bool
+    /// PROGRAM request (unused).
+    out PREQ: bool
+    /// User start-up clock.
+    in CLK: clock
+    /// Global set/reset (keep low).
+    in GSR: bool
+    /// Global tri-state (keep low).
+    in GTS: bool
+    /// Clear AES key (keep high).
+    in KEYCLEARB: bool
+    /// PROGRAM acknowledge.
+    in PACK: bool
+    /// Value driven on the CCLK pin after configuration.
+    in USRCCLKO: bool
+    /// CCLK tri-state, high = released.
+    in USRCCLKTS: bool
+    /// Value driven on the DONE pin.
+    in USRDONEO: bool
+    /// DONE tri-state, high = released.
+    in USRDONETS: bool
+}
+
+// ---------------------------------------------------------------------------
+// Wrappers
+// ---------------------------------------------------------------------------
+
+/// Clock synthesiser on an MMCME2: up to four outputs from one input, each
+/// through a BUFG.
+///
+/// * VCO = ClkInHz * Mult / Div, which must be 600 .. 1200 MHz; the phase
+///   detector frequency ClkInHz / Div must be 10 .. 450 MHz.
+/// * Output n runs at VCO / OutnDiv (published as `CLKn_HZ`).
+/// * Feedback is internal (CLKFBOUT to CLKFBIN), so outputs are not phase
+///   aligned to `clk_in`.
+/// * `locked` is asynchronous; synchronise it into each output domain (e.g.
+///   `std::cdc::ResetSync`) before using it as a reset.
+pub module Mmcm<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+where Mult >= 2, Mult <= 64, Div >= 1, Div <= 106,
+      Out0Div >= 1, Out0Div <= 128, Out1Div >= 1, Out1Div <= 128,
+      Out2Div >= 1, Out2Div <= 128, Out3Div >= 1, Out3Div <= 128
+{
+    /// VCO frequency in Hz.
+    pub const VCO_HZ: uint = ClkInHz * Mult / Div
+    /// Frequency of `clk0` in Hz.
+    pub const CLK0_HZ: uint = VCO_HZ / Out0Div
+    /// Frequency of `clk1` in Hz.
+    pub const CLK1_HZ: uint = VCO_HZ / Out1Div
+    /// Frequency of `clk2` in Hz.
+    pub const CLK2_HZ: uint = VCO_HZ / Out2Div
+    /// Frequency of `clk3` in Hz.
+    pub const CLK3_HZ: uint = VCO_HZ / Out3Div
+    static_assert(VCO_HZ >= 600_000_000 and VCO_HZ <= 1_200_000_000, "Mmcm: VCO must be 600..1200 MHz")
+    static_assert(ClkInHz / Div >= 10_000_000 and ClkInHz / Div <= 450_000_000, "Mmcm: phase detector must run at 10..450 MHz")
+
+    /// Reference clock at `ClkInHz`.
+    in clk_in: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Output clock 0.
+    out clk0: clock
+    /// Output clock 1.
+    out clk1: clock
+    /// Output clock 2.
+    out clk2: clock
+    /// Output clock 3.
+    out clk3: clock
+    /// All outputs are stable (asynchronous).
+    out locked: bool
+
+    let mmcm = MMCME2_BASE<
+        CLKFBOUT_MULT_F: Mult,
+        DIVCLK_DIVIDE: Div,
+        CLKIN1_PERIOD: exact_period_ns(ClkInHz),
+        CLKOUT0_DIVIDE_F: Out0Div,
+        CLKOUT1_DIVIDE: Out1Div,
+        CLKOUT2_DIVIDE: Out2Div,
+        CLKOUT3_DIVIDE: Out3Div
+    >(CLKIN1: clk_in, RST: rst, PWRDWN: false)
+    mmcm.CLKFBIN = mmcm.CLKFBOUT
+
+    clk0 = BUFG(I: mmcm.CLKOUT0).O
+    clk1 = BUFG(I: mmcm.CLKOUT1).O
+    clk2 = BUFG(I: mmcm.CLKOUT2).O
+    clk3 = BUFG(I: mmcm.CLKOUT3).O
+    locked = mmcm.LOCKED
+}
+
+/// Clock synthesiser on a PLLE2: up to four outputs from one input, each
+/// through a BUFG.
+///
+/// * VCO = ClkInHz * Mult / Div, which must be 800 .. 1600 MHz; the phase
+///   detector frequency ClkInHz / Div must be 19 .. 450 MHz.
+/// * Output n runs at VCO / OutnDiv (`CLKn_HZ`); feedback is internal;
+///   `locked` is asynchronous (see [Mmcm]).
+/// * Same generics and ports as [Mmcm], `std::target::intel::Pll` and
+///   `std::target::generic::Pll`.
+pub module Pll<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+where Mult >= 2, Mult <= 64, Div >= 1, Div <= 56,
+      Out0Div >= 1, Out0Div <= 128, Out1Div >= 1, Out1Div <= 128,
+      Out2Div >= 1, Out2Div <= 128, Out3Div >= 1, Out3Div <= 128
+{
+    /// VCO frequency in Hz.
+    pub const VCO_HZ: uint = ClkInHz * Mult / Div
+    /// Frequency of `clk0` in Hz.
+    pub const CLK0_HZ: uint = VCO_HZ / Out0Div
+    /// Frequency of `clk1` in Hz.
+    pub const CLK1_HZ: uint = VCO_HZ / Out1Div
+    /// Frequency of `clk2` in Hz.
+    pub const CLK2_HZ: uint = VCO_HZ / Out2Div
+    /// Frequency of `clk3` in Hz.
+    pub const CLK3_HZ: uint = VCO_HZ / Out3Div
+    static_assert(VCO_HZ >= 800_000_000 and VCO_HZ <= 1_600_000_000, "Pll: VCO must be 800..1600 MHz")
+    static_assert(ClkInHz / Div >= 19_000_000 and ClkInHz / Div <= 450_000_000, "Pll: phase detector must run at 19..450 MHz")
+
+    /// Reference clock at `ClkInHz`.
+    in clk_in: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Output clock 0.
+    out clk0: clock
+    /// Output clock 1.
+    out clk1: clock
+    /// Output clock 2.
+    out clk2: clock
+    /// Output clock 3.
+    out clk3: clock
+    /// All outputs are stable (asynchronous).
+    out locked: bool
+
+    let pll = PLLE2_BASE<
+        CLKFBOUT_MULT: Mult,
+        DIVCLK_DIVIDE: Div,
+        CLKIN1_PERIOD: exact_period_ns(ClkInHz),
+        CLKOUT0_DIVIDE: Out0Div,
+        CLKOUT1_DIVIDE: Out1Div,
+        CLKOUT2_DIVIDE: Out2Div,
+        CLKOUT3_DIVIDE: Out3Div
+    >(CLKIN1: clk_in, RST: rst, PWRDWN: false)
+    pll.CLKFBIN = pll.CLKFBOUT
+
+    clk0 = BUFG(I: pll.CLKOUT0).O
+    clk1 = BUFG(I: pll.CLKOUT1).O
+    clk2 = BUFG(I: pll.CLKOUT2).O
+    clk3 = BUFG(I: pll.CLKOUT3).O
+    locked = pll.LOCKED
+}
+
+/// Global clock buffer: puts a clock (from a pin, an MMCM output or a clock
+/// divider) on the global clock network.
+pub module Bufg {
+    /// Clock to buffer.
+    in clk_in: clock
+    /// Buffered clock.
+    out clk_out: clock
+
+    clk_out = BUFG(I: clk_in).O
+}
+
+/// DDR input capture: samples `d` on both edges of `clk` and presents both
+/// samples together in the rising-edge domain.
+///
+/// * Built from IDDR in OPPOSITE_EDGE mode plus two fabric registers, which is
+///   equivalent to SAME_EDGE_PIPELINED: the sample of a rising edge and the
+///   sample of the following falling edge appear together on `q_rise` /
+///   `q_fall`, one cycle after that rising edge.
+/// * `d` must come straight from an input buffer (or an Idelay).
+pub module Iddr {
+    /// Cycles from the rising-edge sample to the outputs.
+    pub const LATENCY: uint = 1
+
+    /// Capture clock.
+    in clk: clock
+    /// Reset for the realignment registers.
+    in rst: reset
+    /// DDR input from the pad.
+    in d: bool
+    /// Sample taken at the rising edge.
+    out q_rise: bool
+    /// Sample taken at the following falling edge.
+    out q_fall: bool
+
+    let iddr = IDDR(C: clk, CE: true, D: d, R: false, S: false)
+    reg r_rise: bool = false
+    reg r_fall: bool = false
+    on clk {
+        r_rise = iddr.Q1
+        r_fall = iddr.Q2
+    }
+    q_rise = r_rise
+    q_fall = r_fall
+}
+
+/// DDR output: drives `d_rise` on the pad while `clk` is high and `d_fall`
+/// while it is low.
+///
+/// * Both inputs are sampled by ODDR (OPPOSITE_EDGE mode): `d_rise` at the
+///   rising edge, `d_fall` at the following falling edge; driving both from
+///   rising-edge registers meets this.
+/// * Forward a clock to a pin with `d_rise: true, d_fall: false`.
+/// * `q` must go straight to an output buffer.
+pub module Oddr {
+    /// Clock.
+    in clk: clock
+    /// Value for the high half of the cycle.
+    in d_rise: bool
+    /// Value for the low half of the cycle.
+    in d_fall: bool
+    /// DDR output to the pad.
+    out q: bool
+
+    q = ODDR(C: clk, CE: true, D1: d_rise, D2: d_fall, R: false, S: false).Q
+}
+
+/// Bidirectional pad: drives `o` onto `pad` while `oe` is high and always
+/// reads the pad back on `i`. Instantiate it in the #[top] module with the
+/// top's `tri<bool>` port.
+pub module Iobuf {
+    /// Value to drive.
+    in o: bool
+    /// Output enable.
+    in oe: bool
+    /// Value on the pad.
+    out i: bool
+    /// The pad (a #[top] tri port).
+    in pad: tri<bool>
+
+    i = IOBUF(I: o, T: !oe, IO: pad).O
+}
+
+/// Fixed input delay of `Taps` taps (78 ps per tap with a 200 MHz IDELAYCTRL
+/// reference, 0 .. 31 taps). Place an [IdelayCtrl] in the same I/O bank.
+pub module Idelay<Taps: uint = 0, RefMHz: uint = 200>
+where Taps <= 31, RefMHz == 200 or RefMHz == 300 or RefMHz == 400
+{
+    /// Any clock (unused by the FIXED-mode primitive, required by its port list).
+    in clk: clock
+    /// Data from the input buffer.
+    in d: bool
+    /// Delayed data.
+    out q: bool
+
+    q = IDELAYE2<IDELAY_VALUE: Taps, REFCLK_FREQUENCY: RefMHz>(
+        IDATAIN: d, C: clk, CE: false, INC: false, LD: false, LDPIPEEN: false,
+        REGRST: false, CINVCTRL: false, CNTVALUEIN: 0, DATAIN: false
+    ).DATAOUT
+}
+
+/// IDELAY calibration controller; one per I/O bank that uses [Idelay].
+pub module IdelayCtrl {
+    /// Reference clock (200, 300 or 400 MHz, matching Idelay's RefMHz).
+    in ref_clk: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Delay taps are calibrated.
+    out ready: bool
+
+    ready = IDELAYCTRL(REFCLK: ref_clk, RST: rst).RDY
+}
+
+/// Access to the configuration start-up block.
+///
+/// * `cclk_o` / `cclk_oe` drive the CCLK pin after configuration, which is the
+///   only way to clock the configuration SPI flash from user logic.
+/// * `eos` goes high at the end of start-up; `cfg_mclk` is the internal
+///   configuration oscillator (about 65 MHz, +-50 %).
+pub module Startup {
+    /// Start-up user clock (any clock).
+    in clk: clock
+    /// Value for the CCLK pin.
+    in cclk_o: bool
+    /// Drive the CCLK pin (otherwise released).
+    in cclk_oe: bool
+    /// End of start-up.
+    out eos: bool
+    /// Internal configuration oscillator.
+    out cfg_mclk: clock
+
+    let s = STARTUPE2(
+        CLK: clk, GSR: false, GTS: false, KEYCLEARB: true, PACK: false,
+        USRCCLKO: cclk_o, USRCCLKTS: !cclk_oe, USRDONEO: true, USRDONETS: true
+    )
+    eos = s.EOS
+    cfg_mclk = s.CFGMCLK
+}
+
+// Elaboration-only tests: the primitives themselves need the vendor library.
+
+test "Mmcm publishes its output frequencies" {
+    // 100 MHz in, VCO 1000 MHz: 200, 100, 125, 40 MHz out
+    expect Mmcm<100_000_000, 10, 1, 5, 10, 8, 25>::VCO_HZ == 1_000_000_000
+    expect Mmcm<100_000_000, 10, 1, 5, 10, 8, 25>::CLK0_HZ == 200_000_000
+    expect Mmcm<100_000_000, 10, 1, 5, 10, 8, 25>::CLK2_HZ == 125_000_000
+    expect Mmcm<100_000_000, 10, 1, 5, 10, 8, 25>::CLK3_HZ == 40_000_000
+}
+
+test "Pll publishes its output frequencies" {
+    // 125 MHz in, VCO 1250 MHz: 250 MHz and 125 MHz (e.g. DDR video 5x/1x)
+    expect Pll<125_000_000, 10, 1, 5, 10>::VCO_HZ == 1_250_000_000
+    expect Pll<125_000_000, 10, 1, 5, 10>::CLK0_HZ == 250_000_000
+    expect Pll<125_000_000, 10, 1, 5, 10>::CLK1_HZ == 125_000_000
+}

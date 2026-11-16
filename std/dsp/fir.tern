@@ -1,0 +1,170 @@
+package std::dsp
+
+/// True when a coefficient set reads the same forwards and backwards
+/// (a linear-phase FIR), which lets [Fir] fold it.
+pub const fn is_symmetric<N: uint, W: uint>(c: [sint<W>; N]) -> bool {
+    var s = true
+    for i in 0..N {
+        if c[i] != c[N - 1 - i] { s = false }
+    }
+    s
+}
+
+/// Direct-form FIR filter with compile-time coefficients.
+///
+///     out[n] = sum over i of Coeffs[i] · in[n - i]
+///
+/// * `T` is the input sample type; its raw bits are read as a two's-complement
+///   number (`s16`, `sint<12>`, `Fixed<I, F>`, ...).
+/// * `Coeffs` are `sint<CW>` integers; a fixed-point filter simply scales
+///   them and shifts the full-precision output afterwards.
+/// * The output is the exact sum, `sint<OW>` with `OW = T::WIDTH + 1 + CW +
+///   clog2(Taps)`; nothing is rounded or truncated inside.
+/// * Symmetric coefficient sets are detected at elaboration and folded: the
+///   two samples that share a coefficient are pre-added, so a symmetric
+///   filter uses ceil(Taps / 2) multipliers instead of Taps.
+/// * Fully pipelined: one sample per cycle, `LATENCY` = 2 (products, then
+///   sum). The delay line advances only on valid input cycles, so gaps in
+///   `in.valid` do not disturb the filter state.
+pub module Fir<T: type, Taps: uint, CW: uint, Coeffs: [sint<CW>; Taps]>
+where Taps >= 2, CW >= 2
+{
+    /// Cycles from a valid input sample to its output sample.
+    pub const LATENCY: uint = 2
+    /// Width of the raw sample.
+    const SW: uint = T::WIDTH
+    /// Width of the full-precision output.
+    pub const OW: uint = SW + 1 + CW + clog2(Taps)
+    /// True when the coefficient set is symmetric and the filter is folded.
+    pub const SYMMETRIC: bool = is_symmetric(Coeffs)
+    /// Number of multipliers.
+    pub const MULTIPLIERS: uint = if SYMMETRIC { (Taps + 1) / 2 } else { Taps }
+    /// Width of one (possibly pre-added) product.
+    const PW: uint = SW + 1 + CW
+
+    /// Clock.
+    in clk: clock
+    /// Reset: clears the delay line and the pipeline.
+    in rst: reset
+    /// Input samples, one per cycle in which `in.valid` is high.
+    in in: Valid<T>
+    /// Filtered samples, `LATENCY` cycles after the matching input.
+    out out: Valid<sint<OW>>
+
+    // dl[i] is the sample i + 1 valid inputs ago.
+    reg dl: [sint<SW>; Taps - 1] = all0
+    // x is the current window: x[0] the new sample, x[i] the one i steps ago.
+    var x: [sint<SW>; Taps]
+    // pre[i] is the multiplicand of coefficient i (pre-added when folded).
+    var pre: [sint<SW + 1>; MULTIPLIERS]
+    comb {
+        x[0] = bits(in.data) as sint<SW>
+        for i in 1..Taps { x[i] = dl[i - 1] }
+        for i in 0..MULTIPLIERS {
+            if SYMMETRIC and 2 * i + 1 != Taps {
+                pre[i] = x[i] + x[Taps - 1 - i]
+            } else {
+                pre[i] = x[i]
+            }
+        }
+    }
+
+    reg prod: [sint<PW>; MULTIPLIERS] = all0
+    reg prod_valid: bool = false
+    reg acc: sint<OW> = 0
+    reg acc_valid: bool = false
+
+    var sum: sint<OW>
+    comb {
+        sum = 0
+        for i in 0..MULTIPLIERS { sum = (sum + prod[i]) as sint<OW> }
+    }
+
+    on clk {
+        prod_valid = in.valid
+        acc_valid = prod_valid
+        if in.valid {
+            dl[0] = x[0]
+            for i in 1..(Taps - 1) { dl[i] = dl[i - 1] }
+            for i in 0..MULTIPLIERS { prod[i] = pre[i] * Coeffs[i] }
+        }
+        if prod_valid { acc = sum }
+    }
+
+    out.valid = acc_valid
+    out.data = acc
+
+    /// Every valid input produces exactly one output, LATENCY cycles later.
+    property latency_is_fixed {
+        always out.valid == past(in.valid, LATENCY)
+    }
+    /// The output holds between results.
+    property output_holds {
+        always !past(prod_valid, 1) |-> stable(acc)
+    }
+}
+
+test "fir impulse response is the coefficient list" {
+    let dut = sim Fir<s16, 4, 8, [1, 2, 3, 4]>()
+    dut.reset()
+    let xs = [1, 0, 0, 0, 0, 0]
+    let want = [1, 2, 3, 4, 0]
+    for i in 0..6 {
+        dut.in = Valid { valid: true, data: xs[i] }
+        dut.step()
+        if i >= 1 {
+            expect dut.out.valid
+            expect dut.out.data == want[i - 1]
+        }
+    }
+}
+
+test "fir symmetric filter step response" {
+    let dut = sim Fir<s16, 4, 8, [1, 2, 2, 1]>()
+    dut.reset()
+    let want = [100, 300, 500, 600, 600, 600]
+    for i in 0..7 {
+        dut.in = Valid { valid: true, data: 100 }
+        dut.step()
+        if i >= 1 { expect dut.out.data == want[i - 1] }
+    }
+}
+
+test "fir odd-length symmetric filter with negative coefficients" {
+    let dut = sim Fir<s16, 3, 4, [-1, 2, -1]>()
+    dut.reset()
+    let xs = [10, 0, 0, 0]
+    let want = [-10, 20, -10]
+    for i in 0..4 {
+        dut.in = Valid { valid: true, data: xs[i] }
+        dut.step()
+        if i >= 1 { expect dut.out.valid and dut.out.data == want[i - 1] }
+    }
+}
+
+test "fir delay line only advances on valid samples" {
+    let dut = sim Fir<s16, 4, 8, [1, 2, 3, 4]>()
+    dut.reset()
+    let xs = [1, 0, 0, 0]
+    let want = [1, 2, 3, 4]
+    for i in 0..4 {
+        dut.in = Valid { valid: true, data: xs[i] }
+        dut.step()
+        dut.in.valid = false
+        dut.in.data = 99           // ignored while invalid
+        dut.step()
+        expect dut.out.valid and dut.out.data == want[i]
+        dut.step()
+        expect !dut.out.valid
+    }
+}
+
+test "fir full-scale input does not overflow" {
+    let dut = sim Fir<s8, 2, 8, [-128, -128]>()
+    dut.reset()
+    for _ in 0..4 {
+        dut.in = Valid { valid: true, data: -128 }
+        dut.step()
+    }
+    expect dut.out.data == 2 * 128 * 128
+}

@@ -1,0 +1,228 @@
+package std::video
+
+/// Timing of one video mode, in pixels (horizontal) and lines (vertical).
+/// A line is `h_active + h_front + h_sync + h_back` pixels: active video
+/// first, then front porch, sync pulse and back porch; a frame likewise in
+/// lines. Used as a compile-time generic of [VgaTiming]; all fields are
+/// compile-time integers.
+pub struct VideoMode {
+    /// Visible pixels per line.
+    h_active: uint,
+    /// Horizontal front porch, in pixels.
+    h_front: uint,
+    /// Horizontal sync pulse width, in pixels.
+    h_sync: uint,
+    /// Horizontal back porch, in pixels.
+    h_back: uint,
+    /// Visible lines per frame.
+    v_active: uint,
+    /// Vertical front porch, in lines.
+    v_front: uint,
+    /// Vertical sync pulse width, in lines.
+    v_sync: uint,
+    /// Vertical back porch, in lines.
+    v_back: uint,
+    /// True when hsync is active-high, false when active-low.
+    h_sync_positive: bool,
+    /// True when vsync is active-high, false when active-low.
+    v_sync_positive: bool,
+    /// Nominal pixel clock in Hz.
+    pixel_hz: uint,
+}
+
+/// 640x480 at 60 Hz (VESA/industry standard VGA), 25.175 MHz pixel clock,
+/// 800x525 total, both syncs negative. (25.2 MHz is also within tolerance.)
+pub const Vga640x480: VideoMode = VideoMode {
+    h_active: 640, h_front: 16, h_sync: 96, h_back: 48,
+    v_active: 480, v_front: 10, v_sync: 2, v_back: 33,
+    h_sync_positive: false, v_sync_positive: false,
+    pixel_hz: 25_175_000,
+}
+
+/// 800x600 at 60 Hz (VESA SVGA), 40 MHz pixel clock, 1056x628 total,
+/// both syncs positive.
+pub const Svga800x600: VideoMode = VideoMode {
+    h_active: 800, h_front: 40, h_sync: 128, h_back: 88,
+    v_active: 600, v_front: 1, v_sync: 4, v_back: 23,
+    h_sync_positive: true, v_sync_positive: true,
+    pixel_hz: 40_000_000,
+}
+
+/// 1024x768 at 60 Hz (VESA XGA), 65 MHz pixel clock, 1344x806 total,
+/// both syncs negative.
+pub const Xga1024x768: VideoMode = VideoMode {
+    h_active: 1024, h_front: 24, h_sync: 136, h_back: 160,
+    v_active: 768, v_front: 3, v_sync: 6, v_back: 29,
+    h_sync_positive: false, v_sync_positive: false,
+    pixel_hz: 65_000_000,
+}
+
+/// 1280x720 at 60 Hz (CEA-861 720p, VIC 4), 74.25 MHz pixel clock,
+/// 1650x750 total, both syncs positive.
+pub const Hd1280x720: VideoMode = VideoMode {
+    h_active: 1280, h_front: 110, h_sync: 40, h_back: 220,
+    v_active: 720, v_front: 5, v_sync: 5, v_back: 20,
+    h_sync_positive: true, v_sync_positive: true,
+    pixel_hz: 74_250_000,
+}
+
+/// 1920x1080 at 60 Hz (CEA-861 1080p, VIC 16), 148.5 MHz pixel clock,
+/// 2200x1125 total, both syncs positive.
+pub const Hd1920x1080: VideoMode = VideoMode {
+    h_active: 1920, h_front: 88, h_sync: 44, h_back: 148,
+    v_active: 1080, v_front: 4, v_sync: 5, v_back: 36,
+    h_sync_positive: true, v_sync_positive: true,
+    pixel_hz: 148_500_000,
+}
+
+/// Total pixels per line of a mode.
+pub const fn h_total(m: VideoMode) -> uint { m.h_active + m.h_front + m.h_sync + m.h_back }
+
+/// Total lines per frame of a mode.
+pub const fn v_total(m: VideoMode) -> uint { m.v_active + m.v_front + m.v_sync + m.v_back }
+
+/// Video timing generator: horizontal and vertical counters for `Mode`,
+/// sync pulses with the mode's polarity, and the active-video window.
+///
+/// * Runs in the pixel-clock domain: one pixel per cycle.
+/// * `x`/`y` count over the whole line/frame (active area first, so a pixel
+///   at (x, y) is visible exactly when `active`); use them to address pixel
+///   data during `active`.
+/// * All outputs are decoded combinationally from the same two counter
+///   registers and are therefore mutually aligned (`LATENCY` = 0). Register
+///   them (together) at the pins if needed.
+/// * After reset the counters start at (0, 0): `frame_start` is high on the
+///   first cycle.
+pub module VgaTiming<Mode: VideoMode = Vga640x480> {
+    /// Delay of the decoded outputs relative to the counters.
+    pub const LATENCY: uint = 0
+    /// Pixels per line.
+    pub const H_TOTAL: uint = h_total(Mode)
+    /// Lines per frame.
+    pub const V_TOTAL: uint = v_total(Mode)
+    /// Width of `x`.
+    pub const XW: uint = clog2(H_TOTAL)
+    /// Width of `y`.
+    pub const YW: uint = clog2(V_TOTAL)
+    const H_SYNC_START: uint = Mode.h_active + Mode.h_front
+    const H_SYNC_END: uint = H_SYNC_START + Mode.h_sync
+    const V_SYNC_START: uint = Mode.v_active + Mode.v_front
+    const V_SYNC_END: uint = V_SYNC_START + Mode.v_sync
+
+    /// Pixel clock.
+    in clk: clock
+    /// Reset: counters to (0, 0).
+    in rst: reset
+    /// Horizontal position within the line (0 .. H_TOTAL - 1).
+    out x: uint<XW>
+    /// Vertical position within the frame (0 .. V_TOTAL - 1).
+    out y: uint<YW>
+    /// Horizontal sync, with the mode's polarity.
+    out hsync: bool
+    /// Vertical sync, with the mode's polarity.
+    out vsync: bool
+    /// High while (x, y) is inside the visible area (data enable, "DE").
+    out active: bool
+    /// High on the first pixel of every frame, (0, 0).
+    out frame_start: bool
+    /// High on the first pixel of every visible line, (0, y < v_active).
+    out line_start: bool
+
+    reg hc: uint<XW> = 0
+    reg vc: uint<YW> = 0
+    let line_end = hc == H_TOTAL - 1
+    let frame_end = vc == V_TOTAL - 1
+
+    on clk {
+        hc = if line_end { 0 } else { hc +% 1 }
+        if line_end {
+            vc = if frame_end { 0 } else { vc +% 1 }
+        }
+    }
+
+    let in_hsync = hc >= H_SYNC_START and hc < H_SYNC_END
+    let in_vsync = vc >= V_SYNC_START and vc < V_SYNC_END
+    x = hc
+    y = vc
+    hsync = if Mode.h_sync_positive { in_hsync } else { !in_hsync }
+    vsync = if Mode.v_sync_positive { in_vsync } else { !in_vsync }
+    active = hc < Mode.h_active and vc < Mode.v_active
+    frame_start = hc == 0 and vc == 0
+    line_start = hc == 0 and vc < Mode.v_active
+
+    /// Counters stay inside the frame.
+    property counters_in_range {
+        always hc < H_TOTAL and vc < V_TOTAL
+    }
+    /// Active video never overlaps a sync pulse.
+    property no_sync_during_active {
+        never active and (in_hsync or in_vsync)
+    }
+    /// The vertical counter only moves at the end of a line.
+    property v_moves_at_line_end {
+        always !line_end |=> stable(vc)
+    }
+}
+
+/// A tiny mode for fast tests: 4+1+2+1 = 8 pixels by 3+1+1+1 = 6 lines.
+const TinyMode: VideoMode = VideoMode {
+    h_active: 4, h_front: 1, h_sync: 2, h_back: 1,
+    v_active: 3, v_front: 1, v_sync: 1, v_back: 1,
+    h_sync_positive: true, v_sync_positive: false,
+    pixel_hz: 1_000,
+}
+
+test "timing generator walks a tiny frame" {
+    let dut = sim VgaTiming<TinyMode>()
+    dut.reset()
+    expect dut.frame_start and dut.line_start and dut.active
+    // first line: active for x = 0..3, front porch at 4, sync at 5..6, back porch at 7
+    let act = [true, true, true, true, false, false, false, false]
+    let hs = [false, false, false, false, false, true, true, false]
+    for i in 0..8 {
+        expect dut.x == i and dut.y == 0
+        expect dut.active == act[i]
+        expect dut.hsync == hs[i]
+        expect dut.vsync                 // negative polarity, not in sync
+        dut.step()
+    }
+    expect dut.x == 0 and dut.y == 1 and dut.line_start and !dut.frame_start
+}
+
+test "vertical sync and blanking of the tiny frame" {
+    let dut = sim VgaTiming<TinyMode>()
+    dut.reset()
+    dut.step(3 * 8)                      // start of line 3: vertical front porch
+    expect dut.y == 3 and !dut.active and !dut.line_start and dut.vsync
+    dut.step(8)                          // line 4: vsync (active-low)
+    expect dut.y == 4 and !dut.vsync
+    dut.step(8)                          // line 5: back porch
+    expect dut.y == 5 and dut.vsync
+    dut.step(8)                          // wraps to the next frame
+    expect dut.frame_start and dut.x == 0 and dut.y == 0
+}
+
+test "640x480 has 800 pixels per line and 525 lines per frame" {
+    let dut = sim VgaTiming<Vga640x480>()
+    dut.reset()
+    dut.step()
+    dut.step_until(dut.x == 0, max: 1000)
+    expect dut.y == 1
+    // hsync is active-low from x = 656 to 751
+    dut.step(656)
+    expect !dut.hsync
+    dut.step(95)
+    expect !dut.hsync
+    dut.step()
+    expect dut.hsync
+    dut.step_until(dut.frame_start, max: 800 * 525)
+    expect dut.x == 0 and dut.y == 0
+}
+
+test "preset totals match the standards" {
+    expect h_total(Vga640x480) == 800 and v_total(Vga640x480) == 525
+    expect h_total(Svga800x600) == 1056 and v_total(Svga800x600) == 628
+    expect h_total(Xga1024x768) == 1344 and v_total(Xga1024x768) == 806
+    expect h_total(Hd1280x720) == 1650 and v_total(Hd1280x720) == 750
+    expect h_total(Hd1920x1080) == 2200 and v_total(Hd1920x1080) == 1125
+}

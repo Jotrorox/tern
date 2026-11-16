@@ -1,0 +1,195 @@
+package std::video
+
+use std::math::widen_signed
+
+/// The four TMDS control symbols of DVI 1.0, indexed by `c = C1 ++ C0`
+/// (bit 0 of each symbol is transmitted first).
+pub const TMDS_CTRL_00: bit<10> = 0b1101010100
+/// Control symbol for C1 = 0, C0 = 1.
+pub const TMDS_CTRL_01: bit<10> = 0b0010101011
+/// Control symbol for C1 = 1, C0 = 0.
+pub const TMDS_CTRL_10: bit<10> = 0b0101010100
+/// Control symbol for C1 = 1, C0 = 1.
+pub const TMDS_CTRL_11: bit<10> = 0b1010101011
+
+/// Stage 1 of TMDS encoding (DVI 1.0 §3.2.2): transition minimisation.
+/// Returns q_m[8:0]: q_m[0] = D[0], q_m[i] = q_m[i-1] XOR D[i] (q_m[8] = 1),
+/// or XNOR when D has more than four ones, or exactly four ones and D[0] = 0
+/// (q_m[8] = 0).
+///
+/// Written in word form: the prefix XOR of D (p[i] = D[0] ^ .. ^ D[i]) is
+/// three shift-and-xor steps, and the XNOR chain equals the XOR chain with
+/// every odd bit inverted (0xAA).
+pub fn tmds_transition(d: u8) -> bit<9> {
+    let p1 = d ^ (d << 1)
+    let p2 = p1 ^ (p1 << 2)
+    let p4 = p2 ^ (p2 << 4)
+    let ones = count_ones(d)
+    let use_xnor = ones > 4 or (ones == 4 and !d[0])
+    if use_xnor { 0u1 ++ (p4 ^ 0xAA) } else { 1u1 ++ p4 }
+}
+
+/// Decodes a TMDS data symbol back to its byte (DVI 1.0 decode algorithm).
+/// Control symbols are not data; check for them before decoding.
+pub fn tmds_decode(q: bit<10>) -> u8 {
+    let w: u8 = if q[9] { ~q[7:0] } else { q[7:0] }
+    let x = w ^ (w << 1)
+    if q[8] { x } else { x ^ 0xFE }
+}
+
+/// True when `q` is one of the four TMDS control symbols.
+pub fn tmds_is_control(q: bit<10>) -> bool {
+    q == TMDS_CTRL_00 or q == TMDS_CTRL_01 or q == TMDS_CTRL_10 or q == TMDS_CTRL_11
+}
+
+/// TMDS 8b/10b encoder for one DVI/HDMI channel (DVI 1.0 §3.2).
+///
+/// * While `de` is high, `data` is encoded with transition minimisation and
+///   DC balancing: the running disparity `cnt` (ones minus zeros sent so
+///   far) decides whether the 8 data bits are inverted (flagged in q[9]).
+/// * While `de` is low, the control symbol selected by `c` (`c[1]` = C1,
+///   `c[0]` = C0; on the blue channel these carry vsync/hsync) is sent and
+///   the disparity is reset to zero.
+/// * `q` is the 10-bit symbol, bit 0 first on the wire (serialise LSB
+///   first). It is registered: `LATENCY` = 1.
+pub module Tmds {
+    /// Cycles from the inputs to the symbol on `q`.
+    pub const LATENCY: uint = 1
+
+    /// Pixel clock (the 10x serialiser clock is not part of this module).
+    in clk: clock
+    /// Reset: disparity to zero, output to control symbol 00.
+    in rst: reset
+    /// Pixel data byte, encoded while `de` is high.
+    in data: u8
+    /// Control bits C1 ++ C0, sent while `de` is low.
+    in c: bit<2>
+    /// Data enable (active video).
+    in de: bool
+    /// Encoded 10-bit symbol, bit 0 transmitted first.
+    out q: bit<10>
+
+    reg cnt: sint<6> = 0
+    reg q_out: bit<10> = TMDS_CTRL_00
+
+    let qm = tmds_transition(data)
+    let qm8 = qm[8]
+    let low: bit<8> = qm[7:0]
+    let ones = count_ones(low)
+    // ones - zeros of q_m[7:0], in -8..8
+    let balance = (widen_signed(ones) + widen_signed(ones) - 8) as sint<6>
+
+    var sym: bit<10>
+    var cnt_next: sint<6>
+    comb {
+        if cnt == 0 or ones == 4 {
+            sym = ((!qm8) as uint<1>) ++ (qm8 as uint<1>) ++ (if qm8 { low } else { ~low })
+            cnt_next = if qm8 { cnt +% balance } else { cnt -% balance }
+        } else if (cnt > 0 and ones > 4) or (cnt < 0 and ones < 4) {
+            sym = 1u1 ++ (qm8 as uint<1>) ++ ~low
+            cnt_next = (if qm8 { cnt +% 2 } else { cnt }) -% balance
+        } else {
+            sym = 0u1 ++ (qm8 as uint<1>) ++ low
+            cnt_next = (if qm8 { cnt } else { cnt -% 2 }) +% balance
+        }
+    }
+
+    let ctrl: bit<10> = match c {
+        0b00 => TMDS_CTRL_00,
+        0b01 => TMDS_CTRL_01,
+        0b10 => TMDS_CTRL_10,
+        0b11 => TMDS_CTRL_11,
+    }
+
+    on clk {
+        if de {
+            q_out = sym
+            cnt = cnt_next
+        } else {
+            q_out = ctrl
+            cnt = 0
+        }
+    }
+
+    q = q_out
+
+    /// The running disparity of a DVI stream stays within ±8 (it is always even).
+    property disparity_bounded {
+        always cnt >= -8 and cnt <= 8 and !cnt[0]
+    }
+    /// Blanking resets the disparity.
+    property blanking_resets_disparity {
+        always !de |=> cnt == 0
+    }
+}
+
+test "tmds transition stage" {
+    expect tmds_transition(0x00) == 0b1_0000_0000
+    expect tmds_transition(0xFF) == 0b0_1111_1111      // 8 ones: XNOR chain
+    expect tmds_transition(0x01) == 0b1_1111_1111      // 1 one: XOR chain
+    expect tmds_transition(0x55) == 0b1_0011_0011      // 4 ones and D[0] = 1: XOR chain
+    expect tmds_transition(0xAA) == 0b0_1100_1100      // 4 ones and D[0] = 0: XNOR chain
+}
+
+test "tmds encodes a known sequence" {
+    // Reference values from the DVI 1.0 algorithm, starting at cnt = 0.
+    let dut = sim Tmds()
+    dut.reset()
+    dut.de = true
+    dut.c = 0
+    let data = [0x00, 0x00, 0xFF, 0xFF, 0x10, 0xA5, 0x55, 0x80]
+    let want = [0x100, 0x3FF, 0x200, 0x0FF, 0x1F0, 0x163, 0x133, 0x180]
+    let disparity = [-8, 2, -6, 0, 0, 0, 0, -6]
+    for i in 0..8 {
+        dut.data = data[i]
+        dut.step()
+        expect dut.q == want[i]
+        expect dut.cnt == disparity[i]
+    }
+}
+
+test "tmds control symbols during blanking" {
+    let dut = sim Tmds()
+    dut.reset()
+    dut.de = false
+    dut.data = 0
+    let want = [0b1101010100, 0b0010101011, 0b0101010100, 0b1010101011]
+    for c in 0..4 {
+        dut.c = c
+        dut.step()
+        expect dut.q == want[c]
+        expect tmds_is_control(dut.q)
+        expect dut.cnt == 0
+    }
+}
+
+test "tmds round-trips random data and stays DC balanced" {
+    let dut = sim Tmds()
+    dut.reset()
+    dut.de = true
+    dut.c = 0
+    var disparity: sint<16> = 0
+    for _ in 0..2000 {
+        let v = rand<u8>()
+        dut.data = v
+        dut.step()
+        expect tmds_decode(dut.q) == v
+        expect !tmds_is_control(dut.q)
+        let ones = count_ones(dut.q) as sint<6>
+        disparity = (disparity + ones + ones - 10) as sint<16>
+        expect disparity >= -8 and disparity <= 8      // exhaustive analysis: the bound is ±8
+    }
+}
+
+test "tmds blanking resets the disparity" {
+    let dut = sim Tmds()
+    dut.reset()
+    dut.de = true
+    dut.c = 0
+    dut.data = 0x00
+    dut.step()
+    expect dut.cnt == -8
+    dut.de = false
+    dut.step()
+    expect dut.cnt == 0 and dut.q == 0b1101010100
+}

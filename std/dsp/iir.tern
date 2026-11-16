@@ -1,0 +1,135 @@
+package std::dsp
+
+/// True when the compile-time integer `v` fits in `sint<w>`.
+pub const fn fits_signed(v: sint, w: uint) -> bool {
+    let lim = (1 as sint) << (w - 1)
+    v >= -lim and v < lim
+}
+
+/// One biquad (second-order) IIR section in direct form I:
+///
+///     y[n] = (B0·x[n] + B1·x[n-1] + B2·x[n-2] - A1·y[n-1] - A2·y[n-2]) / 2^Frac
+///
+/// * Coefficients are compile-time integers in fixed point with `Frac`
+///   fraction bits, each of which must fit in `sint<CW>` (checked at
+///   elaboration). With `Frac = 14`, `1.0` is `16384`. `A0` is 1 by
+///   convention, so the signs follow the usual `1 + A1·z^-1 + A2·z^-2`
+///   denominator.
+/// * `T` is the sample type, read as two's complement (see std::dsp). The
+///   accumulator is exact; the result is rounded half-up to `Frac` and
+///   saturated to the width of `T` before it is fed back and output, so an
+///   overflowing filter clips instead of wrapping.
+/// * One sample per cycle; `LATENCY` = 1. The state advances only on valid
+///   input cycles.
+/// * Cascade sections for higher orders.
+pub module IirBiquad<T: type, CW: uint, Frac: uint, B0: sint, B1: sint, B2: sint, A1: sint, A2: sint>
+where Frac >= 1, Frac < CW
+{
+    /// Cycles from a valid input sample to its output sample.
+    pub const LATENCY: uint = 1
+    const SW: uint = T::WIDTH
+    /// Accumulator width: five products of SW + CW bits plus rounding.
+    const AW: uint = SW + CW + 3
+    type S = sint<SW>
+
+    static_assert(fits_signed(B0, CW), "B0 does not fit in CW bits")
+    static_assert(fits_signed(B1, CW), "B1 does not fit in CW bits")
+    static_assert(fits_signed(B2, CW), "B2 does not fit in CW bits")
+    static_assert(fits_signed(A1, CW), "A1 does not fit in CW bits")
+    static_assert(fits_signed(A2, CW), "A2 does not fit in CW bits")
+    const C_B0: sint<CW> = B0 as sint<CW>
+    const C_B1: sint<CW> = B1 as sint<CW>
+    const C_B2: sint<CW> = B2 as sint<CW>
+    const C_A1: sint<CW> = A1 as sint<CW>
+    const C_A2: sint<CW> = A2 as sint<CW>
+
+    /// Clock.
+    in clk: clock
+    /// Reset: clears the filter state.
+    in rst: reset
+    /// Input samples.
+    in in: Valid<T>
+    /// Filtered samples, rounded and saturated to `T`.
+    out out: Valid<T>
+
+    reg x1: S = 0
+    reg x2: S = 0
+    reg y1: S = 0
+    reg y2: S = 0
+    reg y_out: S = 0
+    reg valid_out: bool = false
+
+    let x0 = bits(in.data) as S
+    let acc = (x0 * C_B0 + x1 * C_B1 + x2 * C_B2 - y1 * C_A1 - y2 * C_A2 + (1 << (Frac - 1))) as sint<AW>
+    let shifted = acc >>> Frac
+    let y0: S = if shifted > S::MAX { S::MAX } else if shifted < S::MIN { S::MIN } else { shifted as S }
+
+    on clk {
+        valid_out = in.valid
+        if in.valid {
+            x1 = x0
+            x2 = x1
+            y1 = y0
+            y2 = y1
+            y_out = y0
+        }
+    }
+
+    out.valid = valid_out
+    out.data = T::from_bits(bits(y_out))
+
+    /// Every valid input produces exactly one output on the next cycle.
+    property latency_is_fixed {
+        always out.valid == past(in.valid, 1)
+    }
+    /// The filter state is frozen while no sample arrives.
+    property state_holds_without_input {
+        always !in.valid |=> stable(y1) and stable(x1)
+    }
+}
+
+test "biquad with B0 = 1.0 passes samples through" {
+    let dut = sim IirBiquad<s16, 18, 14, 16384, 0, 0, 0, 0>()
+    dut.reset()
+    for v in [0, 1, -1, 12345, -32768, 32767] {
+        dut.in = Valid { valid: true, data: v }
+        dut.step()
+        expect dut.out.valid and dut.out.data == v
+    }
+}
+
+test "biquad one-pole low-pass converges with rounding" {
+    // y = 0.5·x + 0.5·y[n-1]  (A1 = -0.5 because the denominator is 1 + A1·z^-1)
+    let dut = sim IirBiquad<s16, 18, 14, 8192, 0, 0, -8192, 0>()
+    dut.reset()
+    for want in [500, 750, 875, 938, 969] {
+        dut.in = Valid { valid: true, data: 1000 }
+        dut.step()
+        expect dut.out.data == want
+    }
+}
+
+test "biquad saturates instead of wrapping" {
+    // gain 2.0
+    let dut = sim IirBiquad<s16, 18, 14, 32768, 0, 0, 0, 0>()
+    dut.reset()
+    dut.in = Valid { valid: true, data: 20000 }
+    dut.step()
+    expect dut.out.data == 32767
+    dut.in = Valid { valid: true, data: -20000 }
+    dut.step()
+    expect dut.out.data == -32768
+}
+
+test "biquad second-order FIR part uses the delayed inputs" {
+    // y = x[n] + 2·x[n-1] + x[n-2] with Frac = 1 (coefficients doubled)
+    let dut = sim IirBiquad<s16, 8, 1, 2, 4, 2, 0, 0>()
+    dut.reset()
+    let want = [10, 20, 10, 0]
+    let xs = [10, 0, 0, 0]
+    for i in 0..4 {
+        dut.in = Valid { valid: true, data: xs[i] }
+        dut.step()
+        expect dut.out.data == want[i]
+    }
+}

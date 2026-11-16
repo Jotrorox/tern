@@ -1,0 +1,57 @@
+package std::target
+
+// std::target: the only vendor-specific part of std (spec §12.1 rule 6).
+//
+// Subpackages:
+//   std::target::xilinx   7-series: Mmcm, Pll, Bufg, Iddr, Oddr, Iobuf, Idelay,
+//                         IdelayCtrl, Startup (+ the raw primitives MMCME2_BASE,
+//                         PLLE2_BASE, BUFG, IDDR, ODDR, IOBUF, IDELAYE2,
+//                         IDELAYCTRL, STARTUPE2)
+//   std::target::lattice  iCE40: SbPll, SbIo; ECP5: EcpPll, EcpIo
+//                         (+ SB_PLL40_CORE, SB_IO, EHXPLLL, BB)
+//   std::target::intel    Pll, AltIobuf, DdioIn, DdioOut
+//                         (+ altpll, ALT_IOBUF, ALTDDIO_IN, ALTDDIO_OUT)
+//   std::target::generic  behavioural fallbacks with the same names, generics
+//                         and (except for pads) ports, so every design that
+//                         uses std::target also runs on the built-in simulator.
+//
+// Vendor primitives are `extern module NAME("")`: the empty path means the
+// module lives in the vendor's simulation/synthesis library (unisims,
+// sb_ice40.v, ecp5 cells_sim.v, altera_mf), so `tern build` passes no file
+// through and tests that instantiate them need `--backend verilator` with that
+// library. Each primitive is declared with only the ports and parameters the
+// wrappers use; omitted inputs keep their library defaults.
+//
+// Limits that follow from the language:
+// * Tern has no real or string values. Parameters that are real in the vendor
+//   library (MMCM multipliers, input periods) are passed as integers, so
+//   fractional multiply/divide settings are not available; string parameters
+//   are left at their library defaults, which the wrappers are designed
+//   around (e.g. IDDR in OPPOSITE_EDGE mode with fabric realignment).
+// * Pad primitives take the #[top] module's `tri<bool>` port (`pad`). A pad
+//   wrapper only passes the pad to the vendor primitive; logic never reads or
+//   drives a `tri` value.
+
+/// The period of `hz` in whole nanoseconds, or 0 when it is not a whole
+/// number of nanoseconds. Vendor PLLs accept 0 as "unspecified" and take the
+/// input period from the clock constraint instead.
+pub const fn exact_period_ns(hz: uint) -> uint {
+    if (1_000_000_000 / hz) * hz == 1_000_000_000 { 1_000_000_000 / hz } else { 0 }
+}
+
+/// The period of `hz` in picoseconds, rounded to nearest.
+pub const fn period_ps(hz: uint) -> uint {
+    (1_000_000_000_000 + hz / 2) / hz
+}
+
+test "exact_period_ns" {
+    expect exact_period_ns(100_000_000) == 10
+    expect exact_period_ns(125_000_000) == 8
+    expect exact_period_ns(12_000_000) == 0           // 83.33 ns
+}
+
+test "period_ps" {
+    expect period_ps(50_000_000) == 20_000
+    expect period_ps(12_000_000) == 83_333
+    expect period_ps(148_500_000) == 6_734
+}

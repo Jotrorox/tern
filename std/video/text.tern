@@ -1,0 +1,241 @@
+package std::video
+
+/// The 5x7 glyph of a character code: seven rows, top first, each a 5-bit
+/// value with bit 4 as the leftmost pixel. The built-in font covers space,
+/// the digits, the upper-case letters (lower case is drawn with the upper
+/// case glyphs) and `! # + , - . / : = ? _`; every other code is blank.
+pub const fn glyph5x7(code: uint) -> [uint; 7] {
+    let c = if code >= 0x61 and code <= 0x7A { code - 0x20 } else { code }
+    match c {
+        0x21 => [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04], // '!'
+        0x23 => [0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A], // '#'
+        0x2B => [0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00], // '+'
+        0x2C => [0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08], // ','
+        0x2D => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00], // '-'
+        0x2E => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C], // '.'
+        0x2F => [0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x00], // '/'
+        0x30 => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E], // '0'
+        0x31 => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E], // '1'
+        0x32 => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F], // '2'
+        0x33 => [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E], // '3'
+        0x34 => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02], // '4'
+        0x35 => [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E], // '5'
+        0x36 => [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E], // '6'
+        0x37 => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08], // '7'
+        0x38 => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E], // '8'
+        0x39 => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C], // '9'
+        0x3A => [0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00], // ':'
+        0x3D => [0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00], // '='
+        0x3F => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04], // '?'
+        0x41 => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11], // 'A'
+        0x42 => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E], // 'B'
+        0x43 => [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E], // 'C'
+        0x44 => [0x1C, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1C], // 'D'
+        0x45 => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F], // 'E'
+        0x46 => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10], // 'F'
+        0x47 => [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F], // 'G'
+        0x48 => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11], // 'H'
+        0x49 => [0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E], // 'I'
+        0x4A => [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C], // 'J'
+        0x4B => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11], // 'K'
+        0x4C => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F], // 'L'
+        0x4D => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11], // 'M'
+        0x4E => [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11], // 'N'
+        0x4F => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E], // 'O'
+        0x50 => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10], // 'P'
+        0x51 => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D], // 'Q'
+        0x52 => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11], // 'R'
+        0x53 => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E], // 'S'
+        0x54 => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04], // 'T'
+        0x55 => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E], // 'U'
+        0x56 => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04], // 'V'
+        0x57 => [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A], // 'W'
+        0x58 => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11], // 'X'
+        0x59 => [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04], // 'Y'
+        0x5A => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F], // 'Z'
+        0x5F => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F], // '_'
+        _ => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+    }
+}
+
+/// The 8x16 font ROM image: 256 characters x 16 rows, address `code ++ row`,
+/// each byte one row with bit 7 as the leftmost pixel. Glyphs are the 5x7
+/// [glyph5x7] font doubled vertically: rows 1..14 of the cell, columns 1..5.
+/// Rows 0 and 15 and columns 0, 6, 7 are blank, which spaces the text.
+/// To use another font, build the same layout from `include_hex`.
+pub const fn font8x16() -> [u8; 4096] {
+    var rom: [u8; 4096]
+    for code in 0..256 {
+        let g = glyph5x7(code)
+        for row in 0..16 {
+            let v = if row >= 1 and row <= 14 { g[(row - 1) / 2] << 2 } else { 0 }
+            rom[code * 16 + row] = v as u8
+        }
+    }
+    rom
+}
+
+/// Initial character buffer contents: all spaces.
+pub const fn blank_screen<N: uint>() -> [u8; N] {
+    var t: [u8; N]
+    for i in 0..N { t[i] = 0x20 }
+    t
+}
+
+/// A character write into a [TextMode] buffer.
+pub struct CharWrite<CW: uint, RW: uint> {
+    col: uint<CW>,
+    row: uint<RW>,
+    ch: u8,
+}
+
+/// Text-mode display: a `Cols` x `Rows` character buffer rendered with an
+/// 8x16 font onto the raster of `Mode` (80 x 30 on 640 x 480 by default).
+///
+/// * Contains its own [VgaTiming]; run it on the pixel clock of `Mode`.
+/// * Characters are written through `in` (one per cycle, never stalls),
+///   addressed by column and row. The buffer starts as all spaces after
+///   configuration; it is RAM and is not cleared by reset.
+/// * Output `pixel` is the font bit (true = foreground) with `hsync`,
+///   `vsync` and `active` delayed to match: all four are registered and
+///   `LATENCY` = 3 cycles behind the internal timing (character RAM read,
+///   font ROM read, output register). Colour them outside, e.g.
+///   `rgb = if pixel and active { fg } else { bg }`.
+/// * Font: [font8x16] (built-in 5x7 glyphs; see [glyph5x7] for the covered
+///   characters).
+pub module TextMode<Mode: VideoMode = Vga640x480, Cols: uint = 80, Rows: uint = 30>
+where Cols * 8 <= Mode.h_active, Rows * 16 <= Mode.v_active
+{
+    /// Cycles from the internal timing to `pixel`/`hsync`/`vsync`/`active`.
+    pub const LATENCY: uint = 3
+    /// Width of a column index.
+    pub const CW: uint = clog2(Cols)
+    /// Width of a row index.
+    pub const RW: uint = clog2(Rows)
+    const DEPTH: uint = 1 << (CW + RW)
+
+    /// Pixel clock.
+    in clk: clock
+    /// Reset (timing and pipeline; not the character buffer).
+    in rst: reset
+    /// Character writes.
+    in in: Stream<CharWrite<CW, RW>>
+    /// Foreground pixel (font bit), valid when `active`.
+    out pixel: bool
+    /// Horizontal sync, aligned with `pixel`.
+    out hsync: bool
+    /// Vertical sync, aligned with `pixel`.
+    out vsync: bool
+    /// Visible area, aligned with `pixel`.
+    out active: bool
+
+    let timing = VgaTiming<Mode>()
+
+    mem chars: [u8; DEPTH] = blank_screen<DEPTH>()
+    #[ram(block)] mem font: [u8; 4096] = font8x16()
+
+    in.ready = true
+    on clk {
+        if in.valid { chars[in.data.row ++ in.data.col] = in.data.ch }
+    }
+
+    // Stage 0: character cell of the current pixel. Positions beyond the
+    // text area (blanking) read padding; `active` masks them.
+    let col = (timing.x >> 3) as uint<CW>
+    let row = (timing.y >> 4) as uint<RW>
+    let ch = chars.read(row ++ col)
+
+    // Stage 1: glyph row of that character.
+    reg glyph_row_1: uint<4> = 0
+    reg xbit_1: uint<3> = 0
+    let font_byte = font.read(ch ++ glyph_row_1)
+
+    // Stage 2: pick the pixel's bit (bit 7 is the leftmost pixel).
+    reg xbit_2: uint<3> = 0
+
+    reg hs_d: [bool; 2] = all0
+    reg vs_d: [bool; 2] = all0
+    reg act_d: [bool; 2] = all0
+    reg pixel_q: bool = false
+    reg hsync_q: bool = false
+    reg vsync_q: bool = false
+    reg active_q: bool = false
+
+    on clk {
+        glyph_row_1 = timing.y[3:0]
+        xbit_1 = timing.x[2:0]
+        xbit_2 = xbit_1
+        hs_d[0] = timing.hsync
+        hs_d[1] = hs_d[0]
+        vs_d[0] = timing.vsync
+        vs_d[1] = vs_d[0]
+        act_d[0] = timing.active
+        act_d[1] = act_d[0]
+        pixel_q = font_byte[~xbit_2] and act_d[1]
+        hsync_q = hs_d[1]
+        vsync_q = vs_d[1]
+        active_q = act_d[1]
+    }
+
+    pixel = pixel_q
+    hsync = hsync_q
+    vsync = vsync_q
+    active = active_q
+
+    /// No foreground pixel is ever drawn outside the visible area.
+    property pixel_only_when_active {
+        always pixel |-> active
+    }
+    /// The delayed syncs follow the timing generator exactly LATENCY cycles later.
+    property syncs_aligned {
+        always hsync == past(timing.hsync, LATENCY) and vsync == past(timing.vsync, LATENCY)
+    }
+}
+
+test "font ROM layout" {
+    let rom = font8x16()
+    // 'A' row 0 (.###.) lands on cell rows 1 and 2, columns 2..4
+    expect rom[0x41 * 16 + 0] == 0
+    expect rom[0x41 * 16 + 1] == 0b0011_1000
+    expect rom[0x41 * 16 + 2] == 0b0011_1000
+    expect rom[0x41 * 16 + 15] == 0
+    // lower case uses the upper case glyph, unknown codes are blank
+    expect rom[0x61 * 16 + 1] == rom[0x41 * 16 + 1]
+    for r in 0..16 { expect rom[0x20 * 16 + r] == 0 and rom[0x7F * 16 + r] == 0 }
+}
+
+test "text mode draws a character in the top-left cell" {
+    let dut = sim TextMode<Vga640x480, 80, 30>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: CharWrite { col: 0, row: 0, ch: 0x41 } }
+    dut.step()
+    dut.in.valid = false
+    dut.step_until(dut.timing.frame_start, max: 800 * 525 + 10)
+    // second scan line (y = 1) is glyph row 0 of 'A': .###. at x = 2..4
+    dut.step(800 + 3)
+    let want = [false, false, true, true, true, false, false, false]
+    for i in 0..8 {
+        expect dut.active
+        expect dut.pixel == want[i]
+        dut.step()
+    }
+    // the next cell holds a space
+    for _ in 0..8 {
+        expect !dut.pixel
+        dut.step()
+    }
+}
+
+test "text mode output is blank and inactive during blanking" {
+    let dut = sim TextMode<Vga640x480, 80, 30>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: CharWrite { col: 79, row: 0, ch: 0x23 } }
+    dut.step()
+    dut.in.valid = false
+    dut.step_until(dut.timing.frame_start, max: 800 * 525 + 10)
+    dut.step(800 + 3 + 640)             // first pixel after the visible part of line 1
+    for _ in 0..160 {
+        expect !dut.active and !dut.pixel
+        dut.step()
+    }
+}

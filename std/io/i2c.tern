@@ -1,0 +1,598 @@
+package std::io
+
+// I2C master and slave.
+//
+// SDA and SCL are open-drain: a device only ever pulls a line low or releases
+// it, and a pull-up makes it high. `tri<T>` exists only on a #[top] module, so
+// std models each line as `<line>_oe` (out: pull the line low) and `<line>_i`
+// (in: the level on the pad). The #[top] module connects them to a `tri<bool>`
+// pad that is driven low while `_oe` is high and released otherwise.
+//
+// The `_i` inputs are asynchronous; both modules synchronise them with two
+// flip-flops.
+
+/// One I2C master operation; a transaction is Start, a Write of the address
+/// byte (`addr << 1 | read`), further Writes or Reads, and Stop.
+pub enum I2cCmd {
+    /// START, or repeated START when the master already owns the bus.
+    Start,
+    /// Send one byte (MSB first) and receive the ACK bit.
+    Write { byte: u8 },
+    /// Receive one byte (MSB first) and answer with ACK (`ack`) or NACK
+    /// (`!ack`, for the last byte of a read).
+    Read { ack: bool },
+    /// STOP; ignored when the master does not own the bus.
+    Stop,
+}
+
+/// Result of a Write or Read operation of [I2cMaster].
+pub struct I2cResult {
+    /// Byte received by a Read (zero for a Write).
+    data: u8,
+    /// Write: the slave acknowledged. Read: the master acknowledged.
+    ack: bool,
+}
+
+/// I2C master: executes a stream of [I2cCmd] operations on SCL/SDA.
+///
+/// * One bit takes four quarter periods of `Q = ClkHz / (4 * SclHz)` cycles:
+///   SCL low for two quarters (SDA changes after the first), then released for
+///   two quarters (SDA sampled after the first). START and STOP take six
+///   quarters (setup and hold of 2 Q each).
+/// * START: SDA falls while SCL is high, then SCL is pulled low. A Start issued
+///   while the master owns the bus is a repeated START. STOP: SDA rises while
+///   SCL is high; afterwards both lines are released.
+/// * The 9th clock of each byte carries ACK (SDA low) or NACK (SDA high).
+/// * Clock stretching: after releasing SCL the master waits until SCL is
+///   actually high (counted from the synchronised level) before timing the
+///   high phase.
+/// * Every Write and Read produces one `out` result; Start and Stop produce
+///   none. `busy` is high while an operation runs; `in` is accepted only when
+///   idle.
+/// * Single master: arbitration loss is not detected.
+pub module I2cMaster<ClkHz: uint, SclHz: uint = 100_000>
+where SclHz > 0
+{
+    /// Clock cycles per quarter SCL period.
+    pub const Q: uint = ClkHz / (4 * SclHz)
+    static_assert(Q >= 4, "ClkHz must be at least 16 x SclHz")
+    /// Cycles of one Write or Read operation without clock stretching.
+    pub const LATENCY: uint = 9 * 4 * Q
+
+    /// Clock.
+    in clk: clock
+    /// Reset: releases both lines.
+    in rst: reset
+    /// Operations, accepted one at a time when idle.
+    in in: Stream<I2cCmd>
+    /// Result of each Write and Read, valid for one cycle.
+    out out: Valid<I2cResult>
+    /// An operation is in progress.
+    out busy: bool
+    /// Pull SCL low.
+    out scl_oe: bool
+    /// SCL level at the pad (asynchronous).
+    in scl_i: bool
+    /// Pull SDA low.
+    out sda_oe: bool
+    /// SDA level at the pad (asynchronous).
+    in sda_i: bool
+
+    enum State { Idle, Start, Stop, Byte }
+
+    reg state: State = .Idle
+    reg step: uint<3> = 0
+    reg tick: uint<clog2(Q + 1)> = 0
+    reg bitn: uint<4> = 0
+    reg sh: u8 = 0
+    reg is_read: bool = false
+    reg send_ack: bool = false
+    reg ack_rx: bool = false
+    reg scl_oe_q: bool = false
+    reg sda_oe_q: bool = false
+    reg scl_m: bool = true
+    reg scl_s: bool = true
+    reg sda_m: bool = true
+    reg sda_s: bool = true
+    reg out_valid: bool = false
+    reg out_data: I2cResult = all0
+
+    // Steps of a bit: 0, 1 SCL low (SDA set on entering 1); 2, 3 SCL released
+    // (released on entering 2, sampled on entering 3); SCL pulled low after 3.
+    // START/STOP use steps 0..5 (SDA edge on entering 4).
+    let last_step: uint<3> = if state == .Byte { 3 } else { 5 }
+    let stretching = step == 2 and !scl_s
+    let step_end = state != .Idle and tick == Q - 1 and !stretching
+    let cur_bit = if bitn == 8 { if is_read { !send_ack } else { true } } else { if is_read { true } else { sh[7] } }
+
+    in.ready = state == .Idle
+    out.valid = out_valid
+    out.data = out_data
+    busy = state != .Idle
+    scl_oe = scl_oe_q
+    sda_oe = sda_oe_q
+
+    on clk {
+        scl_m = scl_i
+        scl_s = scl_m
+        sda_m = sda_i
+        sda_s = sda_m
+        out_valid = false
+        tick = if state == .Idle or stretching or step_end { 0 } else { tick +% 1 }
+        if step_end {
+            if step == last_step {
+                step = 0
+                match state {
+                    .Start => {
+                        scl_oe_q = true
+                        state = .Idle
+                    },
+                    .Stop => state = .Idle,
+                    .Byte => {
+                        scl_oe_q = true
+                        if bitn == 8 {
+                            state = .Idle
+                            out_valid = true
+                            out_data = I2cResult { data: sh, ack: if is_read { send_ack } else { ack_rx } }
+                        } else {
+                            bitn = bitn +% 1
+                        }
+                    },
+                    .Idle => {},
+                }
+            } else {
+                let n = step +% 1
+                step = n
+                if n == 1 {
+                    match state {
+                        .Start => sda_oe_q = false,
+                        .Stop => sda_oe_q = true,
+                        .Byte => sda_oe_q = !cur_bit,
+                        .Idle => {},
+                    }
+                }
+                if n == 2 { scl_oe_q = false }
+                if n == 3 and state == .Byte {
+                    if bitn == 8 {
+                        ack_rx = !sda_s
+                    } else if is_read {
+                        sh = sh[6:0] ++ (sda_s as uint<1>)
+                    } else {
+                        sh = sh << 1
+                    }
+                }
+                if n == 4 {
+                    match state {
+                        .Start => sda_oe_q = true,           // START: SDA falls while SCL is high
+                        .Stop => sda_oe_q = false,           // STOP: SDA rises while SCL is high
+                        .Byte | .Idle => {},
+                    }
+                }
+            }
+        }
+        if in.fire() {
+            step = 0
+            bitn = 0
+            match in.data {
+                .Start => state = .Start,
+                .Stop => if scl_oe_q { state = .Stop },
+                .Write { byte } => {
+                    state = .Byte
+                    sh = byte
+                    is_read = false
+                },
+                .Read { ack } => {
+                    state = .Byte
+                    sh = 0
+                    is_read = true
+                    send_ack = ack
+                },
+            }
+        }
+    }
+
+    /// Within a byte, SDA only changes while the master holds SCL low.
+    property data_changes_only_while_scl_low {
+        always (state == .Byte and !scl_oe) |-> stable(sda_oe)
+    }
+    /// The only SDA fall with SCL released inside a Start is the START condition.
+    property start_condition { always (state == .Start and rose(sda_oe)) |-> !scl_oe }
+}
+
+/// I2C slave with a fixed 7-bit address.
+///
+/// * Detects START (SDA falls while SCL high) and STOP (SDA rises while SCL
+///   high) on the synchronised lines; `clk` must be at least 16x SCL.
+/// * After START it receives the address byte; if the address matches it
+///   ACKs, otherwise it ignores the bus until the next START. General call
+///   and 10-bit addresses are not supported.
+/// * Write transfers: every received byte is ACKed and delivered on `out`
+///   (no backpressure).
+/// * Read transfers: bytes are taken from `in` and sent MSB first; while `in`
+///   is not valid the slave stretches SCL (holds it low). It keeps sending
+///   while the master ACKs and stops at the master's NACK.
+/// * After a stretch, SDA is set `SetupCycles` cycles before SCL is released
+///   (choose >= 250 ns worth of cycles).
+/// * `stop` pulses when a STOP ends a transfer addressed to this slave.
+pub module I2cSlave<Addr: uint<7>, SetupCycles: uint = 16>
+where SetupCycles >= 1
+{
+    /// Clock, at least 16x SCL.
+    in clk: clock
+    /// Reset: releases both lines.
+    in rst: reset
+    /// SCL level at the pad (asynchronous).
+    in scl_i: bool
+    /// SDA level at the pad (asynchronous).
+    in sda_i: bool
+    /// Pull SCL low (clock stretching).
+    out scl_oe: bool
+    /// Pull SDA low (ACK and read data).
+    out sda_oe: bool
+    /// Bytes written by the master, valid for one cycle each.
+    out out: Valid<u8>
+    /// Bytes to return to the master on reads.
+    in in: Stream<u8>
+    /// The slave is addressed (from its address ACK until STOP, NACK or a new START).
+    out selected: bool
+    /// Pulses when a STOP ends a transfer addressed to this slave.
+    out stop: bool
+
+    enum State { Idle, Addr, AddrAck, Write, WriteAck, ReadWait, Read, ReadAck }
+
+    reg scl_m: bool = true
+    reg scl_s: bool = true
+    reg scl_d: bool = true
+    reg sda_m: bool = true
+    reg sda_s: bool = true
+    reg sda_d: bool = true
+
+    reg state: State = .Idle
+    reg sh: u8 = 0
+    reg cnt: uint<4> = 0
+    reg rw: bool = false
+    reg master_ack: bool = false
+    reg sda_oe_q: bool = false
+    reg stretch: bool = false
+    reg setup_cnt: uint<clog2(SetupCycles + 1)> = 0
+    reg out_valid: bool = false
+    reg out_data: u8 = 0
+    reg stop_q: bool = false
+
+    let start_cond = scl_s and scl_d and sda_d and !sda_s
+    let stop_cond = scl_s and scl_d and !sda_d and sda_s
+    let rise = scl_s and !scl_d
+    let fall = !scl_s and scl_d
+
+    in.ready = state == .ReadWait
+    out.valid = out_valid
+    out.data = out_data
+    scl_oe = stretch
+    sda_oe = sda_oe_q
+    selected = state != .Idle and state != .Addr
+    stop = stop_q
+
+    on clk {
+        scl_m = scl_i
+        scl_s = scl_m
+        scl_d = scl_s
+        sda_m = sda_i
+        sda_s = sda_m
+        sda_d = sda_s
+        out_valid = false
+        stop_q = false
+
+        if rise {
+            match state {
+                .Addr | .Write => {
+                    sh = sh[6:0] ++ (sda_s as uint<1>)
+                    cnt = cnt +% 1
+                },
+                .Read => cnt = cnt +% 1,
+                .ReadAck => master_ack = !sda_s,
+                .Idle | .AddrAck | .WriteAck | .ReadWait => {},
+            }
+        }
+        if fall {
+            match state {
+                .Addr => if cnt == 8 {
+                    if sh[7:1] == Addr {
+                        state = .AddrAck
+                        rw = sh[0]
+                        sda_oe_q = true                       // ACK our address
+                    } else {
+                        state = .Idle
+                    }
+                },
+                .AddrAck => {
+                    sda_oe_q = false
+                    cnt = 0
+                    state = if rw { .ReadWait } else { .Write }
+                },
+                .Write => if cnt == 8 {
+                    out_valid = true
+                    out_data = sh
+                    sda_oe_q = true                           // ACK the byte
+                    state = .WriteAck
+                },
+                .WriteAck => {
+                    sda_oe_q = false
+                    cnt = 0
+                    state = .Write
+                },
+                .Read => if cnt == 8 {
+                    sda_oe_q = false                          // release for the master's ACK
+                    state = .ReadAck
+                } else {
+                    sh = sh << 1
+                    sda_oe_q = !sh[6]
+                },
+                .ReadAck => state = if master_ack { .ReadWait } else { .Idle },
+                .Idle | .ReadWait => {},
+            }
+        }
+        if state == .ReadWait {
+            if in.valid {
+                sh = in.data
+                sda_oe_q = !in.data[7]
+                cnt = 0
+                state = .Read
+                setup_cnt = SetupCycles
+            } else {
+                stretch = true
+            }
+        }
+        if setup_cnt != 0 {
+            setup_cnt = setup_cnt -% 1
+        } else if state != .ReadWait {
+            stretch = false
+        }
+        if start_cond {
+            state = .Addr
+            cnt = 0
+            sda_oe_q = false
+            stretch = false
+            setup_cnt = 0
+        }
+        if stop_cond {
+            if state != .Idle and state != .Addr { stop_q = true }
+            state = .Idle
+            sda_oe_q = false
+            stretch = false
+            setup_cnt = 0
+        }
+    }
+
+    /// The slave never touches the bus unless it is addressed.
+    property releases_bus_when_idle { always state == .Idle |-> !sda_oe and !scl_oe }
+    /// A written byte is always followed by our ACK.
+    property ack_after_write { always out.valid |-> sda_oe }
+}
+
+// ---------------------------------------------------------------------------
+// Test bench (not public): master and slave on one open-drain bus.
+
+/// I2cMaster (Q = 8) and I2cSlave at address 0x42 on a wired-AND bus, plus a
+/// bus monitor counting START and STOP conditions.
+module I2cPair {
+    in clk: clock
+    in rst: reset
+    /// Master operations.
+    in cmd: Stream<I2cCmd>
+    /// Bytes the slave returns on reads.
+    in tx: Stream<u8>
+    /// A third device holding SCL low.
+    in hold_scl: bool
+    /// Master busy.
+    out busy: bool
+    /// Last master result.
+    out res_last: I2cResult
+    /// Last byte the slave received.
+    out rx_last: u8
+    /// Bytes the slave received.
+    out rx_count: u8
+    /// START conditions seen on the bus (including repeated STARTs).
+    out starts: u8
+    /// STOP conditions seen on the bus.
+    out stops: u8
+    /// SCL line level.
+    out scl: bool
+    /// Slave is selected.
+    out selected: bool
+
+    let m = I2cMaster<ClkHz: 3_200_000, SclHz: 100_000>(in: cmd)
+    let s = I2cSlave<Addr: 0x42>(in: tx)
+    let scl_line = !(m.scl_oe or s.scl_oe or hold_scl)
+    let sda_line = !(m.sda_oe or s.sda_oe)
+    m.scl_i = scl_line
+    m.sda_i = sda_line
+    s.scl_i = scl_line
+    s.sda_i = sda_line
+
+    reg scl_d: bool = true
+    reg sda_d: bool = true
+    reg starts_q: u8 = 0
+    reg stops_q: u8 = 0
+    reg res_q: I2cResult = all0
+    reg rx_q: u8 = 0
+    reg rx_n: u8 = 0
+    on clk {
+        scl_d = scl_line
+        sda_d = sda_line
+        if scl_line and scl_d and sda_d and !sda_line { starts_q = starts_q +% 1 }
+        if scl_line and scl_d and !sda_d and sda_line { stops_q = stops_q +% 1 }
+        if m.out.valid { res_q = m.out.data }
+        if s.out.valid { rx_q = s.out.data; rx_n = rx_n +% 1 }
+    }
+    busy = m.busy
+    res_last = res_q
+    rx_last = rx_q
+    rx_count = rx_n
+    starts = starts_q
+    stops = stops_q
+    scl = scl_line
+    selected = s.selected
+}
+
+test "I2C write transaction: address ACK, bytes delivered, START and STOP on the wire" {
+    let dut = sim I2cPair()
+    dut.reset()
+    dut.hold_scl = false
+    dut.tx.valid = false
+    dut.cmd = Stream { valid: true, data: I2cCmd::Start }
+    dut.step()
+    dut.cmd.valid = false
+    for b in [0x84, 0x5A, 0xC3] {                     // address 0x42 + write, then two data bytes
+        dut.step_until(!dut.busy, max: 4000)
+        dut.cmd = Stream { valid: true, data: I2cCmd::Write { byte: b } }
+        dut.step()
+        dut.cmd.valid = false
+        dut.step_until(!dut.busy, max: 4000)
+        expect dut.res_last.ack                       // every byte was ACKed
+    }
+    dut.cmd = Stream { valid: true, data: I2cCmd::Stop }
+    dut.step()
+    dut.cmd.valid = false
+    dut.step_until(!dut.busy, max: 4000)
+    dut.step(50)
+    expect dut.rx_count == 2
+    expect dut.rx_last == 0xC3
+    expect dut.starts == 1 and dut.stops == 1
+    expect !dut.selected
+}
+
+test "I2C write to a missing address is NACKed" {
+    let dut = sim I2cPair()
+    dut.reset()
+    dut.hold_scl = false
+    dut.tx.valid = false
+    for c in [I2cCmd::Start, I2cCmd::Write { byte: 0xA0 }] {         // 0x50 + write: nobody there
+        dut.step_until(!dut.busy, max: 4000)
+        dut.cmd = Stream { valid: true, data: c }
+        dut.step()
+        dut.cmd.valid = false
+    }
+    dut.step_until(!dut.busy, max: 4000)
+    expect !dut.res_last.ack
+    expect !dut.selected and dut.rx_count == 0
+}
+
+test "I2C read with repeated START: register pointer write, then two bytes" {
+    let dut = sim I2cPair()
+    dut.reset()
+    dut.hold_scl = false
+    dut.tx = Stream { valid: true, data: 0x11 }
+    let cmds = [I2cCmd::Start, I2cCmd::Write { byte: 0x84 }, I2cCmd::Write { byte: 0x07 },
+                I2cCmd::Start, I2cCmd::Write { byte: 0x85 }]
+    for c in cmds {
+        dut.step_until(!dut.busy, max: 4000)
+        dut.cmd = Stream { valid: true, data: c }
+        dut.step()
+        dut.cmd.valid = false
+    }
+    dut.step_until(!dut.busy, max: 4000)
+    expect dut.res_last.ack and dut.selected
+    expect dut.rx_count == 1 and dut.rx_last == 0x07
+    expect dut.starts == 2                            // START + repeated START
+
+    dut.cmd = Stream { valid: true, data: I2cCmd::Read { ack: true } }
+    dut.step()
+    dut.cmd.valid = false
+    dut.step_until(!dut.busy, max: 4000)
+    expect dut.res_last.data == 0x11 and dut.res_last.ack
+    dut.tx.data = 0x22                                // the slave loads the next byte after our ACK
+
+    dut.cmd = Stream { valid: true, data: I2cCmd::Read { ack: false } }
+    dut.step()
+    dut.cmd.valid = false
+    dut.step_until(!dut.busy, max: 4000)
+    expect dut.res_last.data == 0x22 and !dut.res_last.ack
+
+    dut.cmd = Stream { valid: true, data: I2cCmd::Stop }
+    dut.step()
+    dut.cmd.valid = false
+    dut.step_until(!dut.busy, max: 4000)
+    expect dut.stops == 1 and !dut.selected
+}
+
+test "I2cMaster waits while another device stretches SCL" {
+    let dut = sim I2cPair()
+    dut.reset()
+    dut.hold_scl = false
+    dut.tx.valid = false
+    dut.cmd = Stream { valid: true, data: I2cCmd::Start }
+    dut.step()
+    dut.cmd.valid = false
+    dut.step_until(!dut.busy, max: 4000)
+    dut.hold_scl = true
+    dut.cmd = Stream { valid: true, data: I2cCmd::Write { byte: 0x84 } }
+    dut.step()
+    dut.cmd.valid = false
+    dut.step(2000)                                    // far longer than a byte
+    expect dut.busy and !dut.scl
+    dut.hold_scl = false
+    dut.step_until(!dut.busy, max: 4000)
+    expect dut.res_last.ack and dut.selected
+}
+
+test "I2cSlave stretches SCL until read data is available" {
+    let dut = sim I2cPair()
+    dut.reset()
+    dut.hold_scl = false
+    dut.tx.valid = false
+    for c in [I2cCmd::Start, I2cCmd::Write { byte: 0x85 }] {
+        dut.step_until(!dut.busy, max: 4000)
+        dut.cmd = Stream { valid: true, data: c }
+        dut.step()
+        dut.cmd.valid = false
+    }
+    dut.step_until(!dut.busy, max: 4000)
+    dut.cmd = Stream { valid: true, data: I2cCmd::Read { ack: false } }
+    dut.step()
+    dut.cmd.valid = false
+    dut.step(1000)
+    expect dut.busy and !dut.scl                      // held low by the slave
+    dut.tx = Stream { valid: true, data: 0xB7 }
+    dut.step()
+    dut.tx.valid = false
+    dut.step_until(!dut.busy, max: 4000)
+    expect dut.res_last.data == 0xB7
+}
+
+test "I2cMaster alone: START/STOP edges and a NACK from an empty bus" {
+    let dut = sim I2cMaster<ClkHz: 1_600_000, SclHz: 100_000>()      // Q = 4
+    dut.reset()
+    dut.scl_i = true
+    dut.sda_i = true
+    var prev_scl = true
+    var prev_sda = true
+    var starts: u8 = 0
+    var stops: u8 = 0
+    var result_seen = false
+    var acked = true
+    let cmds = [I2cCmd::Start, I2cCmd::Write { byte: 0xA0 }, I2cCmd::Stop]
+    var k: u8 = 0
+    for _ in 0..2000 {
+        dut.settle()
+        // the bus with only this master on it: lines follow the master
+        let scl = !dut.scl_oe
+        let sda = !dut.sda_oe
+        if scl and prev_scl and prev_sda and !sda { starts = starts +% 1 }
+        if scl and prev_scl and !prev_sda and sda { stops = stops +% 1 }
+        if dut.out.valid { result_seen = true; acked = dut.out.data.ack }
+        prev_scl = scl
+        prev_sda = sda
+        dut.scl_i = scl
+        dut.sda_i = sda
+        if !dut.busy and k < 3 {
+            dut.in = Stream { valid: true, data: cmds[k] }
+            k = k +% 1
+        } else {
+            dut.in.valid = false
+        }
+        dut.step()
+    }
+    expect starts == 1 and stops == 1
+    expect result_seen and !acked
+    expect !dut.scl_oe and !dut.sda_oe
+}

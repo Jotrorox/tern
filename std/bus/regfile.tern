@@ -1,0 +1,416 @@
+package std::bus
+
+// Register files (spec §10.3).
+//
+// A register block sees every bus as the same thing: a RegBus, i.e. at most one
+// access per cycle with a same-cycle answer. The front-ends in this file turn
+// AXI4-Lite, APB and Wishbone slave ports into a RegBus; RegisterFile<Map, Bus>
+// combines one of them with the decode logic the compiler generates from a
+// `regmap`.
+
+/// Simple register-access bus: one access per cycle, answered in the same cycle.
+///
+/// Contract for the register side: when `req.valid` is high, a write must take
+/// effect at the end of this cycle (the next clock edge) and `rdata`/`err` must
+/// describe this access combinationally in this same cycle. `req.valid` is high
+/// for exactly one cycle per bus access.
+pub bundle RegBus<AW: uint = 32, DW: uint = 32> {
+    /// The access; valid for exactly one cycle per bus transaction.
+    req: Valid<RegReq<AW, DW>>
+    /// Read data for the current access (ignored for writes).
+    flip rdata: uint<DW>
+    /// The current access failed (unmapped offset, ...); reported as SLVERR / PSLVERR / ERR.
+    flip err: bool
+}
+
+/// AXI4-Lite to RegBus front-end.
+///
+/// Built from Axi4LiteSlave: AW/W/AR are accepted into holding registers,
+/// each transaction becomes one `regs.req` cycle, and the response returns on
+/// B/R with SLVERR when `regs.err` was set.
+pub module Axi4LiteRegPort<AW: uint = 32, DW: uint = 32>
+where DW == 32 or DW == 64
+{
+    /// Clock.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// AXI4-Lite slave port.
+    in s: Axi4Lite<AW, DW>
+    /// Register side.
+    out regs: RegBus<AW, DW>
+
+    /// Cycles from the AW+W (or AR) handshake to B (or R) valid.
+    pub const LATENCY: uint = 3
+
+    let front = Axi4LiteSlave<AW, DW>(s: s)
+    front.req.ready = true
+    regs.req = Valid { valid: front.req.valid, data: front.req.data }
+    front.rsp = Valid {
+        valid: front.req.valid,
+        data: RegRsp { rdata: regs.rdata, resp: if regs.err { RESP_SLVERR } else { RESP_OKAY } },
+    }
+
+    property one_cycle_access { always regs.req.valid |=> !regs.req.valid }
+}
+
+test "Axi4LiteRegPort: write reaches the register side, read returns rdata" {
+    let dut = sim Axi4LiteRegPort<32, 32>()
+    dut.reset()
+    dut.s.b.ready = true
+    dut.s.r.ready = true
+    dut.regs.rdata = 0
+    dut.regs.err = false
+    dut.s.ar.valid = false
+    dut.s.aw = Stream { valid: true, data: 0x0C }
+    dut.s.w.valid = true
+    dut.s.w.data.data = 0x0000_00A5
+    dut.s.w.data.strb = 0b1111
+    dut.step()
+    dut.s.aw.valid = false
+    dut.s.w.valid = false
+    dut.step_until(dut.regs.req.valid, max: 10)
+    expect dut.regs.req.data.write
+    expect dut.regs.req.data.addr == 0x0C and dut.regs.req.data.wdata == 0xA5
+    dut.step()
+    expect !dut.regs.req.valid
+    expect dut.s.b.valid and dut.s.b.data == RESP_OKAY
+    dut.step()
+
+    dut.s.ar = Stream { valid: true, data: 0x0C }
+    dut.step()
+    dut.s.ar.valid = false
+    dut.step_until(dut.regs.req.valid, max: 10)
+    expect !dut.regs.req.data.write
+    dut.regs.rdata = 0xA5
+    dut.step()
+    expect dut.s.r.valid and dut.s.r.data.data == 0xA5 and dut.s.r.data.resp == RESP_OKAY
+}
+
+test "Axi4LiteRegPort: err becomes SLVERR" {
+    let dut = sim Axi4LiteRegPort<32, 32>()
+    dut.reset()
+    dut.s.b.ready = true
+    dut.s.r.ready = true
+    dut.s.aw.valid = false
+    dut.s.w.valid = false
+    dut.regs.rdata = 0
+    dut.regs.err = true
+    dut.s.ar = Stream { valid: true, data: 0xFC }
+    dut.step()
+    dut.s.ar.valid = false
+    dut.step_until(dut.s.r.valid, max: 10)
+    expect dut.s.r.data.resp == RESP_SLVERR
+}
+
+/// APB4 to RegBus front-end with zero wait states.
+///
+/// The access cycle of every APB transfer is one `regs.req` cycle; `pready` is
+/// always high, `prdata` and `pslverr` come straight from the register side.
+/// Purely combinational.
+pub module ApbRegPort<AW: uint = 32, DW: uint = 32> {
+    /// APB slave port.
+    in s: Apb<AW, DW>
+    /// Register side.
+    out regs: RegBus<AW, DW>
+
+    /// Wait states inserted per APB transfer.
+    pub const LATENCY: uint = 0
+
+    let access = s.psel and s.penable
+    regs.req = Valid {
+        valid: access,
+        data: RegReq {
+            addr: s.paddr,
+            wdata: s.pwdata,
+            strb: if s.pwrite { s.pstrb } else { all0 },
+            write: s.pwrite,
+        },
+    }
+    s.pready = true
+    s.prdata = regs.rdata
+    s.pslverr = access and regs.err
+
+    comb {
+        assert !(regs.req.valid and !s.psel), "register access outside an APB transfer"
+    }
+}
+
+test "ApbRegPort: only the access phase touches the registers" {
+    let dut = sim ApbRegPort<32, 32>()
+    dut.regs.rdata = 0x77
+    dut.regs.err = false
+    dut.s.psel = true
+    dut.s.penable = false
+    dut.s.pwrite = true
+    dut.s.paddr = 0x10
+    dut.s.pwdata = 0x99
+    dut.s.pstrb = 0b1111
+    dut.s.pprot = 0
+    dut.settle()
+    expect !dut.regs.req.valid                // setup phase
+    dut.s.penable = true
+    dut.settle()
+    expect dut.regs.req.valid and dut.regs.req.data.write
+    expect dut.regs.req.data.addr == 0x10 and dut.regs.req.data.wdata == 0x99
+    expect dut.s.pready and !dut.s.pslverr
+}
+
+test "ApbRegPort: reads return rdata, err becomes PSLVERR" {
+    let dut = sim ApbRegPort<32, 32>()
+    dut.s.psel = true
+    dut.s.penable = true
+    dut.s.pwrite = false
+    dut.s.paddr = 0x4
+    dut.s.pwdata = 0
+    dut.s.pstrb = 0b1111
+    dut.s.pprot = 0
+    dut.regs.rdata = 0xBEEF
+    dut.regs.err = false
+    dut.settle()
+    expect !dut.regs.req.data.write and dut.regs.req.data.strb == 0
+    expect dut.s.prdata == 0xBEEF and !dut.s.pslverr
+    dut.regs.err = true
+    dut.settle()
+    expect dut.s.pslverr
+}
+
+/// Wishbone B4 to RegBus front-end.
+///
+/// A request is accepted in a cycle with `cyc and stb and !stall` and answered
+/// with `ack` (or `err` when `regs.err`) and registered `dat_r` one cycle later.
+/// `stall` is high in the answering cycle, so both classic masters (which hold
+/// `stb` until `ack`) and pipelined masters see exactly one access per request.
+pub module WishboneRegPort<AW: uint = 32, DW: uint = 32> {
+    /// Clock.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// Wishbone slave port.
+    in s: Wishbone<AW, DW>
+    /// Register side.
+    out regs: RegBus<AW, DW>
+
+    /// Cycles from request acceptance to `ack`.
+    pub const LATENCY: uint = 1
+
+    reg ack_q: bool = false
+    reg err_q: bool = false
+    reg dat_q: uint<DW> = 0
+
+    let answering = ack_q or err_q
+    let take = s.cyc and s.stb and !answering
+
+    s.stall = answering
+    s.ack = ack_q
+    s.err = err_q
+    s.dat_r = dat_q
+    regs.req = Valid {
+        valid: take,
+        data: RegReq { addr: s.adr, wdata: s.dat_w, strb: if s.we { s.sel } else { all0 }, write: s.we },
+    }
+
+    on clk {
+        ack_q = take and !regs.err
+        err_q = take and regs.err
+        dat_q = if take and !s.we { regs.rdata } else { 0 }
+    }
+
+    property answer_follows_request { always regs.req.valid |=> (s.ack or s.err) }
+    property never_ack_and_err { never s.ack and s.err }
+}
+
+test "WishboneRegPort: classic master gets one access and one ack" {
+    let dut = sim WishboneRegPort<32, 32>()
+    dut.reset()
+    dut.regs.rdata = 0x1111
+    dut.regs.err = false
+    dut.s.cyc = true
+    dut.s.stb = true
+    dut.s.we = false
+    dut.s.adr = 0x8
+    dut.s.dat_w = 0
+    dut.s.sel = 0b1111
+    dut.settle()
+    expect dut.regs.req.valid and !dut.s.stall
+    dut.step()
+    expect dut.s.ack and dut.s.dat_r == 0x1111
+    expect !dut.regs.req.valid and dut.s.stall   // stb still high: not a second access
+    dut.s.stb = false
+    dut.s.cyc = false
+    dut.step()
+    expect !dut.s.ack
+}
+
+test "WishboneRegPort: err instead of ack" {
+    let dut = sim WishboneRegPort<32, 32>()
+    dut.reset()
+    dut.regs.rdata = 0
+    dut.regs.err = true
+    dut.s.cyc = true
+    dut.s.stb = true
+    dut.s.we = true
+    dut.s.adr = 0x100
+    dut.s.dat_w = 5
+    dut.s.sel = 0b1111
+    dut.step()
+    expect dut.s.err and !dut.s.ack
+}
+
+/// Memory-mapped register file generated from a `regmap` (spec §10.3).
+///
+/// `Map` is a `regmap`; `Bus` is the bus type of the slave port:
+/// `Axi4Lite<AW, DW>` (default), `Apb<AW, DW>` or `Wishbone<AW, DW>`.
+///
+/// This component is compiler-assisted. The declaration below fixes the
+/// generics and the common ports; for each instantiation the compiler:
+///
+/// * instantiates the front-end matching `Bus` — Axi4LiteRegPort, ApbRegPort or
+///   WishboneRegPort, all written in Tern above — on `bus`, giving a RegBus;
+/// * adds one port per regmap entry (the fields of `Map::Regs`): `rw`, `wo`,
+///   `w1c` and `rw1s` registers are outputs of type `Map::<Name>` (or the
+///   scalar type), `ro` registers are inputs, and `wo T -> Stream<T>` entries
+///   are output streams that carry one beat per bus write;
+/// * generates the decode on the RegBus: a write updates the addressed register
+///   honouring `strb` (`w1c` clears the written one bits, `rw1s` sets them),
+///   a read returns the addressed register (`ro`: the input; `wo`: zero),
+///   writes to `ro` registers are ignored with OKAY, and any access to an
+///   offset not in `Map` reports `err` (SLVERR on AXI4-Lite);
+/// * resets every register to zero unless the regmap gives a reset value.
+///
+/// The bus behaviour (handshakes, latency, error responses) is therefore
+/// exactly that of the front-end module; see its tests.
+pub module RegisterFile<Map: type, Bus: type = Axi4Lite<32, 32>> {
+    /// Clock of the registers and of the bus port.
+    in clk: clock
+    /// Reset; every register returns to its reset value.
+    in rst: reset
+    /// Bus slave port.
+    in bus: Bus
+
+    // Compiler-generated from `Map` and `Bus` (see the doc comment above):
+    // the front-end instance on `bus`, one port per `Map` entry, and the
+    // register storage and decode on the front-end's RegBus.
+}
+
+/// Example register map used by the RegisterFile tests: a control register
+/// with fields, a read-only status input, a scratch register and a byte FIFO.
+regmap DemoRegs {
+    0x00 ctrl: rw { enable: bool @0, mode: uint<2> @[2:1] }
+    0x04 status: ro { busy: bool @0, err: bool @1 }
+    0x08 scratch: rw u32
+    0x10 txq: wo u8 -> Stream<u8>
+}
+
+test "RegisterFile: rw register reads back what was written over AXI4-Lite" {
+    let dut = sim RegisterFile<DemoRegs>()
+    dut.reset()
+    dut.status = DemoRegs::Status { busy: false, err: false }
+    dut.txq.ready = true
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.bus.ar.valid = false
+    dut.bus.aw = Stream { valid: true, data: 0x08 }
+    dut.bus.w.valid = true
+    dut.bus.w.data.data = 0xDEAD_BEEF
+    dut.bus.w.data.strb = 0b1111
+    dut.step()
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.step_until(dut.bus.b.valid, max: 20)
+    expect dut.bus.b.data == RESP_OKAY
+    expect dut.scratch == 0xDEAD_BEEF
+    dut.step()
+    dut.bus.ar = Stream { valid: true, data: 0x08 }
+    dut.step()
+    dut.bus.ar.valid = false
+    dut.step_until(dut.bus.r.valid, max: 20)
+    expect dut.bus.r.data.data == 0xDEAD_BEEF and dut.bus.r.data.resp == RESP_OKAY
+}
+
+test "RegisterFile: byte strobes and register fields" {
+    let dut = sim RegisterFile<DemoRegs>()
+    dut.reset()
+    dut.status = DemoRegs::Status { busy: false, err: false }
+    dut.txq.ready = true
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.bus.ar.valid = false
+    dut.bus.aw = Stream { valid: true, data: 0x00 }
+    dut.bus.w.valid = true
+    dut.bus.w.data.data = 0b101
+    dut.bus.w.data.strb = 0b0001
+    dut.step()
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.step_until(dut.bus.b.valid, max: 20)
+    expect dut.ctrl.enable and dut.ctrl.mode == 2
+    dut.step()
+    dut.bus.aw = Stream { valid: true, data: 0x08 }
+    dut.bus.w.valid = true
+    dut.bus.w.data.data = 0x1122_3344
+    dut.bus.w.data.strb = 0b0100            // only byte 2
+    dut.step()
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.step_until(dut.bus.b.valid, max: 20)
+    expect dut.scratch == 0x0022_0000
+}
+
+test "RegisterFile: ro register reflects its input" {
+    let dut = sim RegisterFile<DemoRegs>()
+    dut.reset()
+    dut.txq.ready = true
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.status = DemoRegs::Status { busy: true, err: true }
+    dut.bus.ar = Stream { valid: true, data: 0x04 }
+    dut.step()
+    dut.bus.ar.valid = false
+    dut.step_until(dut.bus.r.valid, max: 20)
+    expect dut.bus.r.data.data == 0b11
+}
+
+test "RegisterFile: a write to a FIFO register emits one stream beat" {
+    let dut = sim RegisterFile<DemoRegs>()
+    dut.reset()
+    dut.status = DemoRegs::Status { busy: false, err: false }
+    dut.txq.ready = true
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.bus.ar.valid = false
+    dut.bus.aw = Stream { valid: true, data: 0x10 }
+    dut.bus.w.valid = true
+    dut.bus.w.data.data = 0x41
+    dut.bus.w.data.strb = 0b0001
+    dut.step()
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    var beats = 0
+    for _ in 0..10 {
+        if dut.txq.valid {
+            expect dut.txq.data == 0x41
+            beats = beats + 1
+        }
+        dut.step()
+    }
+    expect beats == 1
+}
+
+test "RegisterFile: unmapped offset answers SLVERR" {
+    let dut = sim RegisterFile<DemoRegs>()
+    dut.reset()
+    dut.status = DemoRegs::Status { busy: false, err: false }
+    dut.txq.ready = true
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.bus.ar = Stream { valid: true, data: 0x40 }
+    dut.step()
+    dut.bus.ar.valid = false
+    dut.step_until(dut.bus.r.valid, max: 20)
+    expect dut.bus.r.data.resp == RESP_SLVERR
+}

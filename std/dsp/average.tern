@@ -1,0 +1,262 @@
+package std::dsp
+
+use std::math::widen_signed
+
+/// Moving average over the last `N` valid samples (boxcar filter).
+///
+/// * Keeps a running sum: each valid sample adds itself and subtracts the
+///   sample that falls out of the window, so the cost is one adder and an
+///   `N`-entry RAM (combinational read: distributed/LUT RAM) regardless of N.
+/// * Until `N` samples have arrived since reset, the missing samples count as
+///   zero (the RAM is never cleared; a fill flag masks it).
+/// * `out.data` is `sum / N` (an arithmetic shift, rounding toward minus
+///   infinity) in the input type; `sum` exposes the exact running sum.
+/// * `Signed` selects how the bits of `T` are read: two's complement
+///   (default) or unsigned.
+/// * `LATENCY` = 1.
+pub module MovingAverage<T: type, N: uint, Signed: bool = true>
+where N.is_pow2(), N >= 2
+{
+    /// Cycles from a valid input sample to the average that includes it.
+    pub const LATENCY: uint = 1
+    const SW: uint = T::WIDTH
+    const L: uint = clog2(N)
+    /// Width of the running sum.
+    pub const SUM_W: uint = SW + 1 + L
+
+    /// Clock.
+    in clk: clock
+    /// Reset: empties the window.
+    in rst: reset
+    /// Input samples.
+    in in: Valid<T>
+    /// Average of the last N samples, in the input type.
+    out out: Valid<T>
+    /// Exact sum of the last N samples (valid together with `out`).
+    out sum: sint<SUM_W>
+
+    mem window: [sint<SW + 1>; N]
+    reg wp: uint<L> = 0
+    reg filled: bool = false
+    reg total: sint<SUM_W> = 0
+    reg out_valid: bool = false
+
+    let x: sint<SW + 1> = if Signed {
+        (bits(in.data) as sint<SW>) as sint<SW + 1>
+    } else {
+        widen_signed(bits(in.data) as uint<SW>)
+    }
+    let oldest: sint<SW + 1> = if filled { window[wp] } else { 0 }
+
+    on clk {
+        out_valid = in.valid
+        if in.valid {
+            window[wp] = x
+            wp = wp +% 1
+            if wp == N - 1 { filled = true }
+            total = (total + x - oldest) as sint<SUM_W>
+        }
+    }
+
+    let avg = total >>> L
+    out.valid = out_valid
+    out.data = T::from_bits(avg[SW - 1:0])
+    sum = total
+
+    /// One output per valid input, one cycle later.
+    property latency_is_fixed {
+        always out.valid == past(in.valid, 1)
+    }
+    /// The window only moves on valid samples.
+    property holds_without_input {
+        always !in.valid |=> stable(total) and stable(wp)
+    }
+}
+
+test "moving average fills with zeros then slides" {
+    let dut = sim MovingAverage<s16, 4>()
+    dut.reset()
+    let xs = [4, 8, 12, 16, 20, 24]
+    let sums = [4, 12, 24, 40, 56, 72]
+    for i in 0..6 {
+        dut.in = Valid { valid: true, data: xs[i] }
+        dut.step()
+        expect dut.out.valid
+        expect dut.sum == sums[i]
+        expect dut.out.data == sums[i] / 4
+    }
+}
+
+test "moving average of negative samples rounds toward minus infinity" {
+    let dut = sim MovingAverage<s8, 2>()
+    dut.reset()
+    dut.in = Valid { valid: true, data: -3 }
+    dut.step()
+    expect dut.out.data == -2          // -3 / 2 = -1.5 -> -2
+    dut.step()
+    expect dut.out.data == -3
+}
+
+test "moving average of unsigned samples" {
+    let dut = sim MovingAverage<u8, 2, false>()
+    dut.reset()
+    dut.in = Valid { valid: true, data: 255 }
+    dut.step()
+    expect dut.out.data == 127
+    dut.step()
+    expect dut.out.data == 255
+    expect dut.sum == 510
+}
+
+test "moving average ignores invalid cycles" {
+    let dut = sim MovingAverage<s16, 2>()
+    dut.reset()
+    dut.in = Valid { valid: true, data: 10 }
+    dut.step()
+    dut.in = Valid { valid: false, data: 1000 }
+    dut.step(3)
+    expect !dut.out.valid
+    expect dut.sum == 10
+    dut.in = Valid { valid: true, data: 30 }
+    dut.step()
+    expect dut.out.data == 20
+}
+
+/// Integrate-and-dump accumulator.
+///
+/// * Adds every valid input sample to a running sum of `AW` bits.
+/// * `dump` emits the sum including this cycle's sample on `out` (one cycle
+///   later) and restarts the sum from zero.
+/// * `clear` discards the sum (and this cycle's sample); it wins over `dump`.
+/// * `Saturate = false` (default) wraps modulo 2^AW; `true` clips at the
+///   `sint<AW>` limits.
+/// * `Signed` selects how the bits of `T` are read (two's complement or
+///   unsigned).
+/// * `LATENCY` = 1 (from the dump cycle to `out.valid`).
+pub module Accumulator<T: type, AW: uint, Signed: bool = true, Saturate: bool = false>
+where AW >= T::WIDTH + 1
+{
+    /// Cycles from `dump` to `out.valid`.
+    pub const LATENCY: uint = 1
+    const SW: uint = T::WIDTH
+    type A = sint<AW>
+
+    /// Clock.
+    in clk: clock
+    /// Reset: sum back to zero.
+    in rst: reset
+    /// Samples to add.
+    in in: Valid<T>
+    /// Discard the running sum this cycle.
+    in clear: bool
+    /// Emit the running sum (including this cycle's sample) and restart.
+    in dump: bool
+    /// Dumped sums.
+    out out: Valid<A>
+    /// Current running sum.
+    out acc: A
+
+    reg total: A = 0
+    reg dumped: A = 0
+    reg dumped_valid: bool = false
+
+    let x: sint<SW + 1> = if Signed {
+        (bits(in.data) as sint<SW>) as sint<SW + 1>
+    } else {
+        widen_signed(bits(in.data) as uint<SW>)
+    }
+    let addend: sint<SW + 1> = if in.valid { x } else { 0 }
+    let wide = total + addend
+    let next: A = if Saturate {
+        if wide > A::MAX { A::MAX } else if wide < A::MIN { A::MIN } else { wide as A }
+    } else {
+        wide as A
+    }
+
+    on clk {
+        dumped_valid = dump and !clear
+        if clear {
+            total = 0
+        } else if dump {
+            total = 0
+            dumped = next
+        } else {
+            total = next
+        }
+    }
+
+    out.valid = dumped_valid
+    out.data = dumped
+    acc = total
+
+    /// A clear always empties the accumulator.
+    property clear_empties {
+        always clear |=> acc == 0
+    }
+    /// Dumps appear one cycle after they are requested (unless cleared).
+    property dump_latency {
+        always out.valid == past(dump and !clear, 1)
+    }
+}
+
+test "accumulator sums and dumps" {
+    let dut = sim Accumulator<s16, 24>()
+    dut.reset()
+    dut.clear = false
+    dut.dump = false
+    for v in [1, 2, 3, -10] {
+        dut.in = Valid { valid: true, data: v }
+        dut.step()
+    }
+    expect dut.acc == -4
+    dut.in = Valid { valid: true, data: 100 }
+    dut.dump = true
+    dut.step()
+    expect dut.out.valid and dut.out.data == 96
+    expect dut.acc == 0
+    dut.dump = false
+    dut.in.valid = false
+    dut.step()
+    expect !dut.out.valid
+    expect dut.acc == 0
+}
+
+test "accumulator clear discards everything" {
+    let dut = sim Accumulator<s16, 24>()
+    dut.reset()
+    dut.dump = false
+    dut.clear = false
+    dut.in = Valid { valid: true, data: 7 }
+    dut.step(3)
+    expect dut.acc == 21
+    dut.clear = true
+    dut.dump = true
+    dut.step()
+    expect dut.acc == 0
+    expect !dut.out.valid
+}
+
+test "accumulator saturates when asked" {
+    let dut = sim Accumulator<s8, 9, true, true>()
+    dut.reset()
+    dut.dump = false
+    dut.clear = false
+    dut.in = Valid { valid: true, data: 127 }
+    dut.step(3)
+    expect dut.acc == 255
+    dut.in = Valid { valid: true, data: -128 }
+    dut.step(5)
+    expect dut.acc == -256
+}
+
+test "accumulator wraps by default" {
+    let dut = sim Accumulator<u8, 9, false>()
+    dut.reset()
+    dut.dump = false
+    dut.clear = false
+    dut.in = Valid { valid: true, data: 200 }
+    dut.step()
+    expect dut.acc == 200
+    dut.step()
+    expect dut.acc == 400 - 512     // wrapped in sint<9>
+}

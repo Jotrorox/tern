@@ -1,0 +1,633 @@
+package std::sim
+
+use std::io::{UartTx, UartRx}
+
+// Behavioural peripheral models for test benches. Each is written
+// independently of the std::io engines (no shared code), so testing an engine
+// against its model does not hide a shared mistake. All models run on the
+// bench clock and oversample the serial lines; the lines are expected to be
+// driven from registers of the same simulation (no synchroniser is modelled).
+
+/// UART 8N1 line model: decodes a serial line into bytes and encodes bytes
+/// onto a serial line, `Div` clock cycles per bit.
+///
+/// * Receive: connect the design's `txd` to `line`. Each frame (start bit
+///   low, 8 data bits LSB first, stop bit high) is sampled at the middle of
+///   every bit, counted from the falling edge of the start bit; the byte is
+///   reported as a one-cycle `rx` pulse at the middle of the stop bit. A low
+///   stop bit pulses `frame_error` instead. `rx_count` counts good bytes and
+///   `last_rx` keeps the latest one.
+/// * Transmit: bytes offered on `tx` are sent on `txd` (connect to the
+///   design's `rxd`), one at a time; `tx.ready` is high while idle.
+pub module UartModel<Div: uint>
+where Div >= 2
+{
+    const TW: uint = clog2(10 * Div + 1)
+
+    /// Bench clock.
+    in clk: clock
+    /// Reset: both directions idle.
+    in rst: reset
+    /// Line to decode (the design's `txd`), idle high.
+    in line: bool
+    /// Decoded bytes, one-cycle pulses.
+    out rx: Valid<u8>
+    /// One-cycle pulse: a frame with a low stop bit.
+    out frame_error: bool
+    /// Number of bytes decoded.
+    out rx_count: u32
+    /// Most recently decoded byte.
+    out last_rx: u8
+    /// Bytes to send to the design.
+    in tx: Stream<u8>
+    /// Encoded line (connect to the design's `rxd`), idle high.
+    out txd: bool
+
+    // -- receiver --
+    reg prev: bool = true
+    reg rx_busy: bool = false
+    reg t: uint<TW> = 0              // cycles since the start edge was seen
+    reg sh: u8 = 0
+    reg rx_valid: bool = false
+    reg rx_data: u8 = 0
+    reg ferr: bool = false
+    reg rx_count_q: u32 = 0
+
+    on clk {
+        prev = line
+        rx_valid = false
+        ferr = false
+        if !rx_busy {
+            if prev and !line {
+                rx_busy = true
+                t = 1
+            }
+        } else {
+            t = t +% 1
+            for k in 0..10 {
+                if t == Div / 2 + k * Div {
+                    if k == 0 {
+                        if line { rx_busy = false }            // too short: not a start bit
+                    } else if k < 9 {
+                        sh = (line as uint<1>) ++ sh[7:1]
+                    } else {
+                        rx_busy = false
+                        if line {
+                            rx_valid = true
+                            rx_data = sh
+                            rx_count_q = rx_count_q +% 1
+                        } else {
+                            ferr = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    rx = Valid { valid: rx_valid, data: rx_data }
+    frame_error = ferr
+    rx_count = rx_count_q
+    last_rx = rx_data
+
+    // -- transmitter --
+    reg tx_busy: bool = false
+    reg frame: bit<10> = all1        // bit 0 is on the line
+    reg tc: uint<clog2(Div)> = 0
+    reg nbits: uint<4> = 0
+
+    tx.ready = !tx_busy
+    txd = if tx_busy { frame[0] } else { true }
+
+    on clk {
+        if tx.fire() {
+            frame = 1u1 ++ tx.data ++ 0u1             // stop, data (LSB at bit 1), start
+            tc = 0
+            nbits = 0
+            tx_busy = true
+        } else if tx_busy {
+            if tc == Div - 1 {
+                tc = 0
+                frame = 1u1 ++ frame[9:1]
+                if nbits == 9 { tx_busy = false } else { nbits = nbits +% 1 }
+            } else {
+                tc = tc +% 1
+            }
+        }
+    }
+
+    /// The transmit line idles high.
+    property tx_idle_high { always !tx_busy |-> txd }
+    /// A frame is either delivered or flagged, never both.
+    property rx_or_error { never rx.valid and frame_error }
+}
+
+/// SPI slave model for SPI mode `Mode` (0..3: CPOL = Mode bit 1, CPHA = Mode
+/// bit 0), words of `W` bits, MSB first.
+///
+/// * While `cs_n` is low, the model samples `mosi` on the sampling edge of
+///   `sck` and changes `miso` on the other edge: for CPHA = 0 the first bit
+///   is on `miso` as soon as `cs_n` falls and data is sampled on the leading
+///   edge; for CPHA = 1 bits change on the leading edge and are sampled on the
+///   trailing edge. CPOL is the idle level of `sck`.
+/// * `reply` is the word returned; it is taken at the start of every word, so
+///   several words may be exchanged in one `cs_n` assertion.
+/// * Each complete received word pulses `rx`; `words` counts them and
+///   `last_rx` keeps the latest.
+/// * `miso` is always driven (a real device releases it while deselected).
+pub module SpiModel<W: uint = 8, Mode: uint = 0>
+where W >= 2, Mode <= 3
+{
+    const CPOL: bool = Mode >= 2
+    const CPHA: bool = Mode == 1 or Mode == 3
+
+    /// Bench clock (at least 4x the SPI clock).
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// SPI clock from the master.
+    in sck: bool
+    /// Master out, slave in.
+    in mosi: bool
+    /// Chip select, active low.
+    in cs_n: bool
+    /// Master in, slave out.
+    out miso: bool
+    /// Word to return, taken at the start of each word.
+    in reply: uint<W>
+    /// Each received word, as a one-cycle pulse.
+    out rx: Valid<uint<W>>
+    /// Number of words received.
+    out words: u32
+    /// Most recently received word.
+    out last_rx: uint<W>
+
+    reg prev_sck: bool = CPOL
+    reg prev_cs: bool = true
+    reg tx: uint<W> = 0
+    reg rx_sh: uint<W> = 0
+    reg cnt: uint<clog2(W)> = 0      // bits received in the current word
+    reg rx_valid: bool = false
+    reg rx_data: uint<W> = 0
+    reg words_q: u32 = 0
+
+    let rising = sck and !prev_sck
+    let falling = !sck and prev_sck
+    let leading = if CPOL { falling } else { rising }
+    let trailing = if CPOL { rising } else { falling }
+    let sample_edge = if CPHA { trailing } else { leading }
+    let shift_edge = if CPHA { leading } else { trailing }
+    let rx_next = (rx_sh << 1) | (mosi as uint<1>)
+
+    miso = tx[W - 1]
+    rx = Valid { valid: rx_valid, data: rx_data }
+    words = words_q
+    last_rx = rx_data
+
+    on clk {
+        prev_sck = sck
+        prev_cs = cs_n
+        rx_valid = false
+        if cs_n {
+            cnt = 0
+        } else if prev_cs {
+            tx = reply                                  // selected: first bit out
+            cnt = 0
+        } else {
+            if sample_edge {
+                rx_sh = rx_next
+                if cnt == W - 1 {
+                    cnt = 0
+                    rx_valid = true
+                    rx_data = rx_next
+                    words_q = words_q +% 1
+                } else {
+                    cnt = cnt +% 1
+                }
+            }
+            if shift_edge {
+                tx = if cnt == 0 { reply } else { tx << 1 }
+            }
+        }
+    }
+
+    /// Nothing is received while deselected.
+    property quiet_when_deselected { always (cs_n and past(cs_n, 1)) |=> !rx.valid }
+}
+
+/// I2C slave model: a small register memory at 7-bit address `Addr`, in the
+/// style of a serial EEPROM.
+///
+/// * A write transaction is: address+W, a pointer byte, then data bytes that
+///   are stored at the pointer, which increments after each byte.
+/// * A read transaction (typically after a write of just the pointer and a
+///   repeated START) returns bytes from the pointer, incrementing, until the
+///   master NACKs.
+/// * Every byte addressed to the model is ACKed; another address is ignored
+///   until the next START.
+/// * Lines: `scl` and `sda` are the bus levels; `sda_oe` high means the model
+///   pulls SDA low. A bench forms the wired-AND bus as
+///   `sda = !(master.sda_oe or model.sda_oe)`. The model only changes
+///   `sda_oe` while SCL is low.
+/// * The memory is readable from tests by path (`tb.model.mem_r[3]`).
+pub module I2cModel<Addr: uint, Size: uint = 16>
+where Addr < 128, Size >= 2, Size.is_pow2()
+{
+    const PW: uint = clog2(Size)
+
+    /// Bench clock (at least 8x SCL).
+    in clk: clock
+    /// Reset: idle, memory cleared.
+    in rst: reset
+    /// SCL bus level.
+    in scl: bool
+    /// SDA bus level.
+    in sda: bool
+    /// High: the model pulls SDA low.
+    out sda_oe: bool
+    /// High between an ACKed address and the following STOP or START.
+    out addressed: bool
+
+    enum State { Idle, Rx, AckOut, Tx, AckIn }
+    reg state: State = .Idle
+    reg pscl: bool = true
+    reg psda: bool = true
+    reg sh: u8 = 0
+    reg cnt: uint<4> = 0
+    reg first: bool = false          // the next byte received is the address byte
+    reg ptr_set: bool = false        // the pointer byte of this transaction was received
+    reg rw: bool = false             // current transaction is a read
+    reg ack_in: bool = false
+    reg ptr: uint<PW> = 0
+    reg mem_r: [u8; Size] = all0
+    reg oe: bool = false
+    reg addressed_q: bool = false
+
+    let start = scl and pscl and psda and !sda
+    let stop = scl and pscl and !psda and sda
+    let scl_rise = scl and !pscl
+    let scl_fall = !scl and pscl
+    let cur = mem_r[ptr]
+
+    sda_oe = oe
+    addressed = addressed_q
+
+    on clk {
+        pscl = scl
+        psda = sda
+        if start {
+            state = .Rx
+            cnt = 0
+            first = true
+            ptr_set = false
+            rw = false
+            oe = false
+            addressed_q = false
+        } else if stop {
+            state = .Idle
+            oe = false
+            addressed_q = false
+        } else {
+            match state {
+                .Idle => {},
+                .Rx => {
+                    if scl_rise {
+                        sh = sh[6:0] ++ (sda as uint<1>)
+                        cnt = cnt +% 1
+                    }
+                    if scl_fall and cnt == 8 {
+                        cnt = 0
+                        if first {
+                            first = false
+                            if sh[7:1] == Addr {
+                                rw = sh[0]
+                                addressed_q = true
+                                oe = true
+                                state = .AckOut
+                            } else {
+                                state = .Idle
+                            }
+                        } else {
+                            oe = true
+                            state = .AckOut
+                            if !ptr_set {
+                                ptr = sh as uint<PW>
+                                ptr_set = true
+                            } else {
+                                mem_r[ptr] = sh
+                                ptr = ptr +% 1
+                            }
+                        }
+                    }
+                },
+                .AckOut => if scl_fall {                // end of the ACK clock
+                    cnt = 0
+                    if rw {
+                        sh = cur
+                        oe = !cur[7]                    // first data bit
+                        state = .Tx
+                    } else {
+                        oe = false
+                        state = .Rx
+                    }
+                },
+                .Tx => if scl_fall {
+                    if cnt == 7 {
+                        oe = false                      // release for the master's ACK
+                        ptr = ptr +% 1
+                        state = .AckIn
+                    } else {
+                        oe = !sh[6]
+                        sh = sh << 1
+                        cnt = cnt +% 1
+                    }
+                },
+                .AckIn => {
+                    if scl_rise { ack_in = !sda }
+                    if scl_fall {
+                        if ack_in {
+                            sh = cur
+                            oe = !cur[7]
+                            cnt = 0
+                            state = .Tx
+                        } else {
+                            state = .Idle
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    /// SDA is only pulled while the model is addressed.
+    property drives_only_when_addressed { always sda_oe |-> addressed }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+// Bench: std::io::UartTx -> UartModel (decode side).
+module UartDecodeBench {
+    in clk: clock
+    in rst: reset
+    in in: Stream<u8>
+    out rx: Valid<u8>
+    out rx_count: u32
+
+    let dut = UartTx<ClkHz: 16, Baud: 1>(in: in)
+    let model = UartModel<16>(line: dut.txd, tx: Stream { valid: false, data: 0 })
+    rx = model.rx
+    rx_count = model.rx_count
+}
+
+// Bench: UartModel (encode side) -> std::io::UartRx.
+module UartEncodeBench {
+    in clk: clock
+    in rst: reset
+    in tx: Stream<u8>
+    out out: Stream<u8>
+
+    let model = UartModel<16>(line: true, tx: tx)
+    let dut = UartRx<ClkHz: 16, Baud: 1>(rxd: model.txd)
+    out = dut.out
+}
+
+test "UartModel decodes what UartTx sends" {
+    let tb = sim UartDecodeBench()
+    tb.reset()
+    for v in [0x00, 0xFF, 0x55, 0xA3] {
+        tb.in = Stream { valid: true, data: v }
+        tb.step()
+        tb.in.valid = false
+        var seen = false
+        for _ in 0..170 {
+            tb.step()
+            if tb.rx.valid {
+                expect tb.rx.data == v
+                seen = true
+            }
+        }
+        expect seen
+    }
+    expect tb.rx_count == 4
+}
+
+test "UartModel encodes bytes that UartRx receives" {
+    let tb = sim UartEncodeBench()
+    tb.reset()
+    tb.out.ready = true
+    for v in [0x01, 0x80, 0x7E] {
+        tb.tx = Stream { valid: true, data: v }
+        tb.step()
+        tb.tx.valid = false
+        tb.step_until(tb.out.valid, max: 200)
+        expect tb.out.data == v
+        tb.step(20)
+    }
+}
+
+test "UartModel flags a frame error" {
+    let dut = sim UartModel<8>()
+    dut.line = true
+    dut.tx.valid = false
+    dut.reset()
+    var errors = 0
+    for b in [false, true, false, true, false, true, false, true, false, false] {
+        dut.line = b
+        for _ in 0..8 {
+            dut.step()
+            if dut.frame_error { errors = errors + 1 }
+            expect !dut.rx.valid
+        }
+    }
+    expect errors == 1
+}
+
+test "SpiModel mode 0 exchanges a word" {
+    let dut = sim SpiModel<8, 0>()
+    dut.sck = false
+    dut.cs_n = true
+    dut.mosi = false
+    dut.reset()
+    dut.reply = 0xA5
+    let send: u8 = 0x3C
+    var got: u8 = 0
+    dut.cs_n = false
+    dut.step(2)
+    for i in 0..8 {
+        dut.mosi = send[7 - i]
+        dut.step(2)
+        got = (got << 1) | (dut.miso as uint<1>)       // valid before the leading edge
+        dut.sck = true
+        dut.step(2)
+        dut.sck = false
+        dut.step(2)
+    }
+    dut.cs_n = true
+    dut.step(2)
+    expect got == 0xA5
+    expect dut.words == 1 and dut.last_rx == 0x3C
+}
+
+test "SpiModel mode 3 exchanges two words in one selection" {
+    let dut = sim SpiModel<8, 3>()
+    dut.sck = true                                     // CPOL = 1
+    dut.cs_n = true
+    dut.mosi = false
+    dut.reset()
+    dut.reply = 0x96
+    dut.cs_n = false
+    dut.step(2)
+    for w in [0x12, 0xEF] {
+        let send: u8 = w
+        var got: u8 = 0
+        for i in 0..8 {
+            dut.sck = false                            // leading edge: both sides shift
+            dut.mosi = send[7 - i]
+            dut.step(2)
+            got = (got << 1) | (dut.miso as uint<1>)
+            dut.sck = true                             // trailing edge: both sides sample
+            dut.step(2)
+        }
+        expect got == 0x96
+        expect dut.last_rx == w
+    }
+    expect dut.words == 2
+}
+
+test "I2cModel ACKs its address and stores written bytes" {
+    let dut = sim I2cModel<Addr: 0x50, Size: 16>()
+    dut.scl = true
+    dut.sda = true
+    dut.reset()
+    dut.step(2)
+    dut.sda = false                                    // START
+    dut.step(2)
+    dut.scl = false
+    dut.step(2)
+    for byte in [0xA0, 0x03, 0x11, 0x22] {             // 0x50 + W, pointer 3, two data bytes
+        let b: u8 = byte
+        for i in 0..8 {
+            dut.sda = b[7 - i]
+            dut.step(2)
+            dut.scl = true
+            dut.step(2)
+            dut.scl = false
+            dut.step(2)
+        }
+        dut.sda = true                                 // master releases SDA
+        dut.step(2)
+        dut.scl = true
+        dut.step(2)
+        expect dut.sda_oe                              // ACK
+        dut.scl = false
+        dut.step(2)
+        expect !dut.sda_oe
+    }
+    dut.sda = false
+    dut.step(2)
+    dut.scl = true
+    dut.step(2)
+    dut.sda = true                                     // STOP
+    dut.step(2)
+    expect !dut.addressed
+    expect dut.mem_r[3] == 0x11 and dut.mem_r[4] == 0x22
+}
+
+test "I2cModel ignores other addresses" {
+    let dut = sim I2cModel<Addr: 0x50>()
+    dut.scl = true
+    dut.sda = true
+    dut.reset()
+    dut.step(2)
+    dut.sda = false
+    dut.step(2)
+    dut.scl = false
+    dut.step(2)
+    let b: u8 = 0xA2                                   // 0x51 + W
+    for i in 0..9 {
+        dut.sda = if i < 8 { b[7 - i] } else { true }
+        dut.step(2)
+        dut.scl = true
+        dut.step(2)
+        expect !dut.sda_oe                             // no ACK, never drives
+        dut.scl = false
+        dut.step(2)
+    }
+    expect !dut.addressed
+}
+
+test "I2cModel returns bytes from the pointer until NACK" {
+    let dut = sim I2cModel<Addr: 0x50>()
+    dut.scl = true
+    dut.sda = true
+    dut.reset()
+    dut.step(2)
+    // write 0x77, 0x88 at 5, then set the pointer back to 5 and read twice
+    for (bytes, read) in [([0xA0, 0x05, 0x77, 0x88], false), ([0xA0, 0x05, 0x00, 0x00], true)] {
+        dut.sda = false                                // START (or repeated START)
+        dut.step(2)
+        dut.scl = false
+        dut.step(2)
+        let n = if read { 2 } else { 4 }
+        for k in 0..n {
+            let b: u8 = bytes[k]
+            for i in 0..9 {
+                dut.sda = if i < 8 { b[7 - i] } else { true }
+                dut.step(2)
+                dut.scl = true
+                dut.step(2)
+                dut.scl = false
+                dut.step(2)
+            }
+        }
+        if read {
+            // repeated START, then address + R
+            dut.sda = true
+            dut.step(2)
+            dut.scl = true
+            dut.step(2)
+            dut.sda = false
+            dut.step(2)
+            dut.scl = false
+            dut.step(2)
+            let a: u8 = 0xA1
+            for i in 0..9 {
+                dut.sda = if i < 8 { a[7 - i] } else { true }
+                dut.step(2)
+                dut.scl = true
+                dut.step(2)
+                if i == 8 { expect dut.sda_oe }        // address ACK
+                dut.scl = false
+                dut.step(2)
+            }
+            for (want, ack) in [(0x77, true), (0x88, false)] {
+                var got: u8 = 0
+                dut.sda = true                         // master releases SDA while reading
+                for _ in 0..8 {
+                    dut.step(2)
+                    dut.scl = true
+                    dut.step(2)
+                    got = (got << 1) | ((!dut.sda_oe) as uint<1>)
+                    dut.scl = false
+                    dut.step(2)
+                }
+                expect got == want
+                dut.sda = !ack                         // ACK (low) or NACK (high)
+                dut.step(2)
+                dut.scl = true
+                dut.step(2)
+                dut.scl = false
+                dut.step(2)
+            }
+        }
+        dut.sda = false                                // STOP
+        dut.step(2)
+        dut.scl = true
+        dut.step(2)
+        dut.sda = true
+        dut.step(2)
+    }
+    expect !dut.sda_oe and !dut.addressed
+}

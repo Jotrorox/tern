@@ -1,0 +1,602 @@
+package std::bus
+
+// Protocol bridges. Each one handles a single transaction at a time, which
+// keeps ordering trivially correct; put a crossbar or a FIFO in front of a
+// bridge when throughput matters.
+
+// ---------------------------------------------------------------------------
+// Axi4LiteToApb
+// ---------------------------------------------------------------------------
+
+/// AXI4-Lite slave to APB4 master bridge.
+///
+/// Every AXI4-Lite transaction becomes one APB transfer: a setup cycle, then
+/// access cycles until `pready`. PRDATA/PSLVERR are returned on R or B
+/// (PSLVERR as SLVERR). PSTRB carries the AXI write strobes and is zero for
+/// reads; PPROT is 0 (normal, secure, data).
+pub module Axi4LiteToApb<AW: uint = 32, DW: uint = 32>
+where DW == 32 or DW == 64
+{
+    /// Clock (AXI and APB share it; PCLK = ACLK).
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// AXI4-Lite slave port.
+    in s: Axi4Lite<AW, DW>
+    /// APB4 master port.
+    out m: Apb<AW, DW>
+
+    /// Cycles from the AW+W (or AR) handshake to B (or R) valid with a
+    /// zero-wait-state APB slave; every APB wait state adds one.
+    pub const LATENCY: uint = 5
+
+    let front = Axi4LiteSlave<AW, DW>(s: s)
+
+    reg active: bool = false
+    reg access: bool = false
+    reg cur: RegReq<AW, DW> = all0
+
+    let done = access and m.pready
+
+    front.req.ready = !active
+    front.rsp = Valid {
+        valid: done,
+        data: RegRsp { rdata: m.prdata, resp: if m.pslverr { RESP_SLVERR } else { RESP_OKAY } },
+    }
+
+    m.psel = active
+    m.penable = access
+    m.pwrite = cur.write
+    m.paddr = cur.addr
+    m.pwdata = cur.wdata
+    m.pstrb = if cur.write { cur.strb } else { all0 }
+    m.pprot = 0b000
+
+    on clk {
+        if front.req.fire() { active = true; cur = front.req.data }
+        if active and !access { access = true }
+        if done { active = false; access = false }
+    }
+
+    property setup_then_access { always (m.psel and !m.penable) |=> m.psel and m.penable }
+    property hold_during_wait {
+        always (m.penable and !m.pready) |=> m.penable and stable(m.paddr) and stable(m.pwrite) and stable(m.pwdata)
+    }
+    property penable_only_with_psel { never m.penable and !m.psel }
+}
+
+test "Axi4LiteToApb: write goes through setup and access with a wait state" {
+    let dut = sim Axi4LiteToApb<32, 32>()
+    dut.reset()
+    dut.s.b.ready = true
+    dut.s.r.ready = true
+    dut.s.ar.valid = false
+    dut.m.pready = false
+    dut.m.prdata = 0
+    dut.m.pslverr = false
+    dut.s.aw = Stream { valid: true, data: 0x2000 }
+    dut.s.w.valid = true
+    dut.s.w.data.data = 0x0BAD_CAFE
+    dut.s.w.data.strb = 0b1111
+    dut.step()
+    dut.s.aw.valid = false
+    dut.s.w.valid = false
+    dut.step_until(dut.m.psel, max: 10)
+    expect !dut.m.penable                     // setup phase
+    expect dut.m.pwrite and dut.m.paddr == 0x2000 and dut.m.pwdata == 0x0BAD_CAFE
+    expect dut.m.pstrb == 0b1111
+    dut.step()
+    expect dut.m.psel and dut.m.penable       // access phase, slave not ready
+    dut.step()
+    expect dut.m.psel and dut.m.penable and dut.m.paddr == 0x2000
+    dut.m.pready = true
+    dut.step()
+    dut.m.pready = false
+    expect !dut.m.psel
+    expect dut.s.b.valid and dut.s.b.data == RESP_OKAY
+}
+
+test "Axi4LiteToApb: read returns PRDATA, PSLVERR becomes SLVERR" {
+    let dut = sim Axi4LiteToApb<32, 32>()
+    dut.reset()
+    dut.s.b.ready = true
+    dut.s.r.ready = true
+    dut.s.aw.valid = false
+    dut.s.w.valid = false
+    dut.m.pready = true
+    dut.m.prdata = 0x600D
+    dut.m.pslverr = false
+    dut.s.ar = Stream { valid: true, data: 0x10 }
+    dut.step()
+    dut.s.ar.valid = false
+    dut.step_until(dut.m.psel, max: 10)
+    expect !dut.m.pwrite and dut.m.pstrb == 0
+    dut.step_until(dut.s.r.valid, max: 10)
+    expect dut.s.r.data.data == 0x600D and dut.s.r.data.resp == RESP_OKAY
+    dut.step()
+    dut.m.pslverr = true
+    dut.s.ar = Stream { valid: true, data: 0x14 }
+    dut.step()
+    dut.s.ar.valid = false
+    dut.step_until(dut.s.r.valid, max: 10)
+    expect dut.s.r.data.resp == RESP_SLVERR
+}
+
+// ---------------------------------------------------------------------------
+// Axi4ToAxi4Lite
+// ---------------------------------------------------------------------------
+
+/// AXI4 slave to AXI4-Lite master bridge.
+///
+/// Bursts are split into single AXI4-Lite transactions, one beat at a time,
+/// with addresses computed by axi_next_addr (FIXED, INCR and WRAP). For a write
+/// burst one B is returned after the last beat's AXI4-Lite response, carrying
+/// the burst's ID and the last non-OKAY response seen (OKAY if none). Read
+/// beats are returned with the burst's ID, each beat's own response, and
+/// `last` on the final beat. The beat count comes from AxLEN; WLAST is not
+/// checked. Narrow transfers pass their data and strobes through unchanged.
+/// Reads and writes proceed independently; each side handles one burst at a
+/// time (throughput: one beat per three cycles for writes, two for reads, at
+/// best).
+pub module Axi4ToAxi4Lite<AW: uint = 32, DW: uint = 32, IDW: uint = 4>
+where DW == 32 or DW == 64
+{
+    /// Clock.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// AXI4 slave port.
+    in s: Axi4<AW, DW, IDW>
+    /// AXI4-Lite master port.
+    out m: Axi4Lite<AW, DW>
+
+    enum WState { Idle, Beat, WaitB, Resp }
+    enum RState { Idle, Addr, Data }
+
+    // ---- write side ----
+    reg ws: WState = .Idle
+    reg wid: uint<IDW> = 0
+    reg waddr: uint<AW> = 0
+    reg wlen: uint<8> = 0
+    reg wsize: uint<3> = 0
+    reg wburst: bit<2> = BURST_INCR
+    reg wleft: uint<8> = 0
+    reg wresp: bit<2> = RESP_OKAY
+    reg aw_pend: bool = false
+    reg w_done: bool = false
+
+    let w_open = ws == .Beat and !w_done
+    let aw_ok = !aw_pend or m.aw.fire()
+    let w_ok = w_done or m.w.fire()
+
+    s.aw.ready = ws == .Idle
+    m.aw.valid = aw_pend
+    m.aw.data = waddr
+    m.w.valid = w_open and s.w.valid
+    m.w.data.data = s.w.data.data
+    m.w.data.strb = s.w.data.strb
+    s.w.ready = w_open and m.w.ready
+    m.b.ready = ws == .WaitB
+    s.b.valid = ws == .Resp
+    s.b.data = Axi4B { id: wid, resp: wresp }
+
+    on clk {
+        match ws {
+            .Idle => if s.aw.fire() {
+                wid = s.aw.data.id
+                waddr = s.aw.data.addr
+                wlen = s.aw.data.len
+                wleft = s.aw.data.len
+                wsize = s.aw.data.size
+                wburst = s.aw.data.burst
+                wresp = RESP_OKAY
+                aw_pend = true
+                w_done = false
+                ws = .Beat
+            },
+            .Beat => {
+                if m.aw.fire() { aw_pend = false }
+                if m.w.fire() { w_done = true }
+                if aw_ok and w_ok { ws = .WaitB }
+            },
+            .WaitB => if m.b.fire() {
+                if m.b.data != RESP_OKAY { wresp = m.b.data }
+                if wleft == 0 {
+                    ws = .Resp
+                } else {
+                    waddr = axi_next_addr(waddr, wlen, wsize, wburst)
+                    wleft = wleft -% 1
+                    aw_pend = true
+                    w_done = false
+                    ws = .Beat
+                }
+            },
+            .Resp => if s.b.fire() { ws = .Idle },
+        }
+    }
+
+    // ---- read side ----
+    reg rs: RState = .Idle
+    reg rid: uint<IDW> = 0
+    reg raddr: uint<AW> = 0
+    reg rlen: uint<8> = 0
+    reg rsize: uint<3> = 0
+    reg rburst: bit<2> = BURST_INCR
+    reg rleft: uint<8> = 0
+
+    s.ar.ready = rs == .Idle
+    m.ar.valid = rs == .Addr
+    m.ar.data = raddr
+    s.r.valid = rs == .Data and m.r.valid
+    s.r.data = Axi4R { id: rid, data: m.r.data.data, resp: m.r.data.resp, last: rleft == 0 }
+    m.r.ready = rs == .Data and s.r.ready
+
+    on clk {
+        match rs {
+            .Idle => if s.ar.fire() {
+                rid = s.ar.data.id
+                raddr = s.ar.data.addr
+                rlen = s.ar.data.len
+                rleft = s.ar.data.len
+                rsize = s.ar.data.size
+                rburst = s.ar.data.burst
+                rs = .Addr
+            },
+            .Addr => if m.ar.fire() { rs = .Data },
+            .Data => if m.r.fire() {
+                if rleft == 0 {
+                    rs = .Idle
+                } else {
+                    raddr = axi_next_addr(raddr, rlen, rsize, rburst)
+                    rleft = rleft -% 1
+                    rs = .Addr
+                }
+            },
+        }
+    }
+
+    property aw_held { always (m.aw.valid and !m.aw.ready) |=> m.aw.valid and stable(m.aw.data) }
+    property ar_held { always (m.ar.valid and !m.ar.ready) |=> m.ar.valid and stable(m.ar.data) }
+    property b_held { always (s.b.valid and !s.b.ready) |=> s.b.valid and stable(s.b.data) }
+    property b_after_all_beats { never s.b.valid and (aw_pend or ws == .WaitB) }
+}
+
+test "Axi4ToAxi4Lite splits an INCR write burst into single beats" {
+    let dut = sim Axi4ToAxi4Lite<32, 32, 4>()
+    dut.reset()
+    dut.m.aw.ready = true
+    dut.m.w.ready = true
+    dut.m.b = Stream { valid: false, data: RESP_OKAY }
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.s.ar.valid = false
+    dut.s.r.ready = true
+    dut.s.b.ready = false
+    dut.s.aw.valid = true
+    dut.s.aw.data = Axi4Addr { id: 5, addr: 0x100, len: 2, size: 2, burst: BURST_INCR, prot: 0 }
+    dut.step()
+    dut.s.aw.valid = false
+    for i in 0..3 {
+        dut.s.w.valid = true
+        dut.s.w.data = Axi4W { data: 0x1000 + i, strb: 0b1111, last: i == 2 }
+        dut.step_until(dut.m.aw.valid, max: 10)
+        expect dut.m.aw.data == 0x100 + 4 * i
+        expect dut.m.w.valid and dut.m.w.data.data == 0x1000 + i
+        expect !dut.s.b.valid
+        dut.step()                            // AW and W accepted
+        dut.s.w.valid = false
+        dut.m.b.valid = true
+        dut.m.b.data = if i == 1 { RESP_SLVERR } else { RESP_OKAY }
+        dut.step()                            // B accepted
+        dut.m.b.valid = false
+    }
+    dut.step_until(dut.s.b.valid, max: 10)
+    expect dut.s.b.data.id == 5 and dut.s.b.data.resp == RESP_SLVERR
+    dut.s.b.ready = true
+    dut.step()
+    expect !dut.s.b.valid and dut.s.aw.ready
+}
+
+test "Axi4ToAxi4Lite splits a WRAP read burst and marks the last beat" {
+    let dut = sim Axi4ToAxi4Lite<32, 32, 4>()
+    dut.reset()
+    dut.m.aw.ready = true
+    dut.m.w.ready = true
+    dut.m.b.valid = false
+    dut.s.aw.valid = false
+    dut.s.w.valid = false
+    dut.s.b.ready = true
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.s.r.ready = true
+    dut.s.ar.valid = true
+    dut.s.ar.data = Axi4Addr { id: 9, addr: 0x38, len: 3, size: 2, burst: BURST_WRAP, prot: 0 }
+    dut.step()
+    dut.s.ar.valid = false
+    for (i, a) in [(0, 0x38), (1, 0x3C), (2, 0x30), (3, 0x34)] {
+        dut.step_until(dut.m.ar.valid, max: 10)
+        expect dut.m.ar.data == a
+        dut.step()                            // AR accepted
+        dut.m.r.valid = true
+        dut.m.r.data.data = 0xD0 + i
+        dut.m.r.data.resp = RESP_OKAY
+        dut.settle()
+        expect dut.s.r.valid and dut.s.r.data.id == 9 and dut.s.r.data.data == 0xD0 + i
+        expect dut.s.r.data.last == (i == 3)
+        dut.step()                            // R accepted
+        dut.m.r.valid = false
+    }
+    expect dut.s.ar.ready
+}
+
+// ---------------------------------------------------------------------------
+// ApbBridge<N>
+// ---------------------------------------------------------------------------
+
+/// APB fan-out: one APB requester port to N APB completer ports.
+///
+/// Completer i is selected for addresses in `[Base + i * Window, Base + (i + 1)
+/// * Window)`; every completer sees the full address. Accesses outside all
+/// windows complete immediately with PSLVERR and read data zero. Purely
+/// combinational; the APB timing of the selected completer passes through.
+pub module ApbBridge<N: uint, AW: uint = 32, DW: uint = 32, Base: uint = 0, Window: uint = 0x1000>
+where N >= 1, Window.is_pow2(), (Base / Window) * Window == Base, Base + N * Window <= (1 << AW)
+{
+    /// APB slave port (from the requester, e.g. Axi4LiteToApb).
+    in s: Apb<AW, DW>
+    /// One APB master port per completer.
+    out m: [Apb<AW, DW>; N]
+
+    /// Wait states added by the bridge.
+    pub const LATENCY: uint = 0
+
+    let rel = s.paddr -% Base
+    let slot = rel >> clog2(Window)
+    let mapped = s.paddr >= Base and slot < N
+
+    for i in 0..N {
+        let hit = mapped and slot == i
+        m[i].psel = s.psel and hit
+        m[i].penable = s.penable and hit
+        m[i].pwrite = s.pwrite
+        m[i].paddr = s.paddr
+        m[i].pwdata = s.pwdata
+        m[i].pstrb = s.pstrb
+        m[i].pprot = s.pprot
+    }
+
+    comb {
+        s.pready = true
+        s.prdata = 0
+        s.pslverr = !mapped
+        for i in 0..N {
+            if mapped and slot == i {
+                s.pready = m[i].pready
+                s.prdata = m[i].prdata
+                s.pslverr = m[i].pslverr
+            }
+        }
+        assert !(s.psel and s.penable and !mapped and !(s.pready and s.pslverr)), "unmapped APB access must complete with PSLVERR"
+    }
+}
+
+test "ApbBridge selects the completer by address window" {
+    let dut = sim ApbBridge<2, 32, 32, Base: 0x4000, Window: 0x100>()
+    dut.m[0].pready = true
+    dut.m[0].prdata = 0xAAAA
+    dut.m[0].pslverr = false
+    dut.m[1].pready = false
+    dut.m[1].prdata = 0xBBBB
+    dut.m[1].pslverr = false
+    dut.s.psel = true
+    dut.s.penable = false
+    dut.s.pwrite = false
+    dut.s.paddr = 0x4104
+    dut.s.pwdata = 0
+    dut.s.pstrb = 0
+    dut.s.pprot = 0
+    dut.settle()
+    expect dut.m[1].psel and !dut.m[0].psel
+    expect dut.m[1].paddr == 0x4104
+    dut.s.penable = true
+    dut.settle()
+    expect dut.m[1].penable and !dut.s.pready  // completer 1 inserts a wait state
+    dut.m[1].pready = true
+    dut.settle()
+    expect dut.s.pready and dut.s.prdata == 0xBBBB and !dut.s.pslverr
+    dut.s.paddr = 0x40FC
+    dut.settle()
+    expect dut.m[0].psel and dut.s.prdata == 0xAAAA
+}
+
+test "ApbBridge answers unmapped addresses with PSLVERR" {
+    let dut = sim ApbBridge<2, 32, 32, Base: 0x4000, Window: 0x100>()
+    for i in 0..2 {
+        dut.m[i].pready = false
+        dut.m[i].prdata = 0x1
+        dut.m[i].pslverr = false
+    }
+    dut.s.psel = true
+    dut.s.penable = true
+    dut.s.pwrite = true
+    dut.s.pwdata = 0
+    dut.s.pstrb = 0b1111
+    dut.s.pprot = 0
+    for a in [0x3FFC, 0x4200, 0x8000] {
+        dut.s.paddr = a
+        dut.settle()
+        expect !dut.m[0].psel and !dut.m[1].psel
+        expect dut.s.pready and dut.s.pslverr and dut.s.prdata == 0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WishboneToAxi4Lite
+// ---------------------------------------------------------------------------
+
+/// Wishbone B4 slave to AXI4-Lite master bridge.
+///
+/// Each accepted Wishbone request (`cyc and stb and !stall`) becomes one
+/// AXI4-Lite transaction; `ack` (OKAY) or `err` (any other response) is given
+/// for one cycle afterwards, with `dat_r` for reads. `stall` is high while a
+/// transaction is in flight and in the answering cycle, so classic and
+/// pipelined masters both work. An AXI transaction cannot be aborted: if the
+/// master drops `cyc` early the transaction still completes and its `ack` is
+/// ignored by the master.
+pub module WishboneToAxi4Lite<AW: uint = 32, DW: uint = 32>
+where DW == 32 or DW == 64
+{
+    /// Clock.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// Wishbone slave port.
+    in s: Wishbone<AW, DW>
+    /// AXI4-Lite master port.
+    out m: Axi4Lite<AW, DW>
+
+    /// Cycles from request acceptance to `ack` with a slave that answers B/R in
+    /// the cycle after the address handshake.
+    pub const LATENCY: uint = 3
+
+    enum State { Idle, Write, WaitB, Read, WaitR }
+
+    reg state: State = .Idle
+    reg adr: uint<AW> = 0
+    reg dat: uint<DW> = 0
+    reg sel: bit<DW/8> = all0
+    reg aw_pend: bool = false
+    reg w_pend: bool = false
+    reg ack_q: bool = false
+    reg err_q: bool = false
+    reg dat_q: uint<DW> = 0
+
+    let open = state == .Idle and !ack_q and !err_q
+    let take = s.cyc and s.stb and open
+
+    s.stall = !open
+    s.ack = ack_q
+    s.err = err_q
+    s.dat_r = dat_q
+
+    m.aw.valid = state == .Write and aw_pend
+    m.aw.data = adr
+    m.w.valid = state == .Write and w_pend
+    m.w.data.data = dat
+    m.w.data.strb = sel
+    m.b.ready = state == .WaitB
+    m.ar.valid = state == .Read
+    m.ar.data = adr
+    m.r.ready = state == .WaitR
+
+    on clk {
+        ack_q = false
+        err_q = false
+        match state {
+            .Idle => if take {
+                adr = s.adr
+                dat = s.dat_w
+                sel = s.sel
+                if s.we {
+                    aw_pend = true
+                    w_pend = true
+                    state = .Write
+                } else {
+                    state = .Read
+                }
+            },
+            .Write => {
+                if m.aw.fire() { aw_pend = false }
+                if m.w.fire() { w_pend = false }
+                if (!aw_pend or m.aw.fire()) and (!w_pend or m.w.fire()) { state = .WaitB }
+            },
+            .WaitB => if m.b.fire() {
+                ack_q = m.b.data == RESP_OKAY
+                err_q = m.b.data != RESP_OKAY
+                dat_q = 0
+                state = .Idle
+            },
+            .Read => if m.ar.fire() { state = .WaitR },
+            .WaitR => if m.r.fire() {
+                ack_q = m.r.data.resp == RESP_OKAY
+                err_q = m.r.data.resp != RESP_OKAY
+                dat_q = m.r.data.data
+                state = .Idle
+            },
+        }
+    }
+
+    property aw_held { always (m.aw.valid and !m.aw.ready) |=> m.aw.valid and stable(m.aw.data) }
+    property w_held { always (m.w.valid and !m.w.ready) |=> m.w.valid and stable(m.w.data) }
+    property ar_held { always (m.ar.valid and !m.ar.ready) |=> m.ar.valid and stable(m.ar.data) }
+    property never_ack_and_err { never s.ack and s.err }
+}
+
+test "WishboneToAxi4Lite: write becomes AW+W, B becomes ack" {
+    let dut = sim WishboneToAxi4Lite<32, 32>()
+    dut.reset()
+    dut.m.aw.ready = true
+    dut.m.w.ready = true
+    dut.m.b.valid = false
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.s.cyc = true
+    dut.s.stb = true
+    dut.s.we = true
+    dut.s.adr = 0x30
+    dut.s.dat_w = 0x1234
+    dut.s.sel = 0b0011
+    expect !dut.s.stall
+    dut.step()
+    expect dut.s.stall
+    expect dut.m.aw.valid and dut.m.aw.data == 0x30
+    expect dut.m.w.valid and dut.m.w.data.data == 0x1234 and dut.m.w.data.strb == 0b0011
+    dut.step()
+    expect !dut.m.aw.valid and !dut.m.w.valid
+    dut.m.b = Stream { valid: true, data: RESP_OKAY }
+    dut.step()
+    dut.m.b.valid = false
+    expect dut.s.ack and !dut.s.err
+    expect dut.s.stall                        // classic master still has stb high
+    dut.s.cyc = false
+    dut.s.stb = false
+    dut.step()
+    expect !dut.s.ack and !dut.m.aw.valid
+}
+
+test "WishboneToAxi4Lite: read returns R data, error response becomes err" {
+    let dut = sim WishboneToAxi4Lite<32, 32>()
+    dut.reset()
+    dut.m.aw.ready = true
+    dut.m.w.ready = true
+    dut.m.b.valid = false
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.s.cyc = true
+    dut.s.stb = true
+    dut.s.we = false
+    dut.s.adr = 0x34
+    dut.s.dat_w = 0
+    dut.s.sel = 0b1111
+    dut.step()
+    dut.s.stb = false
+    expect dut.m.ar.valid and dut.m.ar.data == 0x34
+    dut.step()
+    dut.m.r.valid = true
+    dut.m.r.data.data = 0xFACE
+    dut.m.r.data.resp = RESP_OKAY
+    dut.step()
+    dut.m.r.valid = false
+    expect dut.s.ack and dut.s.dat_r == 0xFACE
+    dut.step()
+    dut.s.stb = true
+    dut.step()
+    dut.s.stb = false
+    dut.step()
+    dut.m.r.valid = true
+    dut.m.r.data.data = 0
+    dut.m.r.data.resp = RESP_DECERR
+    dut.step()
+    dut.m.r.valid = false
+    expect dut.s.err and !dut.s.ack
+}
