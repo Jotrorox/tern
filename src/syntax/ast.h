@@ -461,6 +461,7 @@ typedef struct RegField {
     Type *type;
     Expr *bit_hi;         /* @n: bit_hi = n, bit_lo = NULL; @[a:b]: bit_hi = a, bit_lo = b (as written) */
     Expr *bit_lo;
+    AttrList attrs;
     AstDoc *doc;
     Span span;
 } RegField;

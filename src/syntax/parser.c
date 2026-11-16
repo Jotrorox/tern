@@ -2714,9 +2714,8 @@ static RegField *ps_reg_field(Parser *p)
 {
     RegField *f = ANEW(p->a, RegField);
     uint32_t start = ps_off(p);
-    AttrList attrs;
     AstDoc *doc = NULL;
-    ps_prefix(p, &attrs, &doc);
+    ps_prefix(p, &f->attrs, &doc);
     f->doc = doc;
     f->name = ps_name(p, "a field name", 1);
     if (!p->panic && ps_expect(p, TK_COLON, "after the field name"))
