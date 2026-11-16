@@ -1,0 +1,71 @@
+// Statements, expressions, literals and attributes.
+module Constructs {
+    in clk: clock #[clock(hz: 100_000_000)]
+    in sel: bool
+    in d: u8 @ io
+    out q: u8
+
+    domain io = (clk, rst)
+    #[ram(block)] mem buf: [u8; 16]
+    #[keep]
+    reg r: u8 = 0x0F @ io
+    var v = 0b1010_0011
+    let w = 42u8 + 0xFFu<W> + 3s12
+    let neg = -x
+    let n = !a && b || not c
+    let red = &x ^ |y
+    let s = x[7:4] ++ x[3:0]
+    let c = (a + b) * c as u16
+    let m = match sel { true => 1, false => 0 }
+    let blk = { let t = a; t + 1 }
+    x = 1; y = 2
+    let msg = "tab\t\"quoted\""
+
+    match state {
+        .Idle => if go { state = .Busy },
+        .Busy { count } => {
+            count = count - 1
+        }
+        Op::Add | Op::Sub => {}
+        _ => state = .Idle
+    }
+
+    if fast {
+        let pipe = Pipe<u8>(in: d) @ io
+    }
+    else {
+        q = d
+    }
+    let chain = if a { 1 }
+        else if b { 2 }
+        else { 3 }
+    for i in 0..8 { q[i] = d[7 - i] }
+    for (a, b) in pairs {}
+    static_assert(W > 0, "width")
+    assert property no_overflow { always count <= 10 }
+    cover property full { count == 10 ##[1:$] count == 0 }
+}
+
+bundle Pipe2<T: type> {
+    valid: bool
+    data: T
+    flip ready: bool
+    fn fire() -> bool { self.valid and self.ready }
+}
+
+enum Cmd { Read { addr: u16 }, Write { addr: u16, data: u8 } }
+
+regmap Regs {
+    0x00 ctrl: rw { enable: bool @0, mode: uint<2> @[2:1] }
+    0x08 count: rw u32 = 5
+    0x10 fifo: wo u8 -> Stream<u8>
+}
+
+extern module Vendor("rtl/vendor.sv") <W: uint = 8> {
+    in a: bit<W>
+}
+
+test "table" {
+    for (a, b, sum) in [(1, 2, 3), (4, 5, 9)] { expect a + b == sum }
+    let b = rand<u32>() where b <= 0x1000
+}

@@ -44,6 +44,7 @@
 
 #include "tools/import.c"
 #include "tools/remap.c"
+#include "tools/fmt.c"
 
 #include "std_embed.c"
 #include "cmd_parse.c"

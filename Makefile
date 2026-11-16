@@ -45,6 +45,7 @@ HDRS = \
 	src/ir/ir.h \
 	src/sim/sim.h src/sim/sim_impl.h \
 	src/pkg/pkg.h \
+	src/tools/tools.h \
 	src/cmds.h src/std_embed.h
 
 # --- os/
@@ -202,14 +203,18 @@ LSP_OBJS =
 # --- tools/
 TOOLS_SRCS = \
 	src/tools/import.c \
-	src/tools/remap.c
+	src/tools/remap.c \
+	src/tools/fmt.c
 TOOLS_OBJS = \
 	$(OBJ)/tools_import.o \
-	$(OBJ)/tools_remap.o
+	$(OBJ)/tools_remap.o \
+	$(OBJ)/tools_fmt.o
 $(OBJ)/tools_import.o: src/tools/import.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/tools/import.c -o $@
 $(OBJ)/tools_remap.o: src/tools/remap.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/tools/remap.c -o $@
+$(OBJ)/tools_fmt.o: src/tools/fmt.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/tools/fmt.c -o $@
 
 # --- src/
 MAIN_SRCS = \
@@ -296,7 +301,8 @@ UNIT_TESTS = \
 	build/test_base \
 	build/test_sim \
 	build/test_pkg \
-	build/test_tools
+	build/test_tools \
+	build/test_fmt
 
 tests/run: tests/run.c $(TEST_DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS)
@@ -312,6 +318,9 @@ build/test_pkg: tests/unit/test_pkg.c $(TEST_DEPS) $(PKG_SRCS) $(OBJ)/.dir
 
 build/test_tools: tests/unit/test_tools.c $(TEST_DEPS) $(TOOLS_SRCS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_tools.c $(LDLIBS)
+
+build/test_fmt: tests/unit/test_fmt.c $(TEST_DEPS) $(SYNTAX_SRCS) $(TOOLS_SRCS) src/std_embed.c $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_fmt.c $(LDLIBS)
 
 test: $(BIN) tests/run $(UNIT_TESTS)
 	for t in $(UNIT_TESTS); do ./$$t || exit 1; done
