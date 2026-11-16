@@ -1,0 +1,536 @@
+package std::timer
+
+// std::timer — counters measured in clock cycles: Timer, Prescaler, Pulse,
+// Stopwatch, Rtc and Watchdog. Clock-rate enables live in std::clk.
+
+// ---------------------------------------------------------------------------
+// Timer
+// ---------------------------------------------------------------------------
+
+/// Countdown timer. Loading `n` (n > 0) makes `expired` pulse for one cycle
+/// exactly `n` cycles after the load cycle; with `auto_reload` it then
+/// pulses every `n` cycles until stopped. Loading 0 or `stop` halts it.
+pub module Timer<W: uint = 32>
+where W >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; the timer is stopped.
+    in rst: reset
+    /// Start (or restart) counting `load.data` cycles.
+    in load: Valid<uint<W>>
+    /// Stop counting (ignored in a cycle with `load.valid`).
+    in stop: bool
+    /// Restart automatically after expiring (periodic mode).
+    in auto_reload: bool
+    /// One-cycle pulse when the count runs out.
+    out expired: bool
+    /// The timer is counting.
+    out running: bool
+    /// Cycles left until `expired` (1 in the expiring cycle).
+    out remaining: uint<W>
+
+    /// Cycles from `load` to `expired` is the loaded value itself.
+    pub const LATENCY: uint = 0
+
+    reg cnt: uint<W> = 0
+    reg period: uint<W> = 0
+    reg run: bool = false
+
+    expired = run and cnt == 1
+    running = run
+    remaining = cnt
+
+    on clk {
+        if load.valid {
+            cnt = load.data
+            period = load.data
+            run = load.data != 0
+        } else if stop {
+            run = false
+        } else if run {
+            if cnt == 1 {
+                if auto_reload {
+                    cnt = period
+                } else {
+                    cnt = 0
+                    run = false
+                }
+            } else {
+                cnt = cnt -% 1
+            }
+        }
+    }
+
+    /// A running timer always has time left.
+    property running_nonzero {
+        always run |-> cnt != 0
+    }
+
+    /// Expiry only happens while running.
+    property expiry_while_running {
+        always expired |-> running
+    }
+}
+
+test "timer: one-shot expires exactly n cycles after load" {
+    let dut = sim Timer<16>()
+    dut.reset()
+    dut.stop = false
+    dut.auto_reload = false
+    dut.load = Valid { valid: true, data: 5 }
+    dut.step()
+    dut.load.valid = false
+    for c in 1..12 {
+        dut.settle()
+        expect dut.expired == (c == 5)
+        expect dut.running == (c <= 5)
+        dut.step()
+    }
+}
+
+test "timer: periodic mode and stop" {
+    let dut = sim Timer<8>()
+    dut.reset()
+    dut.stop = false
+    dut.auto_reload = true
+    dut.load = Valid { valid: true, data: 3 }
+    dut.step()
+    dut.load.valid = false
+    var fires: uint = 0
+    for c in 1..13 {
+        dut.settle()
+        if dut.expired {
+            fires = fires + 1
+            expect c == 3 or c == 6 or c == 9 or c == 12
+        }
+        dut.step()
+    }
+    expect fires == 4
+    dut.stop = true
+    dut.step()
+    dut.stop = false
+    dut.step(10)
+    expect !dut.running and !dut.expired
+}
+
+// ---------------------------------------------------------------------------
+// Prescaler
+// ---------------------------------------------------------------------------
+
+/// Runtime-programmable clock enable: `tick` is high for one cycle in every
+/// `div + 1` enabled cycles (`div = 0` ticks every cycle). Lowering `div`
+/// below the current count takes effect at once.
+pub module Prescaler<W: uint = 16>
+where W >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; restarts the count.
+    in rst: reset
+    /// Count this cycle.
+    in en: bool
+    /// Divisor minus one.
+    in div: uint<W>
+    /// One-cycle enable pulse every div + 1 enabled cycles.
+    out tick: bool
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    reg cnt: uint<W> = 0
+    let at_end = cnt >= div
+
+    tick = en and at_end
+
+    on clk {
+        if en {
+            cnt = if at_end { 0 } else { cnt +% 1 }
+        }
+    }
+
+    /// The count restarts after every tick.
+    property restarts_after_tick {
+        always tick |=> cnt == 0
+    }
+}
+
+test "prescaler: runtime divisor" {
+    let dut = sim Prescaler<8>()
+    dut.reset()
+    dut.en = true
+    for (div, want) in [(0, 30), (2, 10), (9, 3)] {
+        dut.div = div
+        dut.reset()
+        var ticks: uint = 0
+        for _ in 0..30 {
+            dut.settle()
+            if dut.tick { ticks = ticks + 1 }
+            dut.step()
+        }
+        expect ticks == want
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pulse
+// ---------------------------------------------------------------------------
+
+/// One-shot pulse generator: a cycle with `trigger` makes `q` high for
+/// exactly `Cycles` cycles, starting in the next cycle. Without
+/// `Retrigger`, triggers during a pulse are ignored; with it, each trigger
+/// restarts the full length.
+pub module Pulse<Cycles: uint, Retrigger: bool = false>
+where Cycles >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; ends any pulse.
+    in rst: reset
+    /// Start a pulse.
+    in trigger: bool
+    /// The pulse.
+    out q: bool
+
+    /// Cycles from `trigger` to `q`.
+    pub const LATENCY: uint = 1
+
+    reg cnt: uint<clog2(Cycles + 1)> = 0
+    q = cnt != 0
+
+    on clk {
+        if trigger and (Retrigger or cnt == 0) {
+            cnt = Cycles
+        } else if cnt != 0 {
+            cnt = cnt -% 1
+        }
+    }
+
+    /// The remaining length never exceeds the pulse length.
+    property length_bounded {
+        always cnt <= Cycles
+    }
+
+    /// A trigger on an idle generator always starts a pulse.
+    property starts {
+        always (trigger and cnt == 0) |=> q
+    }
+}
+
+test "pulse: exact length, retrigger ignored" {
+    let dut = sim Pulse<4>()
+    dut.reset()
+    dut.trigger = true
+    dut.step()
+    dut.trigger = false
+    var high: uint = 0
+    for c in 0..10 {
+        if dut.q { high = high + 1 }
+        dut.trigger = c == 1          // ignored: already pulsing
+        dut.step()
+    }
+    expect high == 4
+}
+
+test "pulse: retrigger extends" {
+    let dut = sim Pulse<3, true>()
+    dut.reset()
+    dut.trigger = true
+    dut.step()
+    dut.trigger = false
+    dut.step()                        // q high, 2 left
+    dut.trigger = true
+    dut.step()                        // restart: 3 more
+    dut.trigger = false
+    var high: uint = 0
+    for _ in 0..10 {
+        if dut.q { high = high + 1 }
+        dut.step()
+    }
+    expect high == 3
+}
+
+// ---------------------------------------------------------------------------
+// Stopwatch
+// ---------------------------------------------------------------------------
+
+/// Cycle stopwatch: `start` in cycle t and `stop` in cycle u report
+/// `u - t` on `lap` (one-cycle Valid) when stopping. `elapsed` shows the
+/// running count, saturating at the maximum. `clear` zeroes it.
+pub module Stopwatch<W: uint = 32>
+where W >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; stopped at zero.
+    in rst: reset
+    /// Start (or continue) counting.
+    in start: bool
+    /// Stop counting and report the count on `lap`.
+    in stop: bool
+    /// Zero the count.
+    in clear: bool
+    /// The count so far.
+    out elapsed: uint<W>
+    /// Counting.
+    out running: bool
+    /// The count, reported once when stopping.
+    out lap: Valid<uint<W>>
+
+    /// Cycles from `stop` to `lap`.
+    pub const LATENCY: uint = 1
+
+    reg cnt: uint<W> = 0
+    reg run: bool = false
+    reg lap_v: bool = false
+    reg lap_d: uint<W> = 0
+
+    let saturated = &bits(cnt)
+    let nxt = if clear { 0 } else if run and !saturated { cnt +% 1 } else { cnt }
+
+    on clk {
+        cnt = nxt
+        lap_v = false
+        if start { run = true }
+        if stop and run {
+            run = false
+            lap_v = true
+            lap_d = nxt
+        }
+    }
+
+    elapsed = cnt
+    running = run
+    lap.valid = lap_v
+    lap.data = lap_d
+
+    /// The count only moves while running (or when cleared).
+    property frozen_when_stopped {
+        always (!run and !clear) |=> stable(cnt)
+    }
+}
+
+test "stopwatch: measures start to stop" {
+    let dut = sim Stopwatch<16>()
+    dut.reset()
+    dut.clear = false
+    dut.stop = false
+    dut.start = true
+    dut.step()                        // start in cycle t
+    dut.start = false
+    dut.step(6)
+    dut.stop = true
+    dut.step()                        // stop in cycle t + 7
+    dut.stop = false
+    dut.settle()
+    expect dut.lap.valid and dut.lap.data == 7
+    expect !dut.running
+    dut.step(5)
+    expect dut.elapsed == 7 and !dut.lap.valid
+    dut.clear = true
+    dut.step()
+    expect dut.elapsed == 0
+}
+
+test "stopwatch: saturates" {
+    let dut = sim Stopwatch<3>()
+    dut.reset()
+    dut.clear = false
+    dut.stop = false
+    dut.start = true
+    dut.step(20)
+    expect dut.elapsed == 7
+}
+
+// ---------------------------------------------------------------------------
+// Rtc
+// ---------------------------------------------------------------------------
+
+/// Time of day plus a day counter.
+pub struct RtcTime {
+    /// Days since the epoch the clock was set to.
+    days: u16,
+    /// 0 ..= 23.
+    hours: uint<5>,
+    /// 0 ..= 59.
+    minutes: uint<6>,
+    /// 0 ..= 59.
+    seconds: uint<6>,
+}
+
+/// Real-time clock: counts seconds, minutes, hours and days from a clock of
+/// `ClkHz` (pass the frequency given by the clock's #[clock(hz: ..)]
+/// attribute). `pps` pulses once per second. `set` loads a new time and
+/// restarts the current second.
+pub module Rtc<ClkHz: uint>
+where ClkHz >= 1
+{
+    /// Clock running at ClkHz.
+    in clk: clock
+    /// Reset; 0 days 00:00:00.
+    in rst: reset
+    /// Load a new time (fields must be in range).
+    in set: Valid<RtcTime>
+    /// The current time.
+    out time: RtcTime
+    /// One-cycle pulse whenever the seconds advance.
+    out pps: bool
+
+    /// Cycles from `set` to the new time being shown.
+    pub const LATENCY: uint = 1
+
+    reg sub: uint<clog2(ClkHz + 1)> = 0
+    reg t: RtcTime = RtcTime { days: 0, hours: 0, minutes: 0, seconds: 0 }
+    reg p: bool = false
+
+    on clk {
+        p = false
+        if set.valid {
+            t = set.data
+            sub = 0
+        } else if sub == ClkHz - 1 {
+            sub = 0
+            p = true
+            if t.seconds == 59 {
+                t.seconds = 0
+                if t.minutes == 59 {
+                    t.minutes = 0
+                    if t.hours == 23 {
+                        t.hours = 0
+                        t.days = t.days +% 1
+                    } else {
+                        t.hours = t.hours +% 1
+                    }
+                } else {
+                    t.minutes = t.minutes +% 1
+                }
+            } else {
+                t.seconds = t.seconds +% 1
+            }
+        } else {
+            sub = sub +% 1
+        }
+    }
+
+    time = t
+    pps = p
+
+    /// Times loaded with `set` are in range.
+    assume property valid_set {
+        always set.valid |-> set.data.seconds < 60 and set.data.minutes < 60 and set.data.hours < 24
+    }
+
+    /// The time of day always stays in range.
+    property in_range {
+        always t.seconds < 60 and t.minutes < 60 and t.hours < 24
+    }
+}
+
+test "rtc: rolls over seconds, minutes, hours and days" {
+    let dut = sim Rtc<4>()
+    dut.reset()
+    dut.set = Valid { valid: true, data: RtcTime { days: 1, hours: 23, minutes: 59, seconds: 58 } }
+    dut.step()
+    dut.set.valid = false
+    var pulses: uint = 0
+    for _ in 0..8 {
+        dut.step()
+        if dut.pps { pulses = pulses + 1 }
+    }
+    expect pulses == 2
+    expect dut.time.days == 2 and dut.time.hours == 0
+    expect dut.time.minutes == 0 and dut.time.seconds == 0
+}
+
+test "rtc: one second per ClkHz cycles" {
+    let dut = sim Rtc<10>()
+    dut.reset()
+    dut.set.valid = false
+    dut.step(95)
+    expect dut.time.seconds == 9
+    dut.step(5)
+    expect dut.time.seconds == 10
+}
+
+// ---------------------------------------------------------------------------
+// Watchdog
+// ---------------------------------------------------------------------------
+
+/// Watchdog timer: if `timeout` consecutive enabled cycles pass without a
+/// `kick`, `bite` goes high and stays high until the next kick, a disable
+/// or reset. With a kick in cycle t and none after, `bite` is high from
+/// cycle t + timeout + 1.
+pub module Watchdog<W: uint = 24>
+where W >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; the watchdog restarts its count.
+    in rst: reset
+    /// Watch (when low, the count is held at zero and `bite` is low).
+    in enable: bool
+    /// Restart the count.
+    in kick: bool
+    /// Cycles allowed between kicks.
+    in timeout: uint<W>
+    /// The watchdog expired (sticky until a kick).
+    out bite: bool
+    /// Cycles since the last kick.
+    out elapsed: uint<W>
+
+    /// Cycles from the expiry to `bite`.
+    pub const LATENCY: uint = 1
+
+    reg cnt: uint<W> = 0
+    reg bitten: bool = false
+
+    on clk {
+        if !enable or kick {
+            cnt = 0
+            bitten = false
+        } else if !bitten {
+            let nxt = cnt +% 1
+            cnt = nxt
+            if nxt >= timeout { bitten = true }
+        }
+    }
+
+    bite = bitten
+    elapsed = cnt
+
+    /// Once bitten, only a kick (or disabling) clears it.
+    property sticky {
+        always (bitten and enable and !kick) |=> bitten
+    }
+}
+
+test "watchdog: bites after the timeout, kick clears" {
+    let dut = sim Watchdog<8>()
+    dut.reset()
+    dut.enable = true
+    dut.timeout = 10
+    dut.kick = true
+    dut.step()                        // kick in cycle t
+    dut.kick = false
+    dut.step(9)
+    expect !dut.bite
+    dut.step()
+    expect dut.bite                   // cycle t + 11
+    dut.step(20)
+    expect dut.bite
+    dut.kick = true
+    dut.step()
+    expect !dut.bite
+}
+
+test "watchdog: regular kicks keep it quiet" {
+    let dut = sim Watchdog<8>()
+    dut.reset()
+    dut.enable = true
+    dut.timeout = 5
+    for c in 0..100 {
+        dut.kick = (c & 3) == 0
+        dut.step()
+        expect !dut.bite
+    }
+}
