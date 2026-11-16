@@ -1,0 +1,15 @@
+; Mem.ram
+memory_initialization_radix=16;
+memory_initialization_vector=
+0003,
+1114,
+2225,
+3336,
+4447,
+5558,
+6669,
+777a,
+888b,
+999c,
+aaad,
+bbbe;

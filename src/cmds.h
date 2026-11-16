@@ -41,6 +41,11 @@ int cmd_remap(int argc, char **argv);
  * AST dump used by the golden tests (tests/fixtures/.../<name>.parse). */
 int cmd_parse(int argc, char **argv);
 
+/* Internal: `tern emit --ir design.json [-o dir | --stdout]` emits
+ * SystemVerilog, constraints and regmap outputs from IR JSON
+ * (src/emit/cmd_emit.c). */
+int cmd_emit(int argc, char **argv);
+
 /* Shared by `tern parse` and the interim `tern check` (cmd_parse.c): parses
  * the files/directories in argv[1..], reports syntax errors and, with
  * `--dump` (when allow_dump), prints each AST. Returns an exit status. */

@@ -43,6 +43,7 @@ HDRS = \
 	src/os/os.h \
 	src/syntax/token.h src/syntax/lexer.h src/syntax/ast.h src/syntax/parser.h \
 	src/ir/ir.h \
+	src/emit/emit.h \
 	src/sim/sim.h src/sim/sim_impl.h \
 	src/pkg/pkg.h \
 	src/tools/tools.h \
@@ -145,8 +146,24 @@ CHECK_SRCS =
 CHECK_OBJS =
 
 # --- emit/
-EMIT_SRCS =
-EMIT_OBJS =
+EMIT_SRCS = \
+	src/emit/sv.c \
+	src/emit/constraints.c \
+	src/emit/regmap.c \
+	src/emit/cmd_emit.c
+EMIT_OBJS = \
+	$(OBJ)/emit_sv.o \
+	$(OBJ)/emit_constraints.o \
+	$(OBJ)/emit_regmap.o \
+	$(OBJ)/emit_cmd_emit.o
+$(OBJ)/emit_sv.o: src/emit/sv.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/emit/sv.c -o $@
+$(OBJ)/emit_constraints.o: src/emit/constraints.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/emit/constraints.c -o $@
+$(OBJ)/emit_regmap.o: src/emit/regmap.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/emit/regmap.c -o $@
+$(OBJ)/emit_cmd_emit.o: src/emit/cmd_emit.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/emit/cmd_emit.c -o $@
 
 # --- sim/
 SIM_SRCS = \
@@ -306,7 +323,8 @@ UNIT_TESTS = \
 	build/test_sim \
 	build/test_pkg \
 	build/test_tools \
-	build/test_fmt
+	build/test_fmt \
+	build/test_emit
 
 tests/run: tests/run.c $(TEST_DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS)
@@ -325,6 +343,9 @@ build/test_tools: tests/unit/test_tools.c $(TEST_DEPS) $(TOOLS_SRCS) $(OBJ)/.dir
 
 build/test_fmt: tests/unit/test_fmt.c $(TEST_DEPS) $(SYNTAX_SRCS) $(TOOLS_SRCS) src/std_embed.c $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_fmt.c $(LDLIBS)
+
+build/test_emit: tests/unit/test_emit.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(EMIT_SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_emit.c $(LDLIBS)
 
 test: $(BIN) tests/run $(UNIT_TESTS)
 	for t in $(UNIT_TESTS); do ./$$t || exit 1; done

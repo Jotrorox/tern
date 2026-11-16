@@ -100,6 +100,18 @@ static const MainCmd main_cmds[] = {
      "language server on stdio: diagnostics, go-to-definition, hover", NULL},
     {"parse", cmd_parse, NULL, "--dump <file.tern>",
      "(internal) print the AST of a file", NULL},
+    {"emit", cmd_emit, NULL, "--ir <design.json> [-o <dir> | --stdout]",
+     "(internal) emit SystemVerilog, constraints and regmaps from IR JSON",
+     "  --ir <file>         IR JSON (docs/ir-schema.md)\n"
+     "  -o, --output <dir>  write the files into dir (default: stdout)\n"
+     "  --stdout            all files to stdout, each after a `// ---- file: X ----` line\n"
+     "  --std <s>           sv (default) or verilog2005\n"
+     "  --emit-assertions   keep assertions and properties\n"
+     "  --target-kind <k>   fpga (default: power-on values as `initial`) or asic\n"
+     "  --mem-init <list>   extra memory init formats: mif, coe (hex is always written)\n"
+     "  --constraints <l>   xdc, sdc (default: both) or none\n"
+     "  --no-regmaps        no <Map>.h/.svd/.md\n"
+     "  --no-line-markers   no `// tern: file:line` markers\n"},
 };
 
 static const char *const main_groups[] = {"Project", "Verification", "Packages", "Interop"};
