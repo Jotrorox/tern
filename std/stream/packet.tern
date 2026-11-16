@@ -1,0 +1,647 @@
+package std::stream
+
+// Width conversion and packet framing: Gearbox, GearboxLast, Packetizer,
+// DelimPacketizer, Depacketizer, DelimDepacketizer, StreamCounter.
+
+// ---------------------------------------------------------------------------
+// Gearbox
+// ---------------------------------------------------------------------------
+
+/// Width converter between payload types whose widths are integer multiples
+/// of each other. Narrow to wide packs `Out::WIDTH / In::WIDTH` input beats
+/// into one output beat, the first input beat in the least significant lane.
+/// Wide to narrow emits the lanes of each input beat least significant lane
+/// first. Equal widths are a re-typing wire. Full throughput on the narrow
+/// side.
+pub module Gearbox<In: type, Out: type> {
+    /// Clock.
+    in clk: clock
+    /// Reset; drops any partially assembled word.
+    in rst: reset
+    /// Input beats.
+    in in: Stream<In>
+    /// Output beats.
+    out out: Stream<Out>
+
+    const IW: uint = In::WIDTH
+    const OW: uint = Out::WIDTH
+    static_assert((OW / IW) * IW == OW or (IW / OW) * OW == IW,
+                  "Gearbox: widths must be integer multiples of each other")
+
+    /// Cycles from the beat that completes an output word (narrow to wide)
+    /// or from an input beat (wide to narrow) to the first output beat.
+    pub const LATENCY: uint = if IW == OW { 0 } else { 1 }
+
+    if IW == OW {
+        out.valid = in.valid
+        out.data = Out::from_bits(bits(in.data))
+        in.ready = out.ready
+    } else if IW < OW {
+        const R: uint = OW / IW
+        reg acc: bit<OW>
+        reg cnt: uint<clog2(R)> = 0
+        reg ovalid: bool = false
+        reg odata: bit<OW>
+
+        let last_lane = cnt == R - 1
+        in.ready = !last_lane or !ovalid or out.ready
+        out.valid = ovalid
+        out.data = Out::from_bits(odata)
+
+        on clk {
+            if out.fire() { ovalid = false }
+            if in.fire() {
+                // shift the new lane in from the top; after R beats the
+                // first beat sits in the least significant lane
+                let next = bits(in.data) ++ acc[OW - 1:IW]
+                if last_lane {
+                    odata = next
+                    ovalid = true
+                    cnt = 0
+                } else {
+                    acc = next
+                    cnt = cnt +% 1
+                }
+            }
+        }
+
+        /// A stalled output word is held unchanged until it fires.
+        property out_stable {
+            always (out.valid and !out.ready) |=> out.valid and stable(out.data)
+        }
+    } else {
+        const R: uint = IW / OW
+        reg buf: bit<IW>
+        reg left: uint<clog2(R + 1)> = 0
+
+        out.valid = left != 0
+        out.data = Out::from_bits(buf[OW - 1:0])
+        in.ready = left == 0 or (left == 1 and out.ready)
+
+        on clk {
+            if out.fire() {
+                buf = buf >> OW
+                left = left -% 1
+            }
+            if in.fire() {
+                buf = bits(in.data)
+                left = R
+            }
+        }
+
+        /// The number of lanes still to emit never exceeds the ratio.
+        property lanes_bounded {
+            always left <= R
+        }
+    }
+}
+
+test "gearbox: u8 to u32 packs little-endian lanes" {
+    let dut = sim Gearbox<u8, u32>()
+    dut.reset()
+    dut.out.ready = true
+    for b in [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88] {
+        dut.in = Stream { valid: true, data: b }
+        dut.settle()
+        expect dut.in.ready
+        dut.step()
+        if b == 0x44 {
+            dut.settle()
+            expect dut.out.valid and dut.out.data == 0x4433_2211
+        }
+    }
+    dut.in.valid = false
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 0x8877_6655
+    dut.step()
+    expect !dut.out.valid
+}
+
+test "gearbox: u32 to u8 emits lanes LSB first" {
+    let dut = sim Gearbox<u32, u8>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: 0xDDCC_BBAA }
+    dut.step()
+    dut.in.valid = false
+    for b in [0xAA, 0xBB, 0xCC, 0xDD] {
+        dut.settle()
+        expect dut.out.valid and dut.out.data == b
+        dut.step()
+    }
+    expect !dut.out.valid
+}
+
+test "gearbox: wide to narrow at full rate accepts back-to-back words" {
+    let dut = sim Gearbox<u16, u8>()
+    dut.reset()
+    dut.out.ready = true
+    var words: uint = 0
+    var bytes: uint = 0
+    for _ in 0..40 {
+        dut.in = Stream { valid: true, data: 0x0201 }
+        dut.settle()
+        if dut.in.ready { words = words + 1 }
+        if dut.out.valid { bytes = bytes + 1 }
+        dut.step()
+    }
+    expect bytes == 39 or bytes == 40
+    expect words == 20
+}
+
+test "gearbox: equal widths re-type" {
+    let dut = sim Gearbox<u8, bit<8>>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: 0xA5 }
+    dut.out.ready = true
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 0xA5
+}
+
+// ---------------------------------------------------------------------------
+// GearboxLast
+// ---------------------------------------------------------------------------
+
+/// `Gearbox` for packet streams. Narrow to wide: a beat with `last` closes
+/// the current output word early; lanes not yet filled are zero, and the
+/// output word carries `last`. Wide to narrow: `last` of an input word is
+/// placed on its final narrow beat.
+pub module GearboxLast<In: type, Out: type> {
+    /// Clock.
+    in clk: clock
+    /// Reset; drops any partially assembled word.
+    in rst: reset
+    /// Input packet beats.
+    in in: Stream<Beat<In>>
+    /// Output packet beats.
+    out out: Stream<Beat<Out>>
+
+    const IW: uint = In::WIDTH
+    const OW: uint = Out::WIDTH
+    static_assert((OW / IW) * IW == OW or (IW / OW) * OW == IW,
+                  "GearboxLast: widths must be integer multiples of each other")
+
+    /// Cycles from the beat that completes an output word (narrow to wide)
+    /// or from an input beat (wide to narrow) to the first output beat.
+    pub const LATENCY: uint = if IW == OW { 0 } else { 1 }
+
+    if IW == OW {
+        out.valid = in.valid
+        out.data = Beat { data: Out::from_bits(bits(in.data.data)), last: in.data.last }
+        in.ready = out.ready
+    } else if IW < OW {
+        const R: uint = OW / IW
+        reg lanes: [bit<IW>; R]
+        reg cnt: uint<clog2(R)> = 0
+        reg ovalid: bool = false
+        reg odata: Out
+        reg olast: bool = false
+
+        // the output word if the current input beat completes it
+        var word: [bit<IW>; R]
+        comb {
+            for i in 0..R {
+                word[i] = if cnt == i {
+                    bits(in.data.data)
+                } else if cnt > i {
+                    lanes[i]
+                } else {
+                    all0
+                }
+            }
+        }
+
+        let closes = cnt == R - 1 or in.data.last
+        in.ready = !closes or !ovalid or out.ready
+        out.valid = ovalid
+        out.data = Beat { data: odata, last: olast }
+
+        on clk {
+            if out.fire() { ovalid = false }
+            if in.fire() {
+                if closes {
+                    odata = Out::from_bits(bits(word))
+                    olast = in.data.last
+                    ovalid = true
+                    cnt = 0
+                } else {
+                    for i in 0..R {
+                        if cnt == i { lanes[i] = bits(in.data.data) }
+                    }
+                    cnt = cnt +% 1
+                }
+            }
+        }
+
+        /// A stalled output word is held unchanged until it fires.
+        property out_stable {
+            always (out.valid and !out.ready) |=> out.valid and stable(out.data)
+        }
+    } else {
+        const R: uint = IW / OW
+        reg buf: bit<IW>
+        reg left: uint<clog2(R + 1)> = 0
+        reg blast: bool = false
+
+        out.valid = left != 0
+        out.data = Beat { data: Out::from_bits(buf[OW - 1:0]), last: blast and left == 1 }
+        in.ready = left == 0 or (left == 1 and out.ready)
+
+        on clk {
+            if out.fire() {
+                buf = buf >> OW
+                left = left -% 1
+            }
+            if in.fire() {
+                buf = bits(in.data.data)
+                blast = in.data.last
+                left = R
+            }
+        }
+
+        /// The number of lanes still to emit never exceeds the ratio.
+        property lanes_bounded {
+            always left <= R
+        }
+    }
+}
+
+test "gearbox last: short packet flushes a zero-padded word" {
+    let dut = sim GearboxLast<u8, u32>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: Beat { data: 0xAA, last: false } }
+    dut.step()
+    dut.in.data = Beat { data: 0xBB, last: true }
+    dut.step()
+    dut.in.valid = false
+    dut.settle()
+    expect dut.out.valid
+    expect dut.out.data.data == 0x0000_BBAA
+    expect dut.out.data.last
+}
+
+test "gearbox last: wide to narrow puts last on the final lane" {
+    let dut = sim GearboxLast<u16, u8>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: Beat { data: 0x2211, last: true } }
+    dut.step()
+    dut.in.valid = false
+    dut.settle()
+    expect dut.out.valid and dut.out.data.data == 0x11 and !dut.out.data.last
+    dut.step()
+    expect dut.out.valid and dut.out.data.data == 0x22 and dut.out.data.last
+}
+
+// ---------------------------------------------------------------------------
+// Packetizer / DelimPacketizer
+// ---------------------------------------------------------------------------
+
+/// Add a `last` flag by count: every `Len`-th beat ends a packet.
+/// Combinational pass-through of the handshake.
+pub module Packetizer<T: type, Len: uint>
+where Len >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; the next beat starts a packet.
+    in rst: reset
+    /// Unframed beats.
+    in in: Stream<T>
+    /// The same beats, `last` set on every `Len`-th.
+    out out: Stream<Beat<T>>
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    reg cnt: uint<clog2(Len + 1)> = 0
+    let at_end = cnt == Len - 1
+
+    out.valid = in.valid
+    out.data = Beat { data: in.data, last: at_end }
+    in.ready = out.ready
+
+    on clk {
+        if out.fire() {
+            cnt = if at_end { 0 } else { cnt +% 1 }
+        }
+    }
+
+    /// The beat counter never reaches the packet length.
+    property count_bounded {
+        always cnt < Len
+    }
+}
+
+test "packetizer: last on every Len-th beat" {
+    let dut = sim Packetizer<u8, 3>()
+    dut.reset()
+    dut.out.ready = true
+    for i in 0..9 {
+        dut.in = Stream { valid: true, data: i as u8 }
+        dut.settle()
+        expect dut.out.valid and dut.out.data.data == i as u8
+        expect dut.out.data.last == (i == 2 or i == 5 or i == 8)
+        dut.step()
+    }
+}
+
+test "packetizer: stalls do not advance the count" {
+    let dut = sim Packetizer<u8, 2>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: 1 }
+    dut.out.ready = false
+    dut.step(5)
+    dut.settle()
+    expect !dut.out.data.last
+    dut.out.ready = true
+    dut.step()
+    dut.settle()
+    expect dut.out.data.last
+}
+
+/// Add a `last` flag by delimiter: an input beat equal to `delim` ends the
+/// packet and is dropped; `last` goes on the beat before it. One beat is
+/// held back (the module must see the next beat to know whether the held
+/// one is last). Consecutive delimiters (empty packets) are dropped.
+pub module DelimPacketizer<T: type> {
+    /// Clock.
+    in clk: clock
+    /// Reset; drops the held beat.
+    in rst: reset
+    /// Beats with in-band delimiters.
+    in in: Stream<T>
+    /// The delimiter value (quasi-static).
+    in delim: T
+    /// Payload beats with `last` flags; delimiters removed.
+    out out: Stream<Beat<T>>
+
+    /// Beats held back between input and output.
+    pub const LATENCY: uint = 1
+
+    reg held_valid: bool = false
+    reg held: T
+
+    let is_delim = bits(in.data) == bits(delim)
+
+    out.valid = held_valid and in.valid
+    out.data = Beat { data: held, last: is_delim }
+    in.ready = !held_valid or out.ready
+
+    on clk {
+        if in.fire() {
+            if is_delim {
+                held_valid = false
+            } else {
+                held_valid = true
+                held = in.data
+            }
+        }
+    }
+
+    /// Input and output fire together once a beat is held.
+    property lockstep {
+        always out.fire() |-> in.fire()
+    }
+}
+
+test "delim packetizer: delimiter becomes last" {
+    let dut = sim DelimPacketizer<u8>()
+    dut.reset()
+    dut.delim = 0x00
+    dut.out.ready = true
+    let input = [0x41, 0x42, 0x00, 0x00, 0x43, 0x00]
+    let want_data = [0x41, 0x42, 0x43]
+    let want_last = [false, true, true]
+    var n: uint = 0
+    for b in input {
+        dut.in = Stream { valid: true, data: b }
+        dut.settle()
+        expect dut.in.ready
+        if dut.out.valid {
+            expect dut.out.data.data == want_data[n]
+            expect dut.out.data.last == want_last[n]
+            n = n + 1
+        }
+        dut.step()
+    }
+    expect n == 3
+}
+
+// ---------------------------------------------------------------------------
+// Depacketizer / DelimDepacketizer
+// ---------------------------------------------------------------------------
+
+/// Consume the `last` flag: forward the payload and expose the framing as
+/// side-band `first` / `last` flags of the current beat.
+pub module Depacketizer<T: type> {
+    /// Clock.
+    in clk: clock
+    /// Reset; the next beat is the first of a packet.
+    in rst: reset
+    /// Packet beats.
+    in in: Stream<Beat<T>>
+    /// Payload beats.
+    out out: Stream<T>
+    /// The beat on `out` starts a packet (valid with `out.valid`).
+    out first: bool
+    /// The beat on `out` ends a packet (valid with `out.valid`).
+    out last: bool
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    reg inside: bool = false
+
+    out.valid = in.valid
+    out.data = in.data.data
+    in.ready = out.ready
+    first = !inside
+    last = in.data.last
+
+    on clk {
+        if in.fire() { inside = !in.data.last }
+    }
+
+    /// The beat after a last beat starts a new packet.
+    property restart_after_last {
+        always (in.fire() and in.data.last) |=> first
+    }
+}
+
+test "depacketizer: first and last flags" {
+    let dut = sim Depacketizer<u8>()
+    dut.reset()
+    dut.out.ready = true
+    let lasts = [false, false, true, true, false, true]
+    let firsts = [true, false, false, true, true, false]
+    for i in 0..6 {
+        dut.in = Stream { valid: true, data: Beat { data: i as u8, last: lasts[i] } }
+        dut.settle()
+        expect dut.out.valid and dut.out.data == i as u8
+        expect dut.first == firsts[i]
+        expect dut.last == lasts[i]
+        dut.step()
+    }
+}
+
+/// Consume the `last` flag by delimiter: forward the payload and insert one
+/// `delim` beat after every packet.
+pub module DelimDepacketizer<T: type> {
+    /// Clock.
+    in clk: clock
+    /// Reset; cancels a pending delimiter.
+    in rst: reset
+    /// Packet beats.
+    in in: Stream<Beat<T>>
+    /// The delimiter value (quasi-static).
+    in delim: T
+    /// Payload beats with a delimiter after each packet.
+    out out: Stream<T>
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    reg pending: bool = false
+
+    out.valid = pending or in.valid
+    out.data = if pending { delim } else { in.data.data }
+    in.ready = !pending and out.ready
+
+    on clk {
+        if pending {
+            if out.ready { pending = false }
+        } else if in.fire() and in.data.last {
+            pending = true
+        }
+    }
+
+    /// Every packet end is followed by a delimiter beat.
+    property delim_follows_last {
+        always (in.fire() and in.data.last) |=> pending and out.valid
+    }
+}
+
+test "delim depacketizer: inserts a delimiter after each packet" {
+    let dut = sim DelimDepacketizer<u8>()
+    dut.reset()
+    dut.delim = 0x7E
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: Beat { data: 1, last: false } }
+    dut.settle()
+    expect dut.out.data == 1 and dut.in.ready
+    dut.step()
+    dut.in.data = Beat { data: 2, last: true }
+    dut.settle()
+    expect dut.out.data == 2 and dut.in.ready
+    dut.step()
+    dut.in.data = Beat { data: 3, last: true }
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 0x7E
+    expect !dut.in.ready
+    dut.step()
+    dut.settle()
+    expect dut.out.data == 3 and dut.in.ready
+}
+
+// ---------------------------------------------------------------------------
+// StreamCounter
+// ---------------------------------------------------------------------------
+
+/// Pass-through monitor that counts beats and packets of a packet stream.
+/// The counts wrap at 2^W. Each count is exposed as a `Valid` whose `valid`
+/// pulses for one cycle after the count changes.
+pub module StreamCounter<T: type, W: uint = 32>
+where W >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; clears both counts.
+    in rst: reset
+    /// The monitored stream.
+    in in: Stream<Beat<T>>
+    /// The same stream, unchanged.
+    out out: Stream<Beat<T>>
+    /// Clear both counts.
+    in clear: bool
+    /// Number of beats since reset or clear.
+    out beats: Valid<uint<W>>
+    /// Number of packets (beats with `last`) since reset or clear.
+    out packets: Valid<uint<W>>
+
+    /// Cycles from a beat to the updated count.
+    pub const LATENCY: uint = 1
+
+    out.valid = in.valid
+    out.data = in.data
+    in.ready = out.ready
+
+    reg nbeats: uint<W> = 0
+    reg npackets: uint<W> = 0
+    reg beat_upd: bool = false
+    reg pkt_upd: bool = false
+
+    on clk {
+        beat_upd = false
+        pkt_upd = false
+        if clear {
+            nbeats = 0
+            npackets = 0
+            beat_upd = true
+            pkt_upd = true
+        } else if in.fire() {
+            nbeats = nbeats +% 1
+            beat_upd = true
+            if in.data.last {
+                npackets = npackets +% 1
+                pkt_upd = true
+            }
+        }
+    }
+
+    beats.valid = beat_upd
+    beats.data = nbeats
+    packets.valid = pkt_upd
+    packets.data = npackets
+
+    /// Every counted beat is announced in the next cycle.
+    property beat_announced {
+        always (in.fire() and !clear) |=> beats.valid
+    }
+}
+
+test "stream counter counts beats and packets" {
+    let dut = sim StreamCounter<u8, 16>()
+    dut.reset()
+    dut.clear = false
+    dut.out.ready = true
+    for i in 0..10 {
+        dut.in = Stream { valid: true, data: Beat { data: i as u8, last: i == 4 or i == 9 } }
+        dut.settle()
+        expect dut.out.valid and dut.out.data.data == i as u8
+        dut.step()
+        dut.settle()
+        expect dut.beats.valid and dut.beats.data == (i + 1) as u16
+    }
+    dut.in.valid = false
+    dut.settle()
+    expect dut.packets.data == 2
+    dut.step()
+    expect !dut.beats.valid and !dut.packets.valid
+    dut.clear = true
+    dut.step()
+    dut.settle()
+    expect dut.beats.data == 0 and dut.packets.data == 0
+}
+
+test "stream counter ignores stalled beats" {
+    let dut = sim StreamCounter<u8, 8>()
+    dut.reset()
+    dut.clear = false
+    dut.out.ready = false
+    dut.in = Stream { valid: true, data: Beat { data: 1, last: true } }
+    dut.step(4)
+    dut.settle()
+    expect dut.beats.data == 0 and dut.packets.data == 0
+}

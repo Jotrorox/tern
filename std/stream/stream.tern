@@ -1,0 +1,372 @@
+package std::stream
+
+// std::stream — composable Stream<T> plumbing.
+//
+// This file: payload helper types, register slices (Skid, Pipe) and Throttle.
+// route.tern: Fork, Join, Join3, Arbiter, Mux, Demux.
+// packet.tern: Gearbox, GearboxLast, Packetizer, DelimPacketizer,
+//              Depacketizer, DelimDepacketizer, StreamCounter.
+//
+// Every module here obeys the Stream rules from std::prelude: a producer
+// holds valid/data until the beat fires, and no `valid` output depends
+// combinationally on a `ready` input of the same port.
+
+// ---------------------------------------------------------------------------
+// Payload helper types
+// ---------------------------------------------------------------------------
+
+/// One beat of a packet stream: a payload plus an end-of-packet flag.
+/// `Stream<Beat<T>>` is the packet form used throughout std.
+pub struct Beat<T: type> {
+    /// The payload of this beat.
+    data: T,
+    /// High on the final beat of a packet.
+    last: bool,
+}
+
+/// Two values travelling together (the output of `Join`).
+pub struct Pair<A: type, B: type> {
+    /// The value from the first input.
+    a: A,
+    /// The value from the second input.
+    b: B,
+}
+
+/// Three values travelling together (the output of `Join3`).
+pub struct Triple<A: type, B: type, C: type> {
+    /// The value from the first input.
+    a: A,
+    /// The value from the second input.
+    b: B,
+    /// The value from the third input.
+    c: C,
+}
+
+// ---------------------------------------------------------------------------
+// Skid
+// ---------------------------------------------------------------------------
+
+/// Full-throughput register slice (a "skid buffer"). `out.valid`, `out.data`
+/// and `in.ready` all come straight from flip-flops, so a Skid cuts every
+/// combinational path between producer and consumer, including the `ready`
+/// path. Internally it holds one output entry plus one skid entry that
+/// catches the beat accepted in the cycle the consumer stalls; this is what
+/// lets it sustain one beat per cycle while registering `ready`.
+pub module Skid<T: type> {
+    /// Clock.
+    in clk: clock
+    /// Reset; empties the slice.
+    in rst: reset
+    /// Upstream beats.
+    in in: Stream<T>
+    /// Downstream beats, in order, one cycle after they are accepted.
+    out out: Stream<T>
+
+    /// Cycles from `in.fire()` to the beat being offered on `out`.
+    pub const LATENCY: uint = 1
+
+    reg main_valid: bool = false
+    reg main_data: T
+    reg skid_valid: bool = false
+    reg skid_data: T
+
+    in.ready = !skid_valid
+    out.valid = main_valid
+    out.data = main_data
+
+    on clk {
+        if out.ready or !main_valid {
+            // The output register is free (or being drained) this cycle.
+            if skid_valid {
+                main_valid = true
+                main_data = skid_data
+                skid_valid = false
+            } else {
+                main_valid = in.valid
+                main_data = in.data
+            }
+        } else if in.valid and !skid_valid {
+            // Output stalled: park the beat accepted this cycle.
+            skid_valid = true
+            skid_data = in.data
+        }
+    }
+
+    /// A stalled output beat is held unchanged until it fires.
+    property out_stable {
+        always (out.valid and !out.ready) |=> out.valid and stable(out.data)
+    }
+
+    /// The skid entry is only ever used behind a full output entry.
+    property skid_behind_main {
+        always skid_valid |-> main_valid
+    }
+
+    cover property skid_used { skid_valid }
+}
+
+test "skid: one cycle latency" {
+    let dut = sim Skid<u8>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: 42 }
+    dut.settle()
+    expect dut.in.ready
+    expect !dut.out.valid
+    dut.step()
+    dut.in.valid = false
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 42
+    dut.step()
+    expect !dut.out.valid
+}
+
+test "skid: full throughput when the consumer is always ready" {
+    let dut = sim Skid<u8>()
+    dut.reset()
+    dut.out.ready = true
+    for i in 0..20 {
+        dut.in = Stream { valid: true, data: i as u8 }
+        dut.settle()
+        expect dut.in.ready
+        if i > 0 {
+            expect dut.out.valid and dut.out.data == (i - 1) as u8
+        }
+        dut.step()
+    }
+}
+
+test "skid: random back-pressure loses and reorders nothing" {
+    let dut = sim Skid<u8>()
+    dut.reset()
+    var next_in: u8 = 0
+    var next_out: u8 = 0
+    for _ in 0..500 {
+        dut.in = Stream { valid: rand<bool>(), data: next_in }
+        dut.out.ready = rand<bool>()
+        dut.settle()
+        if dut.in.valid and dut.in.ready { next_in = next_in +% 1 }
+        if dut.out.valid and dut.out.ready {
+            expect dut.out.data == next_out
+            next_out = next_out +% 1
+        }
+        dut.step()
+    }
+    expect next_out != 0
+}
+
+test "skid: ready is registered and drops after a stall with data" {
+    let dut = sim Skid<u8>()
+    dut.reset()
+    dut.out.ready = false
+    dut.in = Stream { valid: true, data: 1 }
+    dut.step()                       // 1 into the output entry
+    dut.in.data = 2
+    dut.step()                       // 2 into the skid entry
+    dut.settle()
+    expect !dut.in.ready
+    expect dut.out.valid and dut.out.data == 1
+    dut.in.valid = false
+    dut.out.ready = true
+    dut.step()
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 2
+    expect dut.in.ready
+}
+
+// ---------------------------------------------------------------------------
+// Pipe
+// ---------------------------------------------------------------------------
+
+/// `Stages` forward register stages with full throughput. Each stage
+/// registers valid and data; `ready` is combinational through the chain
+/// (a stage loads when it is empty or its successor accepts), so bubbles are
+/// squeezed out. `Pipe<T, 0>` is a wire. Use `Skid` where the `ready` path
+/// must be registered too.
+pub module Pipe<T: type, Stages: uint = 1> {
+    /// Clock.
+    in clk: clock
+    /// Reset; empties every stage.
+    in rst: reset
+    /// Upstream beats.
+    in in: Stream<T>
+    /// Downstream beats, in order, `Stages` cycles later when unstalled.
+    out out: Stream<T>
+
+    /// Cycles from `in.fire()` to the beat being offered on `out`.
+    pub const LATENCY: uint = Stages
+
+    var v: [bool; Stages + 1]
+    var d: [T; Stages + 1]
+    var r: [bool; Stages + 1]
+
+    v[0] = in.valid
+    d[0] = in.data
+    in.ready = r[0]
+
+    for i in 0..Stages {
+        reg sv: bool = false
+        reg sd: T
+        r[i] = !sv or r[i + 1]
+        on clk {
+            if r[i] {
+                sv = v[i]
+                sd = d[i]
+            }
+        }
+        v[i + 1] = sv
+        d[i + 1] = sd
+    }
+
+    out.valid = v[Stages]
+    out.data = d[Stages]
+    r[Stages] = out.ready
+
+    /// A stalled output beat is held unchanged until it fires.
+    property out_stable {
+        always (out.valid and !out.ready) |=> out.valid and stable(out.data)
+    }
+}
+
+test "pipe: latency equals stages" {
+    let dut = sim Pipe<u16, 3>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: 0xBEEF }
+    dut.step()
+    dut.in.valid = false
+    dut.settle()
+    expect !dut.out.valid
+    dut.step()
+    expect !dut.out.valid
+    dut.step()
+    expect dut.out.valid and dut.out.data == 0xBEEF
+    dut.step()
+    expect !dut.out.valid
+}
+
+test "pipe: zero stages is a wire" {
+    let dut = sim Pipe<u8, 0>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: 7 }
+    dut.out.ready = false
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 7
+    expect !dut.in.ready
+    dut.out.ready = true
+    dut.settle()
+    expect dut.in.ready
+}
+
+test "pipe: random back-pressure keeps order" {
+    let dut = sim Pipe<u8, 4>()
+    dut.reset()
+    var next_in: u8 = 0
+    var next_out: u8 = 0
+    for _ in 0..500 {
+        dut.in = Stream { valid: rand<bool>(), data: next_in }
+        dut.out.ready = rand<bool>()
+        dut.settle()
+        if dut.in.valid and dut.in.ready { next_in = next_in +% 1 }
+        if dut.out.valid and dut.out.ready {
+            expect dut.out.data == next_out
+            next_out = next_out +% 1
+        }
+        dut.step()
+    }
+    expect next_out != 0
+}
+
+test "pipe: full throughput" {
+    let dut = sim Pipe<u8, 2>()
+    dut.reset()
+    dut.out.ready = true
+    var got: uint = 0
+    for i in 0..50 {
+        dut.in = Stream { valid: true, data: i as u8 }
+        dut.settle()
+        expect dut.in.ready
+        if dut.out.valid { got = got + 1 }
+        dut.step()
+    }
+    expect got == 48
+}
+
+// ---------------------------------------------------------------------------
+// Throttle
+// ---------------------------------------------------------------------------
+
+/// Rate limiter: passes at most one beat per `N` cycles. After a beat fires
+/// the throttle closes for `N - 1` cycles. Combinational pass-through
+/// otherwise (no added latency).
+pub module Throttle<T: type, N: uint = 2>
+where N >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; the throttle starts open.
+    in rst: reset
+    /// Upstream beats.
+    in in: Stream<T>
+    /// Downstream beats, spaced at least `N` cycles apart.
+    out out: Stream<T>
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    reg wait: uint<clog2(N + 1)> = 0
+    let open = wait == 0
+
+    out.valid = in.valid and open
+    out.data = in.data
+    in.ready = out.ready and open
+
+    on clk {
+        if out.fire() {
+            wait = N - 1
+        } else if !open {
+            wait = wait -% 1
+        }
+    }
+
+    /// After a beat the throttle is closed for exactly N - 1 cycles.
+    property closes_after_fire {
+        always out.fire() |=> wait == N - 1
+    }
+
+    /// No beat passes while closed.
+    property nothing_while_closed {
+        never out.fire() and !open
+    }
+}
+
+test "throttle: one beat per N cycles" {
+    let dut = sim Throttle<u8, 4>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: 1 }
+    var fires: uint = 0
+    var last_fire: uint = 0
+    for c in 0..40 {
+        dut.settle()
+        if dut.out.valid and dut.out.ready {
+            if fires > 0 { expect c - last_fire == 4 }
+            fires = fires + 1
+            last_fire = c
+        }
+        dut.step()
+    }
+    expect fires == 10
+}
+
+test "throttle: N = 1 passes every cycle" {
+    let dut = sim Throttle<u8, 1>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: 9 }
+    for _ in 0..5 {
+        dut.settle()
+        expect dut.out.valid and dut.in.ready
+        dut.step()
+    }
+}

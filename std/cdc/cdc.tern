@@ -1,0 +1,576 @@
+package std::cdc
+
+// std::cdc — the only legal ways across a clock-domain boundary (spec §8.3).
+//
+// Every module here carries a `#[cdc(kind)]` attribute. The compiler
+// recognises it, allows reads across domains inside the module only, types
+// the outputs in the destination domain, puts ASYNC_REG / false-path
+// constraints on the `#[async_reg]` flops and lists the crossing in the
+// `tern check` CDC report.
+//
+// Choosing a primitive:
+//   * one level signal (or a bundle of independent bits)  -> Sync2 / Sync3
+//   * a single-cycle event                                 -> PulseSync
+//   * a multi-bit value that changes rarely                -> HandshakeSync
+//   * a stream of data                                     -> AsyncFifo
+//   * a counter value read in another domain               -> GrayCounter + Sync2
+//   * a reset                                              -> ResetSync / ResetBridge
+//   * a quasi-static configuration bit                     -> unsafe_cross(x)
+//     (compiler intrinsic: no synchronizer, a warning and a `// CDC:
+//     unchecked` marker in the emitted SystemVerilog)
+
+/// Dual-clock FIFO with Gray-coded pointers, re-exported from `std::fifo`.
+pub use std::fifo::AsyncFifo
+
+// ---------------------------------------------------------------------------
+// Sync2 / Sync3
+// ---------------------------------------------------------------------------
+
+/// Two-flop level synchronizer. `d` must come straight from a register in
+/// the source domain (no combinational logic in front, which could glitch).
+/// If `T` has several bits, each bit is synchronized independently, so use
+/// it only for bits that are independent of each other (or Gray-coded); for
+/// a coherent multi-bit value use `HandshakeSync` or `AsyncFifo`. The flops
+/// have no reset and power up as zero.
+#[cdc(sync2)]
+pub module Sync2<T: type = bool> {
+    /// Source clock; only used to type `d`.
+    in src: clock
+    /// Destination clock.
+    in dst: clock
+    /// Level from the source domain.
+    in d: T @ src
+    /// The same level in the destination domain.
+    out q: T @ dst
+
+    /// Destination-clock cycles from a change of `d` to `q` (plus up to one
+    /// cycle of metastability resolution).
+    pub const LATENCY: uint = 2
+
+    #[async_reg]
+    reg s1: T = T::from_bits(all0) @ dst
+    #[async_reg]
+    reg s2: T = T::from_bits(all0) @ dst
+
+    on dst {
+        s1 = d
+        s2 = s1
+    }
+    q = s2
+
+    /// The output is the first stage delayed by one destination cycle.
+    property two_stages {
+        always bits(s2) == bits(past(s1))
+    }
+}
+
+/// Three-flop level synchronizer, for high clock rates or where the MTBF of
+/// two flops is not enough. Same rules as `Sync2`.
+#[cdc(sync3)]
+pub module Sync3<T: type = bool> {
+    /// Source clock; only used to type `d`.
+    in src: clock
+    /// Destination clock.
+    in dst: clock
+    /// Level from the source domain.
+    in d: T @ src
+    /// The same level in the destination domain.
+    out q: T @ dst
+
+    /// Destination-clock cycles from a change of `d` to `q`.
+    pub const LATENCY: uint = 3
+
+    #[async_reg]
+    reg s1: T = T::from_bits(all0) @ dst
+    #[async_reg]
+    reg s2: T = T::from_bits(all0) @ dst
+    #[async_reg]
+    reg s3: T = T::from_bits(all0) @ dst
+
+    on dst {
+        s1 = d
+        s2 = s1
+        s3 = s2
+    }
+    q = s3
+
+    /// The output is the first stage delayed by two destination cycles.
+    property three_stages {
+        always bits(s3) == bits(past(s1, 2))
+    }
+}
+
+test "sync2: level arrives after two destination edges" {
+    let dut = sim Sync2()
+    dut.d = false
+    dut.dst.step()
+    dut.dst.step()
+    expect !dut.q
+    dut.d = true
+    dut.dst.step()
+    expect !dut.q
+    dut.dst.step()
+    expect dut.q
+    dut.d = false
+    dut.dst.step()
+    expect dut.q
+    dut.dst.step()
+    expect !dut.q
+}
+
+test "sync2: independent bits of a wider type" {
+    let dut = sim Sync2<bit<4>>()
+    dut.d = 0b1010
+    dut.dst.step(2)
+    expect dut.q == 0b1010
+}
+
+test "sync3: level arrives after three destination edges" {
+    let dut = sim Sync3()
+    dut.d = true
+    dut.dst.step()
+    dut.dst.step()
+    expect !dut.q
+    dut.dst.step()
+    expect dut.q
+}
+
+// ---------------------------------------------------------------------------
+// PulseSync
+// ---------------------------------------------------------------------------
+
+/// Toggle-based pulse synchronizer: every single-cycle pulse on `d` flips a
+/// toggle flop in the source domain; the toggle is synchronized with two
+/// flops and an edge detector turns each change back into one single-cycle
+/// pulse on `q`. Pulses must be at least three destination-clock cycles
+/// apart (and at least one source cycle wide); closer pulses can merge.
+#[cdc(pulse)]
+pub module PulseSync {
+    /// Source clock.
+    in src: clock
+    /// Source reset.
+    in src_rst: reset
+    /// Destination clock.
+    in dst: clock
+    /// Destination reset.
+    in dst_rst: reset
+
+    domain src_d = (src, src_rst)
+    domain dst_d = (dst, dst_rst)
+
+    /// Single-cycle pulse in the source domain.
+    in d: bool @ src_d
+    /// One single-cycle pulse in the destination domain per source pulse.
+    out q: bool @ dst_d
+
+    /// Destination-clock cycles from the toggle flipping to `q`.
+    pub const LATENCY: uint = 3
+
+    reg toggle: bool = false @ src_d
+    on src_d {
+        if d { toggle = !toggle }
+    }
+
+    #[async_reg]
+    reg s1: bool = false @ dst_d
+    #[async_reg]
+    reg s2: bool = false @ dst_d
+    reg s3: bool = false @ dst_d
+    on dst_d {
+        s1 = toggle
+        s2 = s1
+        s3 = s2
+    }
+    q = s2 != s3
+
+    /// A pulse is produced exactly when the synchronized toggle changes.
+    property pulse_on_edge {
+        always q == (s2 != past(s2))
+    }
+
+    cover property pulse_seen { q }
+}
+
+test "pulse sync: one pulse in, one pulse out" {
+    let dut = sim PulseSync()
+    dut.reset()
+    dut.d = true
+    dut.src.step()
+    dut.d = false
+    dut.src.step()
+    var pulses: uint = 0
+    for _ in 0..8 {
+        dut.settle()
+        if dut.q { pulses = pulses + 1 }
+        dut.dst.step()
+    }
+    expect pulses == 1
+}
+
+test "pulse sync: spaced pulses all arrive" {
+    let dut = sim PulseSync()
+    dut.reset()
+    var pulses: uint = 0
+    for _ in 0..5 {
+        dut.d = true
+        dut.src.step()
+        dut.d = false
+        for _ in 0..4 {
+            dut.src.step()
+            dut.settle()
+            if dut.q { pulses = pulses + 1 }
+            dut.dst.step()
+        }
+    }
+    for _ in 0..4 {
+        dut.settle()
+        if dut.q { pulses = pulses + 1 }
+        dut.dst.step()
+    }
+    expect pulses == 5
+}
+
+// ---------------------------------------------------------------------------
+// HandshakeSync
+// ---------------------------------------------------------------------------
+
+/// Multi-bit value crossing with a two-phase req/ack handshake. On
+/// `in.fire()` the value is captured in a source-domain holding register and
+/// a request toggle flips; the destination synchronizes the toggle, copies
+/// the (by then stable) holding register into its output register and flips
+/// an acknowledge toggle that travels back. `in.ready` is low until the
+/// acknowledge has returned, so the value is never sampled while changing.
+/// Slow (one transfer per roughly 2 source + 3 destination cycles) but safe
+/// for any clock ratio.
+#[cdc(handshake)]
+pub module HandshakeSync<T: type> {
+    /// Source clock.
+    in src: clock
+    /// Source reset.
+    in src_rst: reset
+    /// Destination clock.
+    in dst: clock
+    /// Destination reset.
+    in dst_rst: reset
+
+    domain src_d = (src, src_rst)
+    domain dst_d = (dst, dst_rst)
+
+    /// Values to transfer (source domain).
+    in in: Stream<T> @ src_d
+    /// Transferred values (destination domain).
+    out out: Stream<T> @ dst_d
+
+    /// Destination-clock cycles from the request toggle to `out.valid`.
+    pub const LATENCY: uint = 3
+
+    // ---- registers of both sides ----
+    reg req: bool = false @ src_d
+    reg hold: T @ src_d
+    #[async_reg]
+    reg ack_s1: bool = false @ src_d
+    #[async_reg]
+    reg ack_s2: bool = false @ src_d
+
+    #[async_reg]
+    reg req_s1: bool = false @ dst_d
+    #[async_reg]
+    reg req_s2: bool = false @ dst_d
+    reg ack: bool = false @ dst_d
+    reg ovalid: bool = false @ dst_d
+    reg odata: T @ dst_d
+
+    // ---- source side ----
+    in.ready = req == ack_s2
+
+    on src_d {
+        ack_s1 = ack
+        ack_s2 = ack_s1
+        if in.fire() {
+            hold = in.data
+            req = !req
+        }
+    }
+
+    // ---- destination side ----
+    let incoming = req_s2 != ack
+
+    out.valid = ovalid
+    out.data = odata
+
+    on dst_d {
+        req_s1 = req
+        req_s2 = req_s1
+        if out.fire() { ovalid = false }
+        if incoming and (!ovalid or out.ready) {
+            odata = hold
+            ovalid = true
+            ack = req_s2
+        }
+    }
+
+    /// The source waits for the acknowledge after every transfer.
+    property one_in_flight {
+        always in.fire() |=> !in.ready
+    }
+
+    /// A stalled output value is held unchanged until it fires.
+    property out_stable {
+        always (out.valid and !out.ready) |=> out.valid and stable(out.data)
+    }
+}
+
+test "handshake sync: values cross intact and in order" {
+    let dut = sim HandshakeSync<u32>()
+    dut.reset()
+    dut.out.ready = true
+    var sent: uint = 0
+    var got: uint = 0
+    let values = [0xDEAD_BEEF, 0x0000_0001, 0x8000_0000, 0x1234_5678, 0]
+    for _ in 0..200 {
+        dut.in = Stream { valid: sent < 4, data: values[sent] }
+        dut.settle()
+        if dut.in.valid and dut.in.ready { sent = sent + 1 }
+        dut.src.step()
+        dut.settle()
+        if dut.out.valid and dut.out.ready {
+            expect dut.out.data == values[got]
+            got = got + 1
+        }
+        dut.dst.step()
+        dut.dst.step()             // destination runs twice as fast
+    }
+    expect sent == 4 and got == 4
+}
+
+test "handshake sync: back-pressure holds the next value at the source" {
+    let dut = sim HandshakeSync<u8>()
+    dut.reset()
+    dut.out.ready = false
+    dut.in = Stream { valid: true, data: 5 }
+    dut.settle()
+    expect dut.in.ready
+    dut.src.step()
+    dut.in.valid = false
+    for _ in 0..10 {
+        dut.src.step()
+        dut.dst.step()
+    }
+    // the first value sits in the output register and has been acknowledged
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 5
+    expect dut.in.ready
+    dut.in = Stream { valid: true, data: 6 }
+    dut.src.step()
+    dut.in.valid = false
+    for _ in 0..10 {
+        dut.src.step()
+        dut.dst.step()
+    }
+    // the second value waits at the source: no acknowledge yet
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 5
+    expect !dut.in.ready
+    dut.out.ready = true
+    dut.dst.step()                 // 5 is taken, 6 is captured on the same edge
+    dut.out.ready = false
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 6
+    for _ in 0..4 {
+        dut.src.step()
+        dut.dst.step()
+    }
+    dut.settle()
+    expect dut.in.ready
+}
+
+// ---------------------------------------------------------------------------
+// ResetSync
+// ---------------------------------------------------------------------------
+
+/// Reset synchronizer: asynchronous assertion, synchronous deassertion.
+/// `rst_out` asserts as soon as `rst_in` does (no clock needed) and
+/// deasserts on the `Stages`-th rising edge of `clk` after `rst_in` is
+/// released, so every flop in the domain leaves reset in the same cycle.
+/// Feed it a raw external reset (button, PLL not locked, power-on).
+#[cdc(reset_sync)]
+pub module ResetSync<Stages: uint = 2>
+where Stages >= 2
+{
+    /// Clock of the domain the reset is synchronized into.
+    in clk: clock
+    /// Raw asynchronous reset, active high.
+    in rst_in: reset<async>
+    /// Reset for the `clk` domain, active high.
+    out rst_out: reset<async>
+    /// `rst_out` as a plain status bit (for LEDs and status registers;
+    /// never use it as a reset).
+    out active: bool
+
+    /// `clk` cycles from the release of `rst_in` to the release of `rst_out`.
+    pub const LATENCY: uint = Stages
+
+    domain d = (clk, rst_in)
+
+    #[async_reg]
+    reg chain: bit<Stages> = all1 @ d
+    on d {
+        chain = chain << 1
+    }
+
+    active = chain[Stages - 1]
+    rst_out = chain[Stages - 1] as reset<async>
+
+    /// The output reset is asserted whenever the input reset is.
+    property asserted_with_input {
+        always rst_in |-> active
+    }
+
+    /// Once released, the output stays released until the input asserts.
+    property stays_released {
+        always !active |=> !active or rst_in
+    }
+}
+
+test "reset sync: releases Stages cycles after the input" {
+    let dut = sim ResetSync<3>()
+    dut.reset()
+    expect dut.active
+    dut.step()
+    expect dut.active
+    dut.step()
+    expect dut.active
+    dut.step()
+    expect !dut.active
+    dut.step(5)
+    expect !dut.active
+}
+
+// ---------------------------------------------------------------------------
+// ResetBridge
+// ---------------------------------------------------------------------------
+
+/// Derive a reset for one clock domain from the reset of another. The
+/// source reset clears the destination synchronizer asynchronously (so
+/// even a one-cycle source reset is never missed by a slower destination
+/// clock) and the destination reset is released synchronously to `dst`
+/// after `Stages` cycles. Use it to reset both sides of an `AsyncFifo`
+/// from one source.
+#[cdc(reset_bridge)]
+pub module ResetBridge<Stages: uint = 2>
+where Stages >= 2
+{
+    /// Source clock; only used to type `src_rst`.
+    in src: clock
+    /// The reset of the source domain (any style).
+    in src_rst: reset @ src
+    /// Destination clock.
+    in dst: clock
+    /// Reset for the destination domain, active high.
+    out dst_rst: reset<async> @ dst
+    /// `dst_rst` as a plain status bit (never use it as a reset).
+    out active: bool @ dst
+
+    /// `dst` cycles from the release of `src_rst` to the release of `dst_rst`.
+    pub const LATENCY: uint = Stages
+
+    // inside a reset bridge the source reset is used as an asynchronous
+    // clear of the destination synchronizer, whatever its own style
+    let src_async = src_rst as reset<async>
+    domain d = (dst, src_async)
+
+    #[async_reg]
+    reg chain: bit<Stages> = all1 @ d
+    on d {
+        chain = chain << 1
+    }
+
+    active = chain[Stages - 1]
+    dst_rst = chain[Stages - 1] as reset<async>
+
+    /// The destination reset is asserted whenever the source reset is.
+    property asserted_with_source {
+        always src_rst |-> active
+    }
+}
+
+test "reset bridge: releases on the destination clock" {
+    let dut = sim ResetBridge()
+    dut.reset()
+    expect dut.active
+    dut.src.step(10)               // the source clock does not release it
+    expect dut.active
+    dut.dst.step()
+    expect dut.active
+    dut.dst.step()
+    expect !dut.active
+}
+
+// ---------------------------------------------------------------------------
+// GrayCounter
+// ---------------------------------------------------------------------------
+
+/// Counter with a registered Gray-coded output, for passing a count to
+/// another domain through `Sync2<bit<W>>`: consecutive values differ in
+/// exactly one bit, so a synchronized sample is always a valid count
+/// (either the old or the new one). `bin` is the same count in binary for
+/// local use. Wraps at 2^W.
+#[cdc(gray)]
+pub module GrayCounter<W: uint = 4>
+where W >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; the count restarts at zero.
+    in rst: reset
+    /// Count up by one this cycle.
+    in en: bool
+    /// The count in binary.
+    out bin: uint<W>
+    /// The count in Gray code, straight from a register.
+    out gray: bit<W>
+
+    /// Cycles from `en` to the updated count.
+    pub const LATENCY: uint = 1
+
+    reg b: uint<W> = 0
+    reg g: bit<W> = all0
+
+    on clk {
+        if en {
+            let n = b +% 1
+            b = n
+            g = bits(n) ^ bits(n >> 1)
+        }
+    }
+    bin = b
+    gray = g
+
+    /// Every increment flips exactly one Gray bit.
+    property one_bit_per_step {
+        always en |=> count_ones(g ^ past(g)) == 1
+    }
+
+    /// The Gray output holds while not counting.
+    property holds_when_idle {
+        always !en |=> stable(g)
+    }
+}
+
+test "gray counter: one bit changes per step, matches binary" {
+    let dut = sim GrayCounter<4>()
+    dut.reset()
+    dut.en = true
+    var prev: bit<4> = all0
+    for i in 1..33 {
+        dut.step()
+        let b = dut.bin
+        expect b == (i & 15) as uint<4>
+        expect dut.gray == bits(b) ^ bits(b >> 1)
+        expect count_ones(dut.gray ^ prev) == 1
+        prev = dut.gray
+    }
+    dut.en = false
+    dut.step(3)
+    expect dut.gray == prev
+}

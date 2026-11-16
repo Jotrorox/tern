@@ -1,0 +1,301 @@
+package std::encoding
+
+// Line codes: Manchester and NRZI.
+
+// ---------------------------------------------------------------------------
+// Manchester
+// ---------------------------------------------------------------------------
+
+/// Manchester encoding of one bit as two half-bit levels (first, second).
+/// IEEE 802.3 convention (`ieee`): 0 = high then low, 1 = low then high.
+/// G. E. Thomas convention (`!ieee`): the opposite.
+pub const fn manchester_encode(b: bool, ieee: bool) -> bit<2> {
+    let second = b == ieee
+    ((!second) as uint<1>) ++ (second as uint<1>)
+}
+
+/// Manchester serializer: each accepted bit becomes two line cycles (the
+/// line runs at twice the bit rate, one half-bit per clock). The line is
+/// low while idle. Bits stream back to back without gaps when `in` stays
+/// valid.
+pub module ManchesterEnc<Ieee: bool = true> {
+    /// Clock (twice the bit rate).
+    in clk: clock
+    /// Reset; the line goes idle.
+    in rst: reset
+    /// Bits to send.
+    in in: Stream<bool>
+    /// The encoded line, registered.
+    out line: bool
+    /// A bit is being sent.
+    out busy: bool
+
+    /// Cycles from `in.fire()` to the first half-bit on `line`.
+    pub const LATENCY: uint = 1
+
+    reg level: bool = false
+    reg second_pending: bool = false
+    reg cur: bool = false
+    reg sending: bool = false
+
+    in.ready = !second_pending
+
+    on clk {
+        if second_pending {
+            level = manchester_encode(cur, Ieee)[0]
+            second_pending = false
+        } else if in.valid {
+            level = manchester_encode(in.data, Ieee)[1]
+            cur = in.data
+            second_pending = true
+            sending = true
+        } else {
+            level = false
+            sending = false
+        }
+    }
+
+    line = level
+    busy = sending or second_pending
+
+    /// Every bit has a transition in its middle.
+    property mid_bit_transition {
+        always second_pending |=> line != past(line)
+    }
+
+    /// The second half always follows the first.
+    property two_halves {
+        always second_pending |=> !second_pending
+    }
+}
+
+/// Manchester decoder for a line sampled at exactly twice the bit rate (one
+/// sample per half-bit, e.g. on the transmitter's clock or a recovered
+/// clock). Samples are paired; a pair with a mid-bit transition yields a
+/// bit, a pair without one means the decoder is misaligned (or the line is
+/// idle): it pulses `slip` and shifts its pairing by one sample. A
+/// misaligned decoder hits such a pair at the first two consecutive bits
+/// that differ, so a preamble of alternating bits (like Ethernet's 0x55
+/// bytes) locks it within two bits.
+pub module ManchesterDec<Ieee: bool = true> {
+    /// Clock (twice the bit rate).
+    in clk: clock
+    /// Reset; the next sample is taken as a first half.
+    in rst: reset
+    /// The line, one sample per half-bit.
+    in line: bool
+    /// Decoded bits.
+    out out: Valid<bool>
+    /// The pairing was shifted by one sample.
+    out slip: bool
+
+    /// Cycles from the second half-bit sample to the decoded bit.
+    pub const LATENCY: uint = 1
+
+    reg prev: bool = false
+    reg second: bool = false
+    reg ov: bool = false
+    reg od: bool = false
+    reg sl: bool = false
+
+    on clk {
+        ov = false
+        sl = false
+        prev = line
+        if second {
+            if prev != line {
+                ov = true
+                od = if Ieee { line } else { prev }
+                second = false
+            } else {
+                sl = true            // no transition: this sample starts a bit
+            }
+        } else {
+            second = true
+        }
+    }
+
+    out.valid = ov
+    out.data = od
+    slip = sl
+
+    /// A bit and a slip are never reported together.
+    property bit_or_slip {
+        never ov and sl
+    }
+}
+
+test "manchester: IEEE line levels" {
+    expect manchester_encode(true, true) == 0b01      // low then high
+    expect manchester_encode(false, true) == 0b10     // high then low
+    expect manchester_encode(true, false) == 0b10
+    let dut = sim ManchesterEnc()
+    dut.reset()
+    let data = [true, false, false, true, false]      // padded: data[4] is never sent
+    let want = [false, true, true, false, true, false, false, true]
+    var n: uint = 0
+    var line_n: uint = 0
+    for c in 0..10 {
+        dut.in = Stream { valid: n < 4, data: data[n] }
+        dut.settle()
+        if dut.in.valid and dut.in.ready { n = n + 1 }
+        dut.step()
+        if c < 8 {
+            expect dut.line == want[c]
+        }
+    }
+    expect n == 4
+    dut.in.valid = false
+    dut.step(2)
+    expect !dut.line and !dut.busy
+}
+
+test "manchester decoder: decodes aligned samples, slips once when misaligned" {
+    let dut = sim ManchesterDec()
+    dut.reset()
+    // an extra leading low sample, then bits 1, 0, 0, 1 (IEEE)
+    let samples = [false, false, true, true, false, true, false, false, true]
+    let bits_out = [true, false, false, true]
+    var got: uint = 0
+    var slips: uint = 0
+    for s in samples {
+        dut.line = s
+        dut.step()
+        if dut.out.valid {
+            expect dut.out.data == bits_out[got]
+            got = got + 1
+        }
+        if dut.slip { slips = slips + 1 }
+    }
+    expect got == 4 and slips == 1
+}
+
+test "manchester: encoder to decoder loopback" {
+    let enc = sim ManchesterEnc()
+    let dec = sim ManchesterDec()
+    enc.reset()
+    dec.reset()
+    // preamble 1010 for alignment, then the payload
+    let tx = [true, false, true, false, true, true, false, false, true, false, true, true, false, false, false, true, false]
+    var n: uint = 0
+    var rx: uint = 0
+    var last4: uint = 0
+    for _ in 0..40 {
+        enc.in = Stream { valid: n < 16, data: tx[n] }       // tx[16] is padding
+        enc.settle()
+        if enc.in.valid and enc.in.ready { n = n + 1 }
+        enc.step()
+        dec.line = enc.line
+        dec.step()
+        if dec.out.valid {
+            rx = rx + 1
+            last4 = ((last4 << 1) | (if dec.out.data { 1 } else { 0 })) & 15
+        }
+    }
+    // the last four payload bits are 0001
+    expect last4 == 1
+    expect rx >= 14
+}
+
+// ---------------------------------------------------------------------------
+// NRZI
+// ---------------------------------------------------------------------------
+
+/// NRZI encoder: the line toggles for every bit equal to `ToggleOn` and
+/// holds otherwise. `ToggleOn = true` is NRZ-M (toggle on 1); USB uses
+/// `ToggleOn = false` (toggle on 0). The line is low after reset.
+pub module Nrzi<ToggleOn: bool = true> {
+    /// Clock.
+    in clk: clock
+    /// Reset; the line goes low.
+    in rst: reset
+    /// Bits to encode.
+    in in: Valid<bool>
+    /// Line levels, registered.
+    out out: Valid<bool>
+
+    /// Cycles from bit to line level.
+    pub const LATENCY: uint = 1
+
+    reg level: bool = false
+    reg ov: bool = false
+
+    on clk {
+        ov = in.valid
+        if in.valid and in.data == ToggleOn {
+            level = !level
+        }
+    }
+
+    out.valid = ov
+    out.data = level
+
+    /// The line moves exactly for ToggleOn bits.
+    property toggles {
+        always in.valid |=> (level != past(level)) == past(in.data == ToggleOn)
+    }
+}
+
+/// NRZI decoder: a level change since the previous valid sample is a
+/// `ToggleOn` bit, no change is the other value. Assumes the line was low
+/// before the first sample (as `Nrzi` leaves it after reset).
+pub module NrziDec<ToggleOn: bool = true> {
+    /// Clock.
+    in clk: clock
+    /// Reset; the previous level is taken as low.
+    in rst: reset
+    /// Line levels.
+    in in: Valid<bool>
+    /// Decoded bits, registered.
+    out out: Valid<bool>
+
+    /// Cycles from line level to bit.
+    pub const LATENCY: uint = 1
+
+    reg last: bool = false
+    reg ov: bool = false
+    reg od: bool = false
+
+    on clk {
+        ov = in.valid
+        if in.valid {
+            od = (in.data != last) == ToggleOn
+            last = in.data
+        }
+    }
+
+    out.valid = ov
+    out.data = od
+
+    /// The reference level is the last valid sample.
+    property tracks_line {
+        always in.valid |=> last == past(in.data)
+    }
+}
+
+test "nrzi: toggle on one" {
+    let dut = sim Nrzi()
+    dut.reset()
+    let bits_in = [true, true, false, true, false, false]
+    let levels = [true, false, false, true, true, true]
+    for i in 0..6 {
+        dut.in = Valid { valid: true, data: bits_in[i] }
+        dut.step()
+        expect dut.out.valid and dut.out.data == levels[i]
+    }
+}
+
+test "nrzi: USB style round trip" {
+    let enc = sim Nrzi<false>()
+    let dec = sim NrziDec<false>()
+    enc.reset()
+    dec.reset()
+    for _ in 0..100 {
+        let b = rand<bool>()
+        enc.in = Valid { valid: true, data: b }
+        enc.step()
+        dec.in = enc.out
+        dec.step()
+        expect dec.out.valid and dec.out.data == b
+    }
+}

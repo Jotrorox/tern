@@ -1,0 +1,608 @@
+package std::mem
+
+// std::mem — memories and delay structures.
+//
+// RomTable, SinglePortRam, SimpleDualPortRam, TrueDualPortRam: wrappers
+// around `mem` that infer block RAM where the target has it (synchronous
+// read, one cycle). RegFile and Cam are flip-flop based. ShiftReg has
+// resettable taps; DelayLine is reset-less so it maps to shift-register
+// LUTs. Lut is a combinational table from a const fn.
+//
+// Memories have no reset (their contents survive reset); the read
+// registers of block RAMs are not reset either.
+
+use std::math::priority_encode
+
+// ---------------------------------------------------------------------------
+// RomTable
+// ---------------------------------------------------------------------------
+
+/// Read-only table with a synchronous read port (block RAM / ROM). The
+/// contents are a compile-time array, typically from a const fn:
+/// `RomTable<u16, 256, sine_table()>`.
+pub module RomTable<T: type, N: uint, Data: [T; N]>
+where N >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Entry to read.
+    in addr: uint<clog2(N)>
+    /// `Data[addr]` from the previous cycle's address.
+    out data: T
+
+    /// Cycles from `addr` to `data`.
+    pub const LATENCY: uint = 1
+
+    mem rom: [T; N] = Data
+    data = rom.read(addr)
+}
+
+test "rom table: synchronous read of constant contents" {
+    let dut = sim RomTable<u8, 4, [10, 20, 30, 40]>()
+    for (a, d) in [(0, 10), (3, 40), (1, 20), (2, 30)] {
+        dut.addr = a
+        dut.step()
+        expect dut.data == d
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SinglePortRam
+// ---------------------------------------------------------------------------
+
+/// Single-port RAM: one address for both reading and writing, synchronous
+/// read. During a write the read port returns the old contents
+/// (read-first) or, with `WriteFirst`, the data being written.
+pub module SinglePortRam<T: type, Depth: uint, WriteFirst: bool = false>
+where Depth >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Address for both the read and the write.
+    in addr: uint<clog2(Depth)>
+    /// Write `wdata` to `addr` this cycle.
+    in we: bool
+    /// Data to write.
+    in wdata: T
+    /// Contents of the previous cycle's address.
+    out rdata: T
+
+    /// Cycles from `addr` to `rdata`.
+    pub const LATENCY: uint = 1
+
+    mem buf: [T; Depth]
+    if WriteFirst {
+        rdata = buf.read(addr, rdw: .NewData)
+    } else {
+        rdata = buf.read(addr, rdw: .OldData)
+    }
+
+    on clk {
+        if we { buf[addr] = wdata }
+    }
+
+    /// A write is visible on the next read of the same address.
+    property write_then_read {
+        always (we ##1 (!we and addr == past(addr))) |=> bits(rdata) == bits(past(wdata, 2))
+    }
+}
+
+test "single port ram: read-first returns old data during a write" {
+    let dut = sim SinglePortRam<u8, 16>()
+    dut.addr = 3
+    dut.we = true
+    dut.wdata = 0xAA
+    dut.step()
+    dut.wdata = 0xBB
+    dut.step()                    // writes 0xBB, reads the old 0xAA
+    expect dut.rdata == 0xAA
+    dut.we = false
+    dut.step()
+    expect dut.rdata == 0xBB
+}
+
+test "single port ram: write-first returns the new data" {
+    let dut = sim SinglePortRam<u8, 16, true>()
+    dut.addr = 5
+    dut.we = true
+    dut.wdata = 0x11
+    dut.step()
+    expect dut.rdata == 0x11
+}
+
+test "single port ram: random writes read back" {
+    let dut = sim SinglePortRam<u16, 8>()
+    let vals = [rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>(), rand<u16>()]
+    dut.we = true
+    for a in 0..8 {
+        dut.addr = a
+        dut.wdata = vals[a]
+        dut.step()
+    }
+    dut.we = false
+    for a in 0..8 {
+        dut.addr = a
+        dut.step()
+        expect dut.rdata == vals[a]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SimpleDualPortRam
+// ---------------------------------------------------------------------------
+
+/// Simple dual-port RAM: one write port and one synchronous read port on
+/// the same clock. Reading the address being written returns the old data.
+pub module SimpleDualPortRam<T: type, Depth: uint>
+where Depth >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Write `wdata` to `waddr` this cycle.
+    in we: bool
+    /// Write address.
+    in waddr: uint<clog2(Depth)>
+    /// Data to write.
+    in wdata: T
+    /// Read address.
+    in raddr: uint<clog2(Depth)>
+    /// Contents of the previous cycle's read address.
+    out rdata: T
+
+    /// Cycles from `raddr` to `rdata`.
+    pub const LATENCY: uint = 1
+
+    mem buf: [T; Depth]
+    rdata = buf.read(raddr, rdw: .OldData)
+
+    on clk {
+        if we { buf[waddr] = wdata }
+    }
+
+    /// A completed write is visible to a later read of the same address.
+    property write_then_read {
+        always (we ##1 (!we and raddr == past(waddr))) |=> bits(rdata) == bits(past(wdata, 2))
+    }
+}
+
+test "simple dual port ram: independent read and write ports" {
+    let dut = sim SimpleDualPortRam<u32, 32>()
+    dut.we = true
+    for i in 0..32 {
+        dut.waddr = i
+        dut.wdata = (i * 1000) as u32
+        dut.raddr = 0
+        dut.step()
+    }
+    dut.we = false
+    for i in 0..32 {
+        dut.raddr = 31 - i
+        dut.step()
+        expect dut.rdata == ((31 - i) * 1000) as u32
+    }
+}
+
+test "simple dual port ram: read during write returns old data" {
+    let dut = sim SimpleDualPortRam<u8, 4>()
+    dut.we = true
+    dut.waddr = 1
+    dut.wdata = 7
+    dut.raddr = 1
+    dut.step()
+    dut.wdata = 8
+    dut.step()
+    expect dut.rdata == 7
+    dut.we = false
+    dut.step()
+    expect dut.rdata == 8
+}
+
+// ---------------------------------------------------------------------------
+// TrueDualPortRam
+// ---------------------------------------------------------------------------
+
+/// True dual-port RAM: two independent read/write ports on one clock, each
+/// read-first. Two writes to the same address in the same cycle are a
+/// collision (port B wins in simulation; real block RAMs leave it
+/// undefined), so avoid them.
+pub module TrueDualPortRam<T: type, Depth: uint>
+where Depth >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Port A address.
+    in addr_a: uint<clog2(Depth)>
+    /// Port A write enable.
+    in we_a: bool
+    /// Port A write data.
+    in wdata_a: T
+    /// Port A read data (previous cycle's address).
+    out rdata_a: T
+    /// Port B address.
+    in addr_b: uint<clog2(Depth)>
+    /// Port B write enable.
+    in we_b: bool
+    /// Port B write data.
+    in wdata_b: T
+    /// Port B read data (previous cycle's address).
+    out rdata_b: T
+
+    /// Cycles from an address to its read data.
+    pub const LATENCY: uint = 1
+
+    mem buf: [T; Depth]
+    rdata_a = buf.read(addr_a, rdw: .OldData)
+    rdata_b = buf.read(addr_b, rdw: .OldData)
+
+    on clk {
+        if we_a { buf[addr_a] = wdata_a }
+        if we_b { buf[addr_b] = wdata_b }
+    }
+
+    /// Writes through one port are visible through the other.
+    property a_to_b {
+        always (we_a and !we_b) ##1 (!we_a and !we_b and addr_b == past(addr_a)) |=> bits(rdata_b) == bits(past(wdata_a, 2))
+    }
+}
+
+test "true dual port ram: both ports read and write" {
+    let dut = sim TrueDualPortRam<u8, 16>()
+    dut.we_a = true
+    dut.addr_a = 2
+    dut.wdata_a = 0x22
+    dut.we_b = true
+    dut.addr_b = 9
+    dut.wdata_b = 0x99
+    dut.step()
+    dut.we_a = false
+    dut.we_b = false
+    dut.addr_a = 9
+    dut.addr_b = 2
+    dut.step()
+    expect dut.rdata_a == 0x99
+    expect dut.rdata_b == 0x22
+}
+
+// ---------------------------------------------------------------------------
+// RegFile
+// ---------------------------------------------------------------------------
+
+/// Multi-ported register file of `N` entries in flip-flops: `Rd`
+/// combinational read ports and `Wr` write ports. A write is visible to
+/// reads from the next cycle; when several write ports hit the same entry in
+/// one cycle the highest-numbered port wins.
+pub module RegFile<T: type, N: uint = 32, Rd: uint = 2, Wr: uint = 1>
+where N >= 2, Rd >= 1, Wr >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Read addresses.
+    in raddr: [uint<clog2(N)>; Rd]
+    /// Read data, combinational from `raddr`.
+    out rdata: [T; Rd]
+    /// Write enables.
+    in we: [bool; Wr]
+    /// Write addresses.
+    in waddr: [uint<clog2(N)>; Wr]
+    /// Write data.
+    in wdata: [T; Wr]
+
+    /// Cycles from `raddr` to `rdata` (combinational read).
+    pub const LATENCY: uint = 0
+
+    reg regs: [T; N]
+
+    for r in 0..Rd {
+        rdata[r] = regs[raddr[r]]
+    }
+
+    on clk {
+        for i in 0..N {
+            for w in 0..Wr {
+                if we[w] and waddr[w] == i { regs[i] = wdata[w] }
+            }
+        }
+    }
+
+    /// The highest-priority write port always lands.
+    property last_port_wins {
+        always we[Wr - 1] |=> bits(regs[past(waddr[Wr - 1])]) == bits(past(wdata[Wr - 1]))
+    }
+}
+
+test "regfile: two writes and two reads per cycle" {
+    let dut = sim RegFile<u32, 8, 2, 2>()
+    dut.we[0] = true
+    dut.waddr[0] = 1
+    dut.wdata[0] = 111
+    dut.we[1] = true
+    dut.waddr[1] = 6
+    dut.wdata[1] = 666
+    dut.step()
+    dut.we[0] = false
+    dut.we[1] = false
+    dut.raddr[0] = 6
+    dut.raddr[1] = 1
+    dut.settle()
+    expect dut.rdata[0] == 666
+    expect dut.rdata[1] == 111
+}
+
+test "regfile: higher write port wins a conflict" {
+    let dut = sim RegFile<u8, 4, 1, 2>()
+    dut.we[0] = true
+    dut.waddr[0] = 3
+    dut.wdata[0] = 1
+    dut.we[1] = true
+    dut.waddr[1] = 3
+    dut.wdata[1] = 2
+    dut.step()
+    dut.we[0] = false
+    dut.we[1] = false
+    dut.raddr[0] = 3
+    dut.settle()
+    expect dut.rdata[0] == 2
+}
+
+// ---------------------------------------------------------------------------
+// Cam
+// ---------------------------------------------------------------------------
+
+/// Content-addressable memory of `N` entries. Write entries by index
+/// (`wvalid` false invalidates the entry); search with `key` and get, one
+/// cycle later, the lowest matching index in `result` and the full match
+/// vector in `hits`. A search sees the contents from before a write in the
+/// same cycle.
+pub module Cam<T: type, N: uint = 16>
+where N >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; invalidates every entry.
+    in rst: reset
+    /// Write entry `waddr` this cycle.
+    in we: bool
+    /// Entry to write.
+    in waddr: uint<clog2(N)>
+    /// Key to store.
+    in wdata: T
+    /// Store the entry as valid (false invalidates it).
+    in wvalid: bool
+    /// Key to search for.
+    in key: Valid<T>
+    /// Lowest matching index; `valid` false on a miss or when no search ran.
+    out result: Valid<uint<clog2(N)>>
+    /// One bit per entry that matched the last search.
+    out hits: bit<N>
+    /// A search completed this cycle (hit or miss).
+    out searched: bool
+
+    /// Cycles from `key` to `result`.
+    pub const LATENCY: uint = 1
+
+    reg keys: [T; N]
+    reg used: bit<N> = all0
+
+    var m: bit<N>
+    comb {
+        for i in 0..N {
+            m[i] = used[i] and bits(keys[i]) == bits(key.data)
+        }
+    }
+    let pe = priority_encode(m)
+
+    reg rv: bool = false
+    reg ri: uint<clog2(N)> = 0
+    reg rh: bit<N> = all0
+    reg rs: bool = false
+
+    on clk {
+        if we {
+            for i in 0..N {
+                if waddr == i {
+                    keys[i] = wdata
+                    used[i] = wvalid
+                }
+            }
+        }
+        rs = key.valid
+        rv = key.valid and pe.valid
+        ri = pe.data
+        rh = if key.valid { m } else { all0 }
+    }
+
+    result.valid = rv
+    result.data = ri
+    hits = rh
+    searched = rs
+
+    /// A hit is only reported for a search, and always with a hit bit set.
+    property hit_has_bit {
+        always result.valid |-> searched and hits != all0
+    }
+}
+
+test "cam: finds stored keys, misses others, invalidates" {
+    let dut = sim Cam<u16, 4>()
+    dut.reset()
+    dut.key.valid = false
+    dut.we = true
+    dut.wvalid = true
+    for (i, k) in [(0, 0x1111), (1, 0x2222), (2, 0x1111), (3, 0x4444)] {
+        dut.waddr = i
+        dut.wdata = k
+        dut.step()
+    }
+    dut.we = false
+    dut.key = Valid { valid: true, data: 0x1111 }
+    dut.step()
+    expect dut.searched and dut.result.valid and dut.result.data == 0
+    expect dut.hits == 0b0101
+    dut.key.data = 0x4444
+    dut.step()
+    expect dut.result.valid and dut.result.data == 3
+    dut.key.data = 0x9999
+    dut.step()
+    expect dut.searched and !dut.result.valid and dut.hits == 0
+    // invalidate entry 0: the next 0x1111 match is entry 2
+    dut.key.valid = false
+    dut.we = true
+    dut.wvalid = false
+    dut.waddr = 0
+    dut.step()
+    dut.we = false
+    dut.key = Valid { valid: true, data: 0x1111 }
+    dut.step()
+    expect dut.result.valid and dut.result.data == 2
+}
+
+// ---------------------------------------------------------------------------
+// ShiftReg
+// ---------------------------------------------------------------------------
+
+/// `N`-stage shift register with an enable, reset to zero, with every stage
+/// visible on `taps` (`taps[0]` is the newest value).
+pub module ShiftReg<T: type, N: uint>
+where N >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; clears every stage.
+    in rst: reset
+    /// Shift this cycle.
+    in en: bool
+    /// Value shifted in.
+    in d: T
+    /// The oldest stage (`d` from N enabled cycles ago).
+    out q: T
+    /// All stages, newest first.
+    out taps: [T; N]
+
+    /// Enabled cycles from `d` to `q`.
+    pub const LATENCY: uint = N
+
+    var st: [T; N + 1]
+    st[0] = d
+    for i in 0..N {
+        reg r: T = T::from_bits(all0)
+        on clk {
+            if en { r = st[i] }
+        }
+        st[i + 1] = r
+        taps[i] = r
+    }
+    q = st[N]
+
+    /// An enabled cycle moves `d` into the first stage.
+    property shifts_in {
+        always en |=> bits(taps[0]) == bits(past(d))
+    }
+}
+
+test "shift reg: delay, taps and enable" {
+    let dut = sim ShiftReg<u8, 3>()
+    dut.reset()
+    dut.en = true
+    for v in [1, 2, 3] {
+        dut.d = v
+        dut.step()
+    }
+    expect dut.taps[0] == 3 and dut.taps[1] == 2 and dut.taps[2] == 1
+    expect dut.q == 1
+    dut.en = false
+    dut.d = 9
+    dut.step(4)
+    expect dut.q == 1 and dut.taps[0] == 3
+    dut.reset()
+    expect dut.q == 0
+}
+
+// ---------------------------------------------------------------------------
+// DelayLine
+// ---------------------------------------------------------------------------
+
+/// Fixed delay of `N` enabled cycles without reset and without taps, so
+/// synthesis maps it to shift-register LUTs (SRL16/SRL32) or a RAM-based
+/// delay instead of N flip-flops per bit. The first N outputs after power
+/// up are undefined.
+pub module DelayLine<T: type, N: uint>
+where N >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Shift this cycle (maps to the SRL clock enable).
+    in en: bool
+    /// Value to delay.
+    in d: T
+    /// `d` from N enabled cycles ago.
+    out q: T
+
+    /// Enabled cycles from `d` to `q`.
+    pub const LATENCY: uint = N
+
+    var st: [T; N + 1]
+    st[0] = d
+    for i in 0..N {
+        reg r: T
+        on clk {
+            if en { r = st[i] }
+        }
+        st[i + 1] = r
+    }
+    q = st[N]
+
+    /// An enabled cycle moves `d` into the first stage.
+    property shifts_in {
+        always en |=> bits(st[1]) == bits(past(d))
+    }
+}
+
+test "delay line: N cycle delay" {
+    let dut = sim DelayLine<u16, 5>()
+    dut.en = true
+    for i in 0..20 {
+        dut.d = (i * 7) as u16
+        dut.step()
+        if i >= 4 {
+            expect dut.q == ((i - 4) * 7) as u16
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lut
+// ---------------------------------------------------------------------------
+
+/// Combinational lookup table indexed by every value of `In`, with contents
+/// computed at elaboration time, typically by a const fn:
+/// `Lut<u8, u8, gamma_table()>`. Maps to LUTs / distributed ROM.
+pub module Lut<In: type, Out: type, Table: [Out; 1 << In::WIDTH]> {
+    /// Index.
+    in x: In
+    /// `Table[x]`.
+    out y: Out
+
+    /// Combinational.
+    pub const LATENCY: uint = 0
+
+    #[ram(distributed)]
+    mem rom: [Out; 1 << In::WIDTH] = Table
+    y = rom[bits(x) as uint<In::WIDTH>]
+}
+
+const fn square_table() -> [u8; 16] {
+    var t: [u8; 16]
+    for i in 0..16 {
+        t[i] = (i * i) as u8
+    }
+    t
+}
+
+test "lut: table from a const fn" {
+    let dut = sim Lut<uint<4>, u8, square_table()>()
+    for i in 0..16 {
+        dut.x = i
+        dut.settle()
+        expect dut.y == i * i
+    }
+}

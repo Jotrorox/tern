@@ -1,0 +1,523 @@
+package std::fifo
+
+// std::fifo — buffering.
+//
+// This file: Fifo (block-RAM friendly), FifoFwft (distributed RAM),
+// ShiftFifo (flip-flops) and Lifo.
+// async.tern: AsyncFifo (two clock domains, Gray-coded pointers).
+// packet.tern: PacketFifo (commit/drop whole packets).
+//
+// All FIFOs speak Stream<T> on both sides: `pop.valid` means `pop.data`
+// already holds the oldest entry (there is no separate read strobe), and
+// `pop.fire()` removes it. Depths are counted in entries; `count` reports
+// the number of stored entries.
+
+use std::stream::Beat
+
+// ---------------------------------------------------------------------------
+// Fifo
+// ---------------------------------------------------------------------------
+
+/// Synchronous FIFO built on a memory with a synchronous read port, so it
+/// infers block RAM. `pop.data` is driven directly by the RAM's output
+/// register. The read address is looked ahead (`rd_ptr + 1` while popping),
+/// which sustains one pop per cycle with no extra output stage. An entry
+/// becomes visible on `pop` two cycles after its push (one for the write,
+/// one for the registered read). `count`, `full` and `almost_full` count
+/// every stored entry, including the one still in flight to the output.
+pub module Fifo<T: type, Depth: uint = 16, AlmostFull: uint = Depth - 1>
+where Depth.is_pow2(), Depth >= 2, AlmostFull <= Depth
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; empties the FIFO (contents are not cleared).
+    in rst: reset
+    /// Entries to store. `push.ready` is low exactly when the FIFO is full.
+    in push: Stream<T>
+    /// The oldest entry.
+    out pop: Stream<T>
+    /// Number of stored entries, 0 ..= Depth.
+    out count: uint<clog2(Depth) + 1>
+    /// No entries are stored.
+    out empty: bool
+    /// `Depth` entries are stored.
+    out full: bool
+    /// At least `AlmostFull` entries are stored.
+    out almost_full: bool
+
+    /// Cycles from `push.fire()` to the entry being offered on an empty FIFO.
+    pub const LATENCY: uint = 2
+
+    const AW: uint = clog2(Depth)
+    type Ptr = uint<AW + 1>
+    type Addr = uint<AW>
+
+    mem buf: [T; Depth]
+    reg wr_ptr: Ptr = 0
+    reg rd_ptr: Ptr = 0
+    // wr_ptr delayed by one cycle: entries below it have been in the RAM for
+    // at least one cycle, so the registered read returns their data
+    reg wr_vis: Ptr = 0
+
+    let used = wr_ptr -% rd_ptr
+
+    full = used == Depth
+    empty = used == 0
+    count = used
+    almost_full = used >= AlmostFull
+    push.ready = !full
+
+    pop.valid = rd_ptr != wr_vis
+    let rd_next = if pop.fire() { rd_ptr +% 1 } else { rd_ptr }
+    pop.data = buf.read(rd_next as Addr)
+
+    on clk {
+        if push.fire() {
+            buf[wr_ptr as Addr] = push.data
+            wr_ptr = wr_ptr +% 1
+        }
+        wr_vis = wr_ptr
+        rd_ptr = rd_next
+    }
+
+    /// Occupancy never exceeds the depth.
+    property count_bounded {
+        always count <= Depth
+    }
+
+    /// Only stored entries are ever offered.
+    property visible_within_used {
+        always (wr_vis -% rd_ptr) <= used
+    }
+
+    /// A stalled output entry is held unchanged until it is popped.
+    property pop_stable {
+        always (pop.valid and !pop.ready) |=> pop.valid and stable(pop.data)
+    }
+
+    cover property fills_up { full }
+    cover property wraps_around { full ##[1:$] empty }
+}
+
+test "fifo preserves order" {
+    let dut = sim Fifo<u8, 4>()
+    dut.reset()
+    for v in [1, 2, 3, 4] {
+        dut.push = Stream { valid: true, data: v }
+        dut.step()
+    }
+    dut.push.valid = false
+    expect dut.count == 4
+    dut.pop.ready = true
+    for v in [1, 2, 3, 4] {
+        expect dut.pop.valid and dut.pop.data == v
+        dut.step()
+    }
+    expect !dut.pop.valid
+}
+
+test "fifo: full stops pushes, popping frees a slot" {
+    let dut = sim Fifo<u16, 8>()
+    dut.reset()
+    dut.pop.ready = false
+    for i in 0..8 {
+        dut.push = Stream { valid: true, data: i as u16 }
+        dut.settle()
+        expect dut.push.ready
+        dut.step()
+    }
+    dut.settle()
+    expect dut.full and !dut.push.ready and dut.count == 8
+    expect dut.almost_full
+    dut.push.data = 99
+    dut.step(3)                    // pushes are refused while full
+    expect dut.count == 8
+    dut.pop.ready = true
+    dut.settle()
+    expect dut.pop.valid and dut.pop.data == 0
+    dut.step()
+    dut.pop.ready = false
+    dut.settle()
+    expect dut.count == 7 and dut.push.ready
+    dut.step()                     // 99 goes in
+    expect dut.count == 8
+}
+
+test "fifo: entry appears two cycles after push" {
+    let dut = sim Fifo<u8, 4>()
+    dut.reset()
+    dut.pop.ready = false
+    dut.push = Stream { valid: true, data: 0x3C }
+    dut.step()
+    dut.push.valid = false
+    dut.settle()
+    expect !dut.pop.valid and dut.count == 1 and !dut.empty
+    dut.step()
+    expect dut.pop.valid and dut.pop.data == 0x3C
+}
+
+test "fifo: simultaneous push and pop at full throughput" {
+    let dut = sim Fifo<u8, 4>()
+    dut.reset()
+    dut.pop.ready = true
+    var next_out: u8 = 0
+    for i in 0..64 {
+        dut.push = Stream { valid: true, data: i as u8 }
+        dut.settle()
+        expect dut.push.ready
+        if dut.pop.valid {
+            expect dut.pop.data == next_out
+            next_out = next_out +% 1
+        }
+        dut.step()
+    }
+    expect next_out == 62
+}
+
+test "fifo: random traffic is a perfect queue" {
+    let dut = sim Fifo<u8, 16>()
+    dut.reset()
+    var next_in: u8 = 0
+    var next_out: u8 = 0
+    for _ in 0..2000 {
+        dut.push = Stream { valid: rand<bool>(), data: next_in }
+        dut.pop.ready = rand<bool>()
+        dut.settle()
+        expect dut.count <= 16
+        if dut.push.valid and dut.push.ready { next_in = next_in +% 1 }
+        if dut.pop.valid and dut.pop.ready {
+            expect dut.pop.data == next_out
+            next_out = next_out +% 1
+        }
+        dut.step()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FifoFwft
+// ---------------------------------------------------------------------------
+
+/// First-word fall-through FIFO on distributed (LUT) RAM: `pop.data` is a
+/// combinational read of the oldest entry, so an entry is visible one cycle
+/// after its push. Use it for small, shallow buffers or where the extra
+/// cycle of `Fifo` matters.
+pub module FifoFwft<T: type, Depth: uint = 16, AlmostFull: uint = Depth - 1>
+where Depth.is_pow2(), Depth >= 2, AlmostFull <= Depth
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; empties the FIFO.
+    in rst: reset
+    /// Entries to store. `push.ready` is low exactly when the FIFO is full.
+    in push: Stream<T>
+    /// The oldest entry.
+    out pop: Stream<T>
+    /// Number of stored entries, 0 ..= Depth.
+    out count: uint<clog2(Depth) + 1>
+    /// No entries are stored.
+    out empty: bool
+    /// `Depth` entries are stored.
+    out full: bool
+    /// At least `AlmostFull` entries are stored.
+    out almost_full: bool
+
+    /// Cycles from `push.fire()` to the entry being offered on an empty FIFO.
+    pub const LATENCY: uint = 1
+
+    const AW: uint = clog2(Depth)
+    type Ptr = uint<AW + 1>
+    type Addr = uint<AW>
+
+    #[ram(distributed)]
+    mem buf: [T; Depth]
+    reg wr_ptr: Ptr = 0
+    reg rd_ptr: Ptr = 0
+
+    let used = wr_ptr -% rd_ptr
+
+    full = used == Depth
+    empty = used == 0
+    count = used
+    almost_full = used >= AlmostFull
+    push.ready = !full
+    pop.valid = !empty
+    pop.data = buf[rd_ptr as Addr]
+
+    on clk {
+        if push.fire() {
+            buf[wr_ptr as Addr] = push.data
+            wr_ptr = wr_ptr +% 1
+        }
+        if pop.fire() {
+            rd_ptr = rd_ptr +% 1
+        }
+    }
+
+    /// Occupancy never exceeds the depth.
+    property count_bounded {
+        always count <= Depth
+    }
+
+    /// A stalled output entry is held unchanged until it is popped.
+    property pop_stable {
+        always (pop.valid and !pop.ready) |=> pop.valid and stable(pop.data)
+    }
+
+    cover property fills_up { full }
+}
+
+test "fwft: entry visible one cycle after push" {
+    let dut = sim FifoFwft<u8, 4>()
+    dut.reset()
+    dut.pop.ready = false
+    dut.push = Stream { valid: true, data: 5 }
+    dut.step()
+    dut.push.valid = false
+    dut.settle()
+    expect dut.pop.valid and dut.pop.data == 5 and dut.count == 1
+}
+
+test "fwft: preserves order and reports full" {
+    let dut = sim FifoFwft<u8, 4>()
+    dut.reset()
+    for v in [10, 20, 30, 40] {
+        dut.push = Stream { valid: true, data: v }
+        dut.step()
+    }
+    dut.push.valid = false
+    dut.settle()
+    expect dut.full and !dut.push.ready
+    dut.pop.ready = true
+    for v in [10, 20, 30, 40] {
+        dut.settle()
+        expect dut.pop.valid and dut.pop.data == v
+        dut.step()
+    }
+    dut.settle()
+    expect dut.empty and !dut.pop.valid
+}
+
+test "fwft: random traffic is a perfect queue" {
+    let dut = sim FifoFwft<u8, 8>()
+    dut.reset()
+    var next_in: u8 = 0
+    var next_out: u8 = 0
+    for _ in 0..2000 {
+        dut.push = Stream { valid: rand<bool>(), data: next_in }
+        dut.pop.ready = rand<bool>()
+        dut.settle()
+        if dut.push.valid and dut.push.ready { next_in = next_in +% 1 }
+        if dut.pop.valid and dut.pop.ready {
+            expect dut.pop.data == next_out
+            next_out = next_out +% 1
+        }
+        dut.step()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ShiftFifo
+// ---------------------------------------------------------------------------
+
+/// Flip-flop FIFO for small depths (at most 8): entries shift toward the
+/// output on every pop, so `pop.data` comes straight from a register and no
+/// RAM is inferred. Accepts a push while full if the same cycle pops.
+pub module ShiftFifo<T: type, Depth: uint = 4>
+where Depth >= 1, Depth <= 8
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; empties the FIFO.
+    in rst: reset
+    /// Entries to store.
+    in push: Stream<T>
+    /// The oldest entry.
+    out pop: Stream<T>
+    /// Number of stored entries, 0 ..= Depth.
+    out count: uint<clog2(Depth + 1)>
+
+    /// Cycles from `push.fire()` to the entry being offered on an empty FIFO.
+    pub const LATENCY: uint = 1
+
+    reg q: [T; Depth]
+    reg cnt: uint<clog2(Depth + 1)> = 0
+
+    pop.valid = cnt != 0
+    pop.data = q[0]
+    push.ready = cnt != Depth or pop.ready
+    count = cnt
+
+    on clk {
+        let do_pop = pop.fire()
+        let do_push = push.fire()
+        for i in 0..Depth {
+            if do_pop {
+                if i + 1 < Depth { q[i] = q[i + 1] }
+                if do_push and cnt == i + 1 { q[i] = push.data }
+            } else if do_push and cnt == i {
+                q[i] = push.data
+            }
+        }
+        if do_push and !do_pop {
+            cnt = cnt +% 1
+        } else if do_pop and !do_push {
+            cnt = cnt -% 1
+        }
+    }
+
+    /// Occupancy never exceeds the depth.
+    property count_bounded {
+        always cnt <= Depth
+    }
+
+    /// A stalled output entry is held unchanged until it is popped.
+    property pop_stable {
+        always (pop.valid and !pop.ready) |=> pop.valid and stable(pop.data)
+    }
+}
+
+test "shift fifo: order, full, and push-while-full-and-popping" {
+    let dut = sim ShiftFifo<u8, 3>()
+    dut.reset()
+    dut.pop.ready = false
+    for v in [1, 2, 3] {
+        dut.push = Stream { valid: true, data: v }
+        dut.step()
+    }
+    dut.push.data = 4
+    dut.settle()
+    expect dut.count == 3 and !dut.push.ready
+    dut.pop.ready = true
+    dut.settle()
+    expect dut.push.ready and dut.pop.data == 1
+    dut.step()                     // pop 1, push 4
+    dut.push.valid = false
+    for v in [2, 3, 4] {
+        dut.settle()
+        expect dut.pop.valid and dut.pop.data == v
+        dut.step()
+    }
+    expect !dut.pop.valid and dut.count == 0
+}
+
+test "shift fifo: random traffic is a perfect queue" {
+    let dut = sim ShiftFifo<u8, 4>()
+    dut.reset()
+    var next_in: u8 = 0
+    var next_out: u8 = 0
+    for _ in 0..1000 {
+        dut.push = Stream { valid: rand<bool>(), data: next_in }
+        dut.pop.ready = rand<bool>()
+        dut.settle()
+        if dut.push.valid and dut.push.ready { next_in = next_in +% 1 }
+        if dut.pop.valid and dut.pop.ready {
+            expect dut.pop.data == next_out
+            next_out = next_out +% 1
+        }
+        dut.step()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lifo
+// ---------------------------------------------------------------------------
+
+/// Stack (last in, first out) on distributed RAM. `pop` offers the current
+/// top of the stack. A push and a pop in the same cycle replace the top.
+/// Unlike a FIFO, a push while `pop` is stalled changes `pop.data` (the top
+/// moved); consumers that need Stream stability should not push while
+/// holding off a pop.
+pub module Lifo<T: type, Depth: uint = 16>
+where Depth >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; empties the stack.
+    in rst: reset
+    /// Entries to push. `push.ready` is low exactly when the stack is full.
+    in push: Stream<T>
+    /// The top of the stack.
+    out pop: Stream<T>
+    /// Number of stored entries, 0 ..= Depth.
+    out count: uint<clog2(Depth + 1)>
+
+    /// Cycles from `push.fire()` to the entry being offered as the top.
+    pub const LATENCY: uint = 1
+
+    type Addr = uint<clog2(Depth)>
+
+    #[ram(distributed)]
+    mem buf: [T; Depth]
+    reg sp: uint<clog2(Depth + 1)> = 0
+
+    let top = (sp -% 1) as Addr
+
+    push.ready = sp != Depth
+    pop.valid = sp != 0
+    pop.data = buf[top]
+    count = sp
+
+    on clk {
+        let pu = push.fire()
+        let po = pop.fire()
+        if pu and po {
+            buf[top] = push.data
+        } else if pu {
+            buf[sp as Addr] = push.data
+            sp = sp +% 1
+        } else if po {
+            sp = sp -% 1
+        }
+    }
+
+    /// The stack pointer never exceeds the depth.
+    property sp_bounded {
+        always sp <= Depth
+    }
+
+    /// Without a push, a stalled top is held unchanged.
+    property top_stable {
+        always (pop.valid and !pop.ready and !push.fire()) |=> pop.valid and stable(pop.data)
+    }
+}
+
+test "lifo: last in, first out" {
+    let dut = sim Lifo<u8, 4>()
+    dut.reset()
+    dut.pop.ready = false
+    for v in [1, 2, 3, 4] {
+        dut.push = Stream { valid: true, data: v }
+        dut.step()
+    }
+    dut.push.valid = false
+    dut.settle()
+    expect dut.count == 4 and !dut.push.ready
+    dut.pop.ready = true
+    for v in [4, 3, 2, 1] {
+        dut.settle()
+        expect dut.pop.valid and dut.pop.data == v
+        dut.step()
+    }
+    expect !dut.pop.valid
+}
+
+test "lifo: push and pop together replace the top" {
+    let dut = sim Lifo<u8, 4>()
+    dut.reset()
+    dut.pop.ready = false
+    dut.push = Stream { valid: true, data: 1 }
+    dut.step()
+    dut.push.data = 2
+    dut.step()
+    dut.push.data = 9
+    dut.pop.ready = true
+    dut.settle()
+    expect dut.pop.data == 2
+    dut.step()
+    dut.push.valid = false
+    dut.settle()
+    expect dut.count == 2 and dut.pop.data == 9
+    dut.step()
+    dut.settle()
+    expect dut.pop.data == 1
+}

@@ -1,0 +1,161 @@
+package std::math
+
+// ---------------------------------------------------------------------------
+// Lfsr
+// ---------------------------------------------------------------------------
+
+/// Maximal-length tap mask for a `w`-bit LFSR (2 <= w <= 32), or 0 if there
+/// is no preset. Bit k-1 of the mask is set for each term x^k of the
+/// feedback polynomial (the x^0 term is implicit), e.g. 8 -> 0xB8 for
+/// x^8 + x^6 + x^5 + x^4 + 1. Taps from Xilinx XAPP052.
+pub const fn lfsr_taps(w: uint) -> uint {
+    match w {
+        2 => 0x3,
+        3 => 0x6,
+        4 => 0xC,
+        5 => 0x14,
+        6 => 0x30,
+        7 => 0x60,
+        8 => 0xB8,
+        9 => 0x110,
+        10 => 0x240,
+        11 => 0x500,
+        12 => 0x829,
+        13 => 0x100D,
+        14 => 0x2015,
+        15 => 0x6000,
+        16 => 0xD008,
+        17 => 0x12000,
+        18 => 0x20400,
+        19 => 0x40023,
+        20 => 0x90000,
+        21 => 0x140000,
+        22 => 0x300000,
+        23 => 0x420000,
+        24 => 0xE10000,
+        25 => 0x1200000,
+        26 => 0x2000023,
+        27 => 0x4000013,
+        28 => 0x9000000,
+        29 => 0x14000000,
+        30 => 0x20000029,
+        31 => 0x48000000,
+        32 => 0x80200003,
+        _ => 0,
+    }
+}
+
+/// Linear-feedback shift register. Fibonacci form (default): shifts left,
+/// the XOR of the tapped bits enters at bit 0. Galois form: shifts right,
+/// and when bit 0 falls out the tap mask is XORed into the register (one
+/// XOR level, faster). With a preset (or any primitive) polynomial and a
+/// nonzero seed the register runs through all 2^W - 1 nonzero states.
+pub module Lfsr<W: uint, Poly: uint = lfsr_taps(W), Galois: bool = false, Seed: uint = 1>
+where W >= 2, Seed != 0, Seed < (1 << W)
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; loads `Seed`.
+    in rst: reset
+    /// Advance one step this cycle.
+    in en: bool
+    /// The register.
+    out state: bit<W>
+    /// The bit shifted out by the next step (a pseudo-random bit stream).
+    out serial: bool
+
+    static_assert(Poly != 0, "Lfsr: no preset for this width, pass Poly explicitly")
+    static_assert((Poly >> (W - 1)) == 1, "Lfsr: Poly must contain the x^W term and fit in W bits")
+
+    /// Cycles from `en` to the new state.
+    pub const LATENCY: uint = 1
+
+    const P: bit<W> = Poly as bit<W>
+
+    reg s: bit<W> = Seed as bit<W>
+
+    on clk {
+        if en {
+            if Galois {
+                s = if s[0] { (s >> 1) ^ P } else { s >> 1 }
+            } else {
+                s = s[W - 2:0] ++ ((^(s & P)) as uint<1>)
+            }
+        }
+    }
+
+    state = s
+    serial = if Galois { s[0] } else { s[W - 1] }
+
+    /// The all-zero lock-up state is never reached.
+    property never_zero {
+        never s == all0
+    }
+
+    /// The register only moves when enabled.
+    property holds_when_disabled {
+        always !en |=> stable(s)
+    }
+}
+
+test "lfsr presets: known Fibonacci and Galois sequences" {
+    let fib = sim Lfsr<8>()
+    fib.reset()
+    fib.en = true
+    for want in [0x02, 0x04, 0x08, 0x11, 0x23] {
+        fib.step()
+        expect fib.state == want
+    }
+    let gal = sim Lfsr<8, Galois: true>()
+    gal.reset()
+    gal.en = true
+    for want in [0xB8, 0x5C, 0x2E, 0x17, 0xB3] {
+        gal.step()
+        expect gal.state == want
+    }
+}
+
+test "lfsr: maximal length period (Fibonacci)" {
+    let dut = sim Lfsr<8>()
+    dut.reset()
+    dut.en = true
+    dut.step()
+    var period: uint = 1
+    for _ in 0..300 {
+        if dut.state != 0x01 {
+            expect dut.state != 0x00
+            dut.step()
+            period = period + 1
+        }
+    }
+    expect dut.state == 0x01 and period == 255
+}
+
+test "lfsr: maximal length period (Galois)" {
+    let dut = sim Lfsr<8, Galois: true>()
+    dut.reset()
+    dut.en = true
+    dut.step()
+    var period: uint = 1
+    for _ in 0..300 {
+        if dut.state != 0x01 {
+            expect dut.state != 0x00
+            dut.step()
+            period = period + 1
+        }
+    }
+    expect dut.state == 0x01 and period == 255
+}
+
+test "lfsr: 4-bit period is 15 and enable holds" {
+    let dut = sim Lfsr<4, Seed: 9>()
+    dut.reset()
+    dut.en = false
+    dut.step(3)
+    expect dut.state == 9
+    dut.en = true
+    dut.step(15)
+    expect dut.state == 9
+    dut.step()
+    expect dut.state != 9
+}

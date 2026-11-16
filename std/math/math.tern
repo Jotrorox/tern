@@ -1,0 +1,301 @@
+package std::math
+
+// std::math — arithmetic helpers and arithmetic units.
+//
+// This file: combinational functions (all `const fn`, so each is usable both
+// at elaboration time and as logic on signals).
+// arith.tern: Multiplier, SignedMultiplier, Divider, Sqrt, Mac.
+// cordic.tern: Cordic and its compile-time angle tables.
+// fixed.tern: Fixed<I, F> and its functions, FixedDivider.
+// lfsr.tern: Lfsr with maximal-length presets.
+//
+// Width conventions: functions taking `uint<N>` / `bit<N>` infer N from the
+// argument. Results are lossless unless the name says otherwise
+// (`sat_*` saturate, `round_*` drop fraction bits).
+
+/// Ceiling log2 and population count live in the prelude; re-exported here
+/// so `use std::math::*` finds the whole family.
+pub use std::prelude::{clog2, count_ones}
+
+// ---------------------------------------------------------------------------
+// Logarithms and powers of two
+// ---------------------------------------------------------------------------
+
+/// Floor of log2: flog2(1) == 0, flog2(2) == 1, flog2(5) == 2,
+/// flog2(1024) == 10. `n` must be at least 1. Compile-time only.
+pub const fn flog2(n: uint) -> uint {
+    var r: uint = 0
+    while (2 << r) <= n {
+        r = r + 1
+    }
+    r
+}
+
+/// True if exactly one bit of `x` is set (zero is not a power of two).
+/// For compile-time integers use the method form `n.is_pow2()`.
+pub const fn is_pow2(x: uint<N>) -> bool {
+    x != 0 and (x & (x -% 1)) == 0
+}
+
+// ---------------------------------------------------------------------------
+// Gray code
+// ---------------------------------------------------------------------------
+
+/// Binary to Gray code: consecutive integers map to codes that differ in
+/// exactly one bit.
+pub const fn gray(x: uint<N>) -> bit<N> {
+    bits(x) ^ bits(x >> 1)
+}
+
+/// Gray code back to binary (prefix XOR from the most significant bit),
+/// built as clog2(N) XOR layers.
+pub const fn ungray(g: bit<N>) -> uint<N> {
+    var b: bit<N> = g
+    for i in 0..clog2(N) {
+        b = b ^ (b >> (1 << i))
+    }
+    b as uint<N>
+}
+
+// ---------------------------------------------------------------------------
+// Bit scanning
+// ---------------------------------------------------------------------------
+
+/// Number of zero bits above the most significant set bit; N if `x` is 0.
+pub const fn leading_zeros(x: bit<N>) -> uint<clog2(N + 1)> {
+    var r: uint<clog2(N + 1)> = N
+    for i in 0..N {
+        if x[i] { r = N - 1 - i }
+    }
+    r
+}
+
+/// Number of zero bits below the least significant set bit; N if `x` is 0.
+pub const fn trailing_zeros(x: bit<N>) -> uint<clog2(N + 1)> {
+    var r: uint<clog2(N + 1)> = N
+    for k in 0..N {
+        let i = N - 1 - k
+        if x[i] { r = i }
+    }
+    r
+}
+
+/// Index of the lowest set bit of `x` (bit 0 has the highest priority);
+/// `valid` is false when no bit is set. N must be at least 2.
+pub const fn priority_encode(x: bit<N>) -> Valid<uint<clog2(N)>> {
+    var idx: uint<clog2(N)> = 0
+    for k in 0..N {
+        let i = N - 1 - k
+        if x[i] { idx = i }
+    }
+    Valid { valid: |x, data: idx }
+}
+
+/// One-hot decode: bit `i` of the result is set, all others clear.
+pub const fn onehot(i: uint<N>) -> bit<1 << N> {
+    var r: bit<1 << N> = all0
+    for k in 0..(1 << N) {
+        r[k] = i == k
+    }
+    r
+}
+
+/// One-hot encode: the index of the set bit of a one-hot `x` (the OR of the
+/// indices of all set bits if `x` is not one-hot; 0 if `x` is 0).
+pub const fn onehot_to_bin(x: bit<N>) -> uint<clog2(N)> {
+    var r: uint<clog2(N)> = 0
+    for k in 0..N {
+        if x[k] { r = r | k }
+    }
+    r
+}
+
+/// Reverse the bit order: bit 0 becomes bit N - 1.
+pub const fn reverse_bits(x: bit<N>) -> bit<N> {
+    var r: bit<N> = all0
+    for i in 0..N {
+        r[i] = x[N - 1 - i]
+    }
+    r
+}
+
+// ---------------------------------------------------------------------------
+// Min, max, abs
+// ---------------------------------------------------------------------------
+
+/// The smaller of two unsigned values.
+pub const fn min(a: uint<N>, b: uint<N>) -> uint<N> {
+    if a < b { a } else { b }
+}
+
+/// The larger of two unsigned values.
+pub const fn max(a: uint<N>, b: uint<N>) -> uint<N> {
+    if a < b { b } else { a }
+}
+
+/// The smaller of two signed values.
+pub const fn smin(a: sint<N>, b: sint<N>) -> sint<N> {
+    if a < b { a } else { b }
+}
+
+/// The larger of two signed values.
+pub const fn smax(a: sint<N>, b: sint<N>) -> sint<N> {
+    if a < b { b } else { a }
+}
+
+/// Absolute value; the result is unsigned so abs(sint<N>::MIN) is exact.
+pub const fn abs(x: sint<N>) -> uint<N> {
+    if x < 0 { (-x) as uint<N> } else { x as uint<N> }
+}
+
+// ---------------------------------------------------------------------------
+// Saturating arithmetic
+// ---------------------------------------------------------------------------
+
+/// Unsigned add that clamps to the maximum instead of wrapping.
+pub const fn sat_add(a: uint<N>, b: uint<N>) -> uint<N> {
+    let s = a + b
+    let top: uint<N> = all1
+    if s[N] { top } else { s as uint<N> }
+}
+
+/// Unsigned subtract that clamps to zero instead of wrapping.
+pub const fn sat_sub(a: uint<N>, b: uint<N>) -> uint<N> {
+    if b > a { 0 } else { a -% b }
+}
+
+/// Signed add that clamps to [MIN, MAX] instead of wrapping.
+pub const fn sat_add_s(a: sint<N>, b: sint<N>) -> sint<N> {
+    let s = a + b
+    let hi = ((1 << (N - 1)) - 1) as sint<N + 1>
+    let lo = -hi - 1
+    if s > hi { hi as sint<N> } else if s < lo { lo as sint<N> } else { s as sint<N> }
+}
+
+/// Signed subtract that clamps to [MIN, MAX] instead of wrapping.
+pub const fn sat_sub_s(a: sint<N>, b: sint<N>) -> sint<N> {
+    let s = a - b
+    let hi = ((1 << (N - 1)) - 1) as sint<N + 1>
+    let lo = -hi - 1
+    if s > hi { hi as sint<N> } else if s < lo { lo as sint<N> } else { s as sint<N> }
+}
+
+// ---------------------------------------------------------------------------
+// Signedness and rounding
+// ---------------------------------------------------------------------------
+
+/// Lossless unsigned to signed conversion: zero-extend by one bit, then
+/// reinterpret (spec §5.3).
+pub const fn widen_signed(x: uint<N>) -> sint<N + 1> {
+    (x as uint<N + 1>) as sint<N + 1>
+}
+
+/// Drop the `F` lowest (fraction) bits of `x`, rounding halves toward
+/// +infinity. The result keeps one extra integer bit so rounding up can
+/// never overflow. Call as `round_half_up<F>(x)`; 1 <= F < N.
+pub const fn round_half_up<F: uint>(x: sint<N>) -> sint<N - F + 1> {
+    static_assert(F >= 1 and F < N, "round_half_up: need 1 <= F < N")
+    let half = (1 << (F - 1)) as sint<N + 1>
+    let s = (x as sint<N + 1>) +% half
+    (s >>> F) as sint<N - F + 1>
+}
+
+/// Drop the `F` lowest (fraction) bits of `x`, rounding halves to the
+/// nearest even result (convergent rounding, no statistical bias). Call as
+/// `round_even<F>(x)`; 1 <= F < N.
+pub const fn round_even<F: uint>(x: sint<N>) -> sint<N - F + 1> {
+    static_assert(F >= 1 and F < N, "round_even: need 1 <= F < N")
+    let floor = (x >>> F) as sint<N - F + 1>
+    let frac = bits(x) as uint<F>
+    let half = frac[F - 1]
+    let rest = (frac & ((1 << (F - 1)) - 1)) != 0
+    let odd = bits(x)[F]
+    if half and (rest or odd) { floor +% 1 } else { floor }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "flog2 and is_pow2" {
+    expect flog2(1) == 0
+    expect flog2(2) == 1
+    expect flog2(3) == 1
+    expect flog2(5) == 2
+    expect flog2(1024) == 10
+    expect flog2(1025) == 10
+    expect is_pow2(64u8)
+    expect !is_pow2(0u8)
+    expect !is_pow2(96u8)
+    expect is_pow2(1u8)
+}
+
+test "gray and ungray are inverse, adjacent codes differ in one bit" {
+    for v in 0..256 {
+        let x = v as u8
+        expect ungray(gray(x)) == x
+        expect count_ones(gray(x) ^ gray(x +% 1)) == 1
+    }
+    expect gray(2u3) == 0b011
+    expect gray(7u3) == 0b100
+}
+
+test "bit scanning" {
+    expect leading_zeros(0x10 as bit<8>) == 3
+    expect leading_zeros(0x00 as bit<8>) == 8
+    expect leading_zeros(0x80 as bit<8>) == 0
+    expect trailing_zeros(0x10 as bit<8>) == 4
+    expect trailing_zeros(0x00 as bit<8>) == 8
+    expect trailing_zeros(0x01 as bit<8>) == 0
+    let p = priority_encode(0b0110_1000 as bit<8>)
+    expect p.valid and p.data == 3
+    expect !priority_encode(0 as bit<8>).valid
+    expect onehot(5u3) == 0b0010_0000
+    expect onehot_to_bin(0b0010_0000 as bit<8>) == 5
+    expect reverse_bits(0b0000_0001 as bit<8>) == 0b1000_0000
+    expect reverse_bits(0b1100_1010 as bit<8>) == 0b0101_0011
+}
+
+test "min, max, abs" {
+    expect min(3u8, 9u8) == 3
+    expect max(3u8, 9u8) == 9
+    expect smin(-3s8, 2s8) == -3
+    expect smax(-3s8, 2s8) == 2
+    expect abs(-128s8) == 128
+    expect abs(-5s8) == 5
+    expect abs(7s8) == 7
+}
+
+test "saturating arithmetic" {
+    expect sat_add(200u8, 100u8) == 255
+    expect sat_add(20u8, 100u8) == 120
+    expect sat_sub(20u8, 100u8) == 0
+    expect sat_sub(100u8, 20u8) == 80
+    expect sat_add_s(100s8, 100s8) == 127
+    expect sat_add_s(-100s8, -100s8) == -128
+    expect sat_add_s(-100s8, 50s8) == -50
+    expect sat_sub_s(-100s8, 100s8) == -128
+    expect sat_sub_s(100s8, -100s8) == 127
+}
+
+test "widen_signed keeps the value" {
+    expect widen_signed(255u8) == 255s9
+    expect widen_signed(0u8) == 0s9
+}
+
+test "rounding modes" {
+    // values in Q.1 (one fraction bit): 5 = 2.5, 7 = 3.5, -5 = -2.5
+    expect round_half_up<1>(5s8) == 3
+    expect round_half_up<1>(-5s8) == -2
+    expect round_half_up<1>(4s8) == 2
+    expect round_even<1>(5s8) == 2
+    expect round_even<1>(7s8) == 4
+    expect round_even<1>(-5s8) == -2
+    expect round_even<1>(-7s8) == -4
+    // Q.2: 0b0110 = 1.5 -> 2, 0b0101 = 1.25 -> 1, 0b0111 = 1.75 -> 2
+    expect round_even<2>(6s8) == 2
+    expect round_even<2>(5s8) == 1
+    expect round_even<2>(7s8) == 2
+    expect round_half_up<2>(5s8) == 1
+    expect round_half_up<2>(6s8) == 2
+}

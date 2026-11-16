@@ -1,0 +1,249 @@
+package std::math
+
+// ---------------------------------------------------------------------------
+// Fixed<I, F>
+// ---------------------------------------------------------------------------
+//
+// API summary (all functions are const fn and infer I/F from their
+// arguments; explicit generics select the target format):
+//
+//   fx_lit<I, F>(num, den)      compile-time constant num/den, rounded
+//   fx_from_int(x)              sint<N> -> Fixed<N, 0>
+//   fx_to_int(a)                floor(a) as sint<I>
+//   fx_add(a, b), fx_sub(a, b)  same format in, one more integer bit out
+//   fx_neg(a)                   one more integer bit out
+//   fx_mul(a, b)                Fixed<IA, FA> * Fixed<IB, FB> -> Fixed<IA+IB, FA+FB>
+//   fx_convert<I2, F2, R, Sat>(a)
+//                               change format: round dropped fraction bits
+//                               with R (.Truncate, .HalfUp, .HalfEven) and
+//                               wrap or (Sat) clamp the integer part
+//   FixedDivider<I, F>          a / b, iterative (division needs hardware
+//                               that takes several cycles)
+//
+// All arithmetic is lossless; precision is only lost in fx_convert, where
+// the rounding and overflow behaviour is spelled out at the call site.
+
+/// Signed fixed-point number with `I` integer bits (including the sign) and
+/// `F` fraction bits: the value is `raw / 2^F`.
+pub struct Fixed<I: uint, F: uint> {
+    /// The two's-complement bit pattern, value * 2^F.
+    raw: sint<I + F>,
+}
+
+/// How `fx_convert` treats fraction bits it drops.
+pub enum Round {
+    /// Drop them (round toward -infinity).
+    Truncate,
+    /// Round to nearest, halves toward +infinity.
+    HalfUp,
+    /// Round to nearest, halves to the even neighbour (no bias).
+    HalfEven,
+}
+
+/// Compile-time constant num / den, rounded to nearest (halves away from
+/// zero): `fx_lit<4, 12>(1, 3)` is 1/3 in Q4.12.
+pub const fn fx_lit<I: uint, F: uint>(num: sint, den: sint) -> Fixed<I, F> {
+    let scale = (1 << F) as sint
+    let mag = if num < 0 { -num } else { num }
+    let q = (mag * scale * 2 + den) / (2 * den)
+    let v = if num < 0 { -q } else { q }
+    Fixed { raw: v as sint<I + F> }
+}
+
+/// An integer as a fixed-point number with no fraction bits.
+pub const fn fx_from_int(x: sint<N>) -> Fixed<N, 0> {
+    Fixed { raw: x }
+}
+
+/// The integer part, rounded toward -infinity.
+pub const fn fx_to_int(a: Fixed<I, F>) -> sint<I> {
+    (a.raw >>> F) as sint<I>
+}
+
+/// Lossless sum.
+pub const fn fx_add(a: Fixed<I, F>, b: Fixed<I, F>) -> Fixed<I + 1, F> {
+    Fixed { raw: a.raw + b.raw }
+}
+
+/// Lossless difference.
+pub const fn fx_sub(a: Fixed<I, F>, b: Fixed<I, F>) -> Fixed<I + 1, F> {
+    Fixed { raw: a.raw - b.raw }
+}
+
+/// Lossless negation.
+pub const fn fx_neg(a: Fixed<I, F>) -> Fixed<I + 1, F> {
+    Fixed { raw: (-a.raw) as sint<I + F + 1> }
+}
+
+/// Lossless product.
+pub const fn fx_mul(a: Fixed<IA, FA>, b: Fixed<IB, FB>) -> Fixed<IA + IB, FA + FB> {
+    Fixed { raw: a.raw * b.raw }
+}
+
+/// Convert to another format. Dropped fraction bits are rounded with `R`;
+/// an integer part that does not fit in `I2` bits wraps, or with `Sat`
+/// clamps to the most positive / most negative value of the target.
+/// Example: `fx_convert<4, 4, .HalfEven, true>(fx_mul(a, b))`.
+pub const fn fx_convert<I2: uint, F2: uint, R: Round = .Truncate, Sat: bool = false>(a: Fixed<I, F>) -> Fixed<I2, F2> {
+    static_assert(I + F2 >= 1 and I2 + F2 >= 1, "fx_convert: empty format")
+
+    // 1. align to F2 fraction bits in a width that cannot overflow
+    var aligned: sint<I + F2 + 1> = 0
+    if F2 >= F {
+        aligned = (a.raw as sint<I + F2 + 1>) << (F2 - F)
+    } else {
+        let floor = (a.raw >>> (F - F2)) as sint<I + F2 + 1>
+        let frac = bits(a.raw) as uint<F - F2>
+        let half = frac[F - F2 - 1]
+        let rest = (frac & ((1 << (F - F2 - 1)) - 1)) != 0
+        let odd = bits(a.raw)[F - F2]
+        let up = match R {
+            .Truncate => false,
+            .HalfUp => half,
+            .HalfEven => half and (rest or odd),
+        }
+        aligned = if up { floor +% 1 } else { floor }
+    }
+
+    // 2. fit the integer part into I2 bits
+    if Sat {
+        let wide = aligned as sint<I + I2 + 2 * F2 + 1>
+        let hi = ((1 << (I2 + F2 - 1)) - 1) as sint<I + I2 + 2 * F2 + 1>
+        let lo = (-hi - 1) as sint<I + I2 + 2 * F2 + 1>
+        let c = if wide > hi { hi } else if wide < lo { lo } else { wide }
+        Fixed { raw: c as sint<I2 + F2> }
+    } else {
+        Fixed { raw: aligned as sint<I2 + F2> }
+    }
+}
+
+/// Fixed-point division `a / b` for two values in the same format. The
+/// quotient is exact to F fraction bits, rounded toward zero, in a format
+/// wide enough for any quotient (dividing by the smallest step multiplies
+/// by 2^F). Iterative: one quotient bit per cycle, one division at a time.
+/// `div_by_zero` qualifies `out` like a status bit.
+pub module FixedDivider<I: uint, F: uint>
+where I >= 1, I + F >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; aborts a division in progress.
+    in rst: reset
+    /// Dividend `a` and divisor `b`.
+    in in: Stream<Operands<Fixed<I, F>, Fixed<I, F>>>
+    /// The quotient.
+    out out: Stream<Fixed<I + F + 1, F>>
+    /// The divisor of the current result was zero (the quotient is then
+    /// the largest magnitude with the dividend's sign).
+    out div_by_zero: bool
+
+    const N: uint = I + 2 * F
+
+    /// Cycles from `in.fire()` to `out.valid`.
+    pub const LATENCY: uint = N + 1
+
+    reg busy: bool = false
+    reg done: bool = false
+    reg cnt: uint<clog2(N + 1)> = 0
+    reg rem: uint<N>
+    reg quo: uint<N>
+    reg div: uint<N>
+    reg neg: bool
+    reg dz: bool
+
+    let shifted = (rem ++ (quo[N - 1] as uint<1>)) as uint<N + 1>
+    let ge = shifted >= div
+
+    in.ready = !busy and (!done or out.ready)
+
+    on clk {
+        if out.fire() { done = false }
+        if in.fire() {
+            let a = in.data.a.raw
+            let b = in.data.b.raw
+            rem = 0
+            quo = (abs(a) as uint<N>) << F
+            div = abs(b) as uint<N>
+            neg = (a < 0) != (b < 0)
+            dz = b == 0
+            cnt = N
+            busy = true
+        } else if busy {
+            rem = if ge { (shifted -% div) as uint<N> } else { shifted as uint<N> }
+            quo = (quo << 1) | (ge as uint<1>)
+            cnt = cnt -% 1
+            if cnt == 1 {
+                busy = false
+                done = true
+            }
+        }
+    }
+
+    let mag = widen_signed(quo)
+    out.valid = done
+    out.data = Fixed { raw: if neg { (-mag) as sint<N + 1> } else { mag } }
+    div_by_zero = dz
+
+    /// Never computing and presenting a result at the same time.
+    property busy_xor_done {
+        never busy and done
+    }
+
+    /// A finished result is held until taken.
+    property out_stable {
+        always (out.valid and !out.ready) |=> out.valid and stable(out.data)
+    }
+}
+
+test "fixed: literals" {
+    expect fx_lit<4, 4>(3, 2).raw == 24          // 1.5
+    expect fx_lit<4, 4>(-1, 3).raw == -5         // -0.333.. -> -5/16
+    expect fx_lit<2, 14>(1, 1).raw == 16384
+}
+
+test "fixed: add, sub, neg, mul are lossless" {
+    let a: Fixed<4, 4> = Fixed { raw: 24 }       // 1.5
+    let b: Fixed<4, 4> = Fixed { raw: 40 }       // 2.5
+    let m: Fixed<4, 4> = Fixed { raw: -32 }      // -2.0
+    expect fx_add(a, b).raw == 64                // 4.0 in Q5.4
+    expect fx_sub(a, b).raw == -16               // -1.0
+    expect fx_neg(m).raw == 32
+    expect fx_mul(a, m).raw == -768              // -3.0 in Q8.8
+    expect fx_to_int(fx_mul(a, m)) == -3
+    expect fx_to_int(a) == 1
+    expect fx_from_int(-7s8).raw == -7
+}
+
+test "fixed: conversion rounding modes" {
+    let x: Fixed<4, 4> = Fixed { raw: 26 }       // 1.625
+    expect fx_convert<4, 2>(x).raw == 6                  // truncate: 1.5
+    expect fx_convert<4, 2, .HalfUp>(x).raw == 7         // 1.75
+    expect fx_convert<4, 2, .HalfEven>(x).raw == 6       // 6.5 -> 6
+    let y: Fixed<4, 4> = Fixed { raw: 30 }       // 1.875 -> 7.5 quarters
+    expect fx_convert<4, 2, .HalfEven>(y).raw == 8
+    expect fx_convert<4, 6>(x).raw == 104                // more fraction bits
+}
+
+test "fixed: conversion overflow wraps or saturates" {
+    let x: Fixed<4, 4> = Fixed { raw: 80 }       // 5.0
+    expect fx_convert<2, 4>(x).raw == 16                 // wraps
+    expect fx_convert<2, 4, .Truncate, true>(x).raw == 31  // clamps to 1.9375
+    let n: Fixed<4, 4> = Fixed { raw: -80 }      // -5.0
+    expect fx_convert<2, 4, .Truncate, true>(n).raw == -32
+}
+
+test "fixed divider" {
+    let dut = sim FixedDivider<8, 8>()
+    dut.reset()
+    dut.out.ready = true
+    // (a, b, quotient) as raw Q8.8 values
+    for (a, b, q) in [(768, 384, 512), (-256, 1024, -64), (256, -3, -21845), (100, 256, 100)] {
+        dut.in = Stream { valid: true, data: Operands { a: Fixed { raw: a }, b: Fixed { raw: b } } }
+        dut.step()
+        dut.in.valid = false
+        dut.step_until(dut.out.valid, 40)
+        expect dut.out.data.raw == q
+        expect !dut.div_by_zero
+        dut.step()
+    }
+}

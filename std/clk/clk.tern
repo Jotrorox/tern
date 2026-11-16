@@ -1,0 +1,265 @@
+package std::clk
+
+// std::clk — clock dividers, enables and gating.
+//
+// Prefer clock *enables* (Enable, Strobe, Divider::tick) over derived
+// clocks: an enable keeps logic in one domain, needs no extra clock buffer
+// and no CDC. Divider's `clk_out` and Gate's `gclk` are real clocks and
+// start new domains; they exist for driving external pins and for power
+// gating.
+//
+// `Divider` (#[clock_gen]) and `Gate` (#[clock_gate]) are the only std
+// modules that turn logic into a clock. Like #[cdc] primitives they are
+// recognised by the compiler, which permits the bool/clock conversions
+// inside them, creates the derived clock domain and emits the matching
+// generated-clock constraint.
+
+// ---------------------------------------------------------------------------
+// Divider
+// ---------------------------------------------------------------------------
+
+/// Clock divider by `N`: `clk_out` is a registered clock at clk / N, high
+/// for floor(N / 2) of every N input cycles (50 % duty cycle for even N).
+/// `tick` is a one-cycle enable in the `clk` domain, high in the cycle that
+/// starts with a rising edge of `clk_out`; use it instead of `clk_out`
+/// wherever the logic can stay in the `clk` domain.
+#[clock_gen]
+pub module Divider<N: uint = 2>
+where N >= 2
+{
+    /// Input clock.
+    in clk: clock
+    /// Reset; the output clock stops low.
+    in rst: reset
+    /// The divided clock (a new clock domain).
+    out clk_out: clock
+    /// Enable pulse at the divided rate, in the `clk` domain.
+    out tick: bool
+
+    /// Input cycles from reset release to the first rising edge.
+    pub const LATENCY: uint = N
+
+    reg cnt: uint<clog2(N)> = 0
+    reg q: bool = false
+    reg t: bool = false
+
+    on clk {
+        let nxt = if cnt == N - 1 { 0 } else { cnt +% 1 }
+        cnt = nxt
+        q = nxt < N / 2
+        t = nxt == 0
+    }
+
+    clk_out = q as clock
+    tick = t
+
+    /// The counter stays in range.
+    property count_bounded {
+        always cnt < N
+    }
+
+    /// Exactly one tick per period: the tick is followed by N - 1 quiet cycles.
+    property one_tick_per_period {
+        always t |-> cnt == 0
+    }
+}
+
+test "divider: tick every N cycles, clock high for N/2" {
+    let dut = sim Divider<4>()
+    dut.reset()
+    var ticks: uint = 0
+    var highs: uint = 0
+    for _ in 0..40 {
+        dut.step()
+        if dut.tick { ticks = ticks + 1 }
+        if dut.q { highs = highs + 1 }
+    }
+    expect ticks == 10
+    expect highs == 20
+}
+
+test "divider: odd ratio" {
+    let dut = sim Divider<3>()
+    dut.reset()
+    var ticks: uint = 0
+    var highs: uint = 0
+    for _ in 0..30 {
+        dut.step()
+        if dut.tick { ticks = ticks + 1 }
+        if dut.q { highs = highs + 1 }
+    }
+    expect ticks == 10
+    expect highs == 10
+}
+
+// ---------------------------------------------------------------------------
+// Enable
+// ---------------------------------------------------------------------------
+
+/// Clock enable: `tick` is high for one cycle in every `N` cycles while
+/// `en` is high (the count pauses while `en` is low). `N = 1` ticks every
+/// enabled cycle.
+pub module Enable<N: uint>
+where N >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; the next tick comes N enabled cycles after release.
+    in rst: reset
+    /// Count this cycle.
+    in en: bool
+    /// One-cycle enable pulse every N enabled cycles.
+    out tick: bool
+
+    /// Enabled cycles from reset release to the first tick (minus one).
+    pub const LATENCY: uint = N - 1
+
+    reg cnt: uint<clog2(N + 1)> = 0
+    let at_end = cnt == N - 1
+
+    tick = en and at_end
+
+    on clk {
+        if en {
+            cnt = if at_end { 0 } else { cnt +% 1 }
+        }
+    }
+
+    /// The counter stays in range.
+    property count_bounded {
+        always cnt < N
+    }
+}
+
+test "enable: one tick per N enabled cycles" {
+    let dut = sim Enable<5>()
+    dut.reset()
+    dut.en = true
+    var ticks: uint = 0
+    for c in 0..25 {
+        dut.settle()
+        if dut.tick {
+            ticks = ticks + 1
+            expect c == 4 or c == 9 or c == 14 or c == 19 or c == 24
+        }
+        dut.step()
+    }
+    expect ticks == 5
+    dut.en = false
+    dut.settle()
+    expect !dut.tick
+}
+
+// ---------------------------------------------------------------------------
+// Gate
+// ---------------------------------------------------------------------------
+
+/// Glitch-free clock gate, the one legal way to gate a clock (spec §14,
+/// decision 10). `en` is sampled on the falling edge of `clk`, so the gated
+/// clock only ever starts or stops while `clk` is low and never produces a
+/// shortened pulse. Mapped to the target's integrated clock-gating cell
+/// where one exists. Enables are otherwise inferred from `if` in `on`
+/// blocks; use Gate only to save power.
+#[clock_gate]
+pub module Gate {
+    /// Clock to gate.
+    in clk: clock
+    /// Let clock pulses through (sampled while `clk` is low).
+    in en: bool
+    /// The gated clock (a new clock domain).
+    out gclk: clock
+
+    /// Clock edges from `en` to the first gated pulse.
+    pub const LATENCY: uint = 1
+
+    let clk_n = clk as clock<falling>
+    domain fall = (clk_n)
+
+    reg en_l: bool = false @ fall
+    on fall {
+        en_l = en
+    }
+
+    gclk = ((clk as bool) and en_l) as clock
+
+    /// The latched enable follows `en` one falling edge later.
+    property latches_enable {
+        always en_l == past(en)
+    }
+}
+
+test "gate: enable is latched once per cycle" {
+    let dut = sim Gate()
+    dut.en = true
+    dut.step()
+    expect dut.en_l
+    dut.en = false
+    dut.step()
+    expect !dut.en_l
+}
+
+// ---------------------------------------------------------------------------
+// Strobe
+// ---------------------------------------------------------------------------
+
+/// Enable pulse at `Hz` from a clock of `ClkHz` (pass the frequency given
+/// by the clock's #[clock(hz: ..)] attribute). A phase accumulator adds Hz
+/// every cycle and ticks when it passes ClkHz, so the average rate is
+/// exactly Hz even when ClkHz / Hz is not an integer (the spacing then
+/// varies by one cycle).
+pub module Strobe<Hz: uint, ClkHz: uint>
+where Hz >= 1, Hz <= ClkHz
+{
+    /// Clock running at ClkHz.
+    in clk: clock
+    /// Reset; restarts the phase.
+    in rst: reset
+    /// One-cycle pulse, Hz times per second on average.
+    out tick: bool
+
+    /// Cycles from reset release to the first tick, at most.
+    pub const LATENCY: uint = (ClkHz + Hz - 1) / Hz
+
+    reg acc: uint<clog2(ClkHz + 1)> = 0
+    reg t: bool = false
+
+    on clk {
+        let next = acc + Hz
+        if next >= ClkHz {
+            acc = (next -% ClkHz) as uint<clog2(ClkHz + 1)>
+            t = true
+        } else {
+            acc = next as uint<clog2(ClkHz + 1)>
+            t = false
+        }
+    }
+
+    tick = t
+
+    /// The phase accumulator stays below one period.
+    property phase_bounded {
+        always acc < ClkHz
+    }
+}
+
+test "strobe: integer ratio" {
+    let dut = sim Strobe<10, 100>()
+    dut.reset()
+    var ticks: uint = 0
+    for _ in 0..1000 {
+        dut.step()
+        if dut.tick { ticks = ticks + 1 }
+    }
+    expect ticks == 100
+}
+
+test "strobe: fractional ratio keeps the average exact" {
+    let dut = sim Strobe<3, 10>()
+    dut.reset()
+    var ticks: uint = 0
+    for _ in 0..1000 {
+        dut.step()
+        if dut.tick { ticks = ticks + 1 }
+    }
+    expect ticks == 300
+}

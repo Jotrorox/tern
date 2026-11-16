@@ -1,0 +1,545 @@
+package std::math
+
+// Arithmetic units: Multiplier, SignedMultiplier, Divider, Sqrt, Mac.
+
+/// Two operands travelling together into an arithmetic unit.
+pub struct Operands<A: type, B: type> {
+    /// First operand (multiplicand, dividend).
+    a: A,
+    /// Second operand (multiplier, divisor).
+    b: B,
+}
+
+// ---------------------------------------------------------------------------
+// Multiplier
+// ---------------------------------------------------------------------------
+
+/// Pipelined unsigned multiplier: a full-width product after `Stages`
+/// register stages, one result per cycle. The product is formed in front of
+/// the registers so synthesis can retime them into DSP block pipeline
+/// registers. `Stages = 0` is combinational.
+pub module Multiplier<N: uint, M: uint = N, Stages: uint = 2>
+where N >= 1, M >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; clears the valid pipeline.
+    in rst: reset
+    /// Operands; `in.data.a` is N bits, `in.data.b` is M bits.
+    in in: Valid<Operands<uint<N>, uint<M>>>
+    /// The product, `Stages` cycles later.
+    out out: Valid<uint<N + M>>
+
+    /// Cycles from operands to product.
+    pub const LATENCY: uint = Stages
+
+    var v: [bool; Stages + 1]
+    var p: [uint<N + M>; Stages + 1]
+    v[0] = in.valid
+    p[0] = in.data.a * in.data.b
+    for i in 0..Stages {
+        reg rv: bool = false
+        reg rp: uint<N + M>
+        on clk {
+            rv = v[i]
+            rp = p[i]
+        }
+        v[i + 1] = rv
+        p[i + 1] = rp
+    }
+    out.valid = v[Stages]
+    out.data = p[Stages]
+
+    if Stages >= 1 {
+        /// Every operand pair yields exactly one product, LATENCY cycles later.
+        property fixed_latency {
+            always out.valid == past(in.valid, Stages)
+        }
+    }
+}
+
+/// Pipelined signed (two's-complement) multiplier; otherwise identical to
+/// `Multiplier`.
+pub module SignedMultiplier<N: uint, M: uint = N, Stages: uint = 2>
+where N >= 1, M >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; clears the valid pipeline.
+    in rst: reset
+    /// Operands; `in.data.a` is N bits, `in.data.b` is M bits.
+    in in: Valid<Operands<sint<N>, sint<M>>>
+    /// The product, `Stages` cycles later.
+    out out: Valid<sint<N + M>>
+
+    /// Cycles from operands to product.
+    pub const LATENCY: uint = Stages
+
+    var v: [bool; Stages + 1]
+    var p: [sint<N + M>; Stages + 1]
+    v[0] = in.valid
+    p[0] = in.data.a * in.data.b
+    for i in 0..Stages {
+        reg rv: bool = false
+        reg rp: sint<N + M>
+        on clk {
+            rv = v[i]
+            rp = p[i]
+        }
+        v[i + 1] = rv
+        p[i + 1] = rp
+    }
+    out.valid = v[Stages]
+    out.data = p[Stages]
+
+    if Stages >= 1 {
+        /// Every operand pair yields exactly one product, LATENCY cycles later.
+        property fixed_latency {
+            always out.valid == past(in.valid, Stages)
+        }
+    }
+}
+
+test "multiplier: products after LATENCY cycles, one per cycle" {
+    let dut = sim Multiplier<8, 8, 3>()
+    dut.reset()
+    let a = [0, 1, 255, 17, 200]
+    let b = [9, 255, 255, 3, 100]
+    for i in 0..8 {
+        if i < 5 {
+            dut.in = Valid { valid: true, data: Operands { a: a[i], b: b[i] } }
+        } else {
+            dut.in.valid = false
+        }
+        dut.settle()
+        if i >= 3 {
+            expect dut.out.valid
+            expect dut.out.data == a[i - 3] * b[i - 3]
+        } else {
+            expect !dut.out.valid
+        }
+        dut.step()
+    }
+}
+
+test "multiplier: random operands" {
+    let dut = sim Multiplier<16, 12, 1>()
+    dut.reset()
+    for _ in 0..200 {
+        let x = rand<u16>()
+        let y = rand<uint<12>>()
+        dut.in = Valid { valid: true, data: Operands { a: x, b: y } }
+        dut.step()
+        expect dut.out.valid and dut.out.data == x * y
+    }
+}
+
+test "signed multiplier: signs" {
+    let dut = sim SignedMultiplier<8, 8, 0>()
+    for (x, y) in [(-128, -128), (-1, 127), (5, -7), (0, -3)] {
+        dut.in = Valid { valid: true, data: Operands { a: x, b: y } }
+        dut.settle()
+        expect dut.out.valid and dut.out.data == x * y
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Divider
+// ---------------------------------------------------------------------------
+
+/// Result of an unsigned division.
+pub struct DivResult<N: uint> {
+    /// floor(a / b); all ones when dividing by zero.
+    quotient: uint<N>,
+    /// a - quotient * b; equals `a` when dividing by zero.
+    remainder: uint<N>,
+    /// The divisor was zero.
+    div_by_zero: bool,
+}
+
+/// Restoring divider for unsigned N-bit operands, producing quotient and
+/// remainder. It works on one operand pair at a time and resolves N / Stages
+/// quotient bits per cycle, so a division takes `Stages` cycles:
+/// `Stages = N` is the classic one-bit-per-cycle divider, `Stages = 1` is a
+/// single-cycle (deep combinational) divider. A new division can start in
+/// the cycle the previous result is taken.
+pub module Divider<N: uint, Stages: uint = N>
+where N >= 1, Stages >= 1, Stages <= N, (N / Stages) * Stages == N
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; aborts a division in progress.
+    in rst: reset
+    /// Dividend `a` and divisor `b`.
+    in in: Stream<Operands<uint<N>, uint<N>>>
+    /// Quotient and remainder.
+    out out: Stream<DivResult<N>>
+
+    /// Cycles from `in.fire()` to `out.valid`.
+    pub const LATENCY: uint = Stages + 1
+
+    const K: uint = N / Stages
+
+    reg busy: bool = false
+    reg done: bool = false
+    reg cnt: uint<clog2(Stages + 1)> = 0
+    reg rem: uint<N>
+    reg quo: uint<N>        // dividend shifts out at the top, quotient in at the bottom
+    reg div: uint<N>
+    reg dz: bool
+
+    // K restoring steps per cycle, unrolled
+    var r: [uint<N>; K + 1]
+    var q: [uint<N>; K + 1]
+    r[0] = rem
+    q[0] = quo
+    for k in 0..K {
+        let shifted = (r[k] ++ (q[k][N - 1] as uint<1>)) as uint<N + 1>
+        let ge = shifted >= div
+        r[k + 1] = if ge { (shifted -% div) as uint<N> } else { shifted as uint<N> }
+        q[k + 1] = (q[k] << 1) | (ge as uint<1>)
+    }
+
+    in.ready = !busy and (!done or out.ready)
+    out.valid = done
+    out.data = DivResult { quotient: quo, remainder: rem, div_by_zero: dz }
+
+    on clk {
+        if out.fire() { done = false }
+        if in.fire() {
+            rem = 0
+            quo = in.data.a
+            div = in.data.b
+            dz = in.data.b == 0
+            cnt = Stages
+            busy = true
+        } else if busy {
+            rem = r[K]
+            quo = q[K]
+            cnt = cnt -% 1
+            if cnt == 1 {
+                busy = false
+                done = true
+            }
+        }
+    }
+
+    /// Never computing and presenting a result at the same time.
+    property busy_xor_done {
+        never busy and done
+    }
+
+    /// A finished result is held until taken.
+    property out_stable {
+        always (out.valid and !out.ready) |=> out.valid and stable(out.data)
+    }
+}
+
+test "divider: quotient and remainder" {
+    let dut = sim Divider<8>()
+    dut.reset()
+    dut.out.ready = true
+    for (a, b, q, r) in [(100, 7, 14, 2), (255, 1, 255, 0), (3, 10, 0, 3), (200, 200, 1, 0)] {
+        dut.in = Stream { valid: true, data: Operands { a: a, b: b } }
+        dut.settle()
+        expect dut.in.ready
+        dut.step()
+        dut.in.valid = false
+        dut.step(8)
+        expect dut.out.valid
+        expect dut.out.data.quotient == q and dut.out.data.remainder == r
+        expect !dut.out.data.div_by_zero
+        dut.step()
+    }
+}
+
+test "divider: division by zero is flagged" {
+    let dut = sim Divider<8, 4>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: Operands { a: 42, b: 0 } }
+    dut.step()
+    dut.in.valid = false
+    dut.step(4)
+    expect dut.out.valid and dut.out.data.div_by_zero
+    expect dut.out.data.quotient == 255 and dut.out.data.remainder == 42
+}
+
+test "divider: random operands at two bits per cycle" {
+    let dut = sim Divider<16, 8>()
+    dut.reset()
+    dut.out.ready = true
+    for _ in 0..200 {
+        let a = rand<u16>()
+        let b = rand<u16>() where b != 0
+        dut.in = Stream { valid: true, data: Operands { a: a, b: b } }
+        dut.step()
+        dut.in.valid = false
+        dut.step_until(dut.out.valid, 20)
+        let q = dut.out.data.quotient
+        let r = dut.out.data.remainder
+        expect r < b
+        expect q * b + r == a
+        dut.step()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sqrt
+// ---------------------------------------------------------------------------
+
+/// Result of an integer square root of an N-bit value.
+pub struct SqrtResult<N: uint> {
+    /// floor(sqrt(x)).
+    root: uint<(N + 1) / 2>,
+    /// x - root * root (at most 2 * root).
+    remainder: uint<(N + 1) / 2 + 1>,
+}
+
+/// Integer square root by the digit-by-digit (non-restoring shift-subtract)
+/// method, one result bit per step. `Pipelined = false`: one operation at a
+/// time, one bit per cycle. `Pipelined = true`: one register stage per
+/// result bit, a new operand every cycle (the whole pipeline stalls when
+/// the output is not taken).
+pub module Sqrt<N: uint, Pipelined: bool = false>
+where N >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; drops operations in progress.
+    in rst: reset
+    /// The radicand.
+    in in: Stream<uint<N>>
+    /// Root and remainder.
+    out out: Stream<SqrtResult<N>>
+
+    const R: uint = (N + 1) / 2     // result bits
+    const NE: uint = 2 * R          // radicand width rounded up to even
+
+    /// Cycles from `in.fire()` to `out.valid` (when not stalled).
+    pub const LATENCY: uint = if Pipelined { R } else { R + 1 }
+
+    struct St {
+        op: uint<NE>,
+        res: uint<NE>,
+    }
+
+    fn step(s: St, one: uint<NE>) -> St {
+        let t = s.res + one
+        if s.op >= t {
+            St { op: s.op -% (t as uint<NE>), res: (s.res >> 1) +% one }
+        } else {
+            St { op: s.op, res: s.res >> 1 }
+        }
+    }
+
+    fn result(s: St) -> SqrtResult<N> {
+        SqrtResult { root: s.res as uint<R>, remainder: s.op as uint<R + 1> }
+    }
+
+    if Pipelined {
+        var sv: [bool; R + 1]
+        var ss: [St; R + 1]
+        sv[0] = in.valid
+        ss[0] = St { op: in.data, res: 0 }
+        let advance = out.ready or !sv[R]
+        in.ready = advance
+        for k in 0..R {
+            reg v: bool = false
+            reg s: St
+            on clk {
+                if advance {
+                    v = sv[k]
+                    s = step(ss[k], 1 << (NE - 2 - 2 * k))
+                }
+            }
+            sv[k + 1] = v
+            ss[k + 1] = s
+        }
+        out.valid = sv[R]
+        out.data = result(ss[R])
+
+        /// A stalled result is held until taken.
+        property out_stable {
+            always (out.valid and !out.ready) |=> out.valid and stable(out.data)
+        }
+    } else {
+        reg st: St
+        reg one: uint<NE>
+        reg cnt: uint<clog2(R + 1)> = 0
+        reg busy: bool = false
+        reg done: bool = false
+
+        in.ready = !busy and (!done or out.ready)
+        out.valid = done
+        out.data = result(st)
+
+        on clk {
+            if out.fire() { done = false }
+            if in.fire() {
+                st = St { op: in.data, res: 0 }
+                one = 1 << (NE - 2)
+                cnt = R
+                busy = true
+            } else if busy {
+                st = step(st, one)
+                one = one >> 2
+                cnt = cnt -% 1
+                if cnt == 1 {
+                    busy = false
+                    done = true
+                }
+            }
+        }
+
+        /// Never computing and presenting a result at the same time.
+        property busy_xor_done {
+            never busy and done
+        }
+    }
+}
+
+test "sqrt: exact squares and remainders" {
+    let dut = sim Sqrt<16>()
+    dut.reset()
+    dut.out.ready = true
+    for (x, r, rem) in [(144, 12, 0), (150, 12, 6), (65535, 255, 510), (0, 0, 0), (1, 1, 0), (2, 1, 1)] {
+        dut.in = Stream { valid: true, data: x }
+        dut.step()
+        dut.in.valid = false
+        dut.step(8)
+        expect dut.out.valid
+        expect dut.out.data.root == r and dut.out.data.remainder == rem
+        dut.step()
+    }
+}
+
+test "sqrt: pipelined accepts one operand per cycle" {
+    let dut = sim Sqrt<9, true>()      // odd width: R = 5
+    dut.reset()
+    dut.out.ready = true
+    let xs = [0, 1, 4, 99, 100, 511, 256, 7, 0, 0, 0, 0, 0]
+    let roots = [0, 1, 2, 9, 10, 22, 16, 2]
+    for i in 0..13 {
+        dut.in = Stream { valid: i < 8, data: xs[i] }
+        dut.settle()
+        expect dut.in.ready
+        if i >= 5 {
+            expect dut.out.valid and dut.out.data.root == roots[i - 5]
+        }
+        dut.step()
+    }
+}
+
+test "sqrt: random radicands" {
+    let dut = sim Sqrt<32>()
+    dut.reset()
+    dut.out.ready = true
+    for _ in 0..100 {
+        let x = rand<u32>()
+        dut.in = Stream { valid: true, data: x }
+        dut.step()
+        dut.in.valid = false
+        dut.step_until(dut.out.valid, 40)
+        let r = dut.out.data.root
+        let rem = dut.out.data.remainder
+        expect r * r + rem == x
+        expect rem <= 2 * r
+        dut.step()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mac
+// ---------------------------------------------------------------------------
+
+/// Signed multiply-accumulate: `acc = first ? a*b : acc + a*b`, with an
+/// `Acc`-bit accumulator that either wraps or (with `Saturate`) clamps at
+/// its limits. Two stages: the product is registered (DSP friendly), then
+/// accumulated. One operand pair per cycle.
+pub module Mac<N: uint, M: uint = N, Acc: uint = N + M + 8, Saturate: bool = false>
+where N >= 1, M >= 1, Acc >= N + M
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; clears the accumulator.
+    in rst: reset
+    /// Operands to multiply and accumulate.
+    in in: Valid<Operands<sint<N>, sint<M>>>
+    /// Qualifies `in`: this product starts a new sum.
+    in first: bool
+    /// The running sum, updated LATENCY cycles after each operand pair.
+    out acc: Valid<sint<Acc>>
+
+    /// Cycles from operands to the updated sum.
+    pub const LATENCY: uint = 2
+
+    reg pv: bool = false
+    reg pfirst: bool = false
+    reg p: sint<N + M>
+    reg sum: sint<Acc> = 0
+    reg sv: bool = false
+
+    let hi = ((1 << (Acc - 1)) - 1) as sint<Acc + 1>
+    let lo = -hi - 1
+
+    on clk {
+        pv = in.valid
+        pfirst = first
+        p = in.data.a * in.data.b
+        sv = pv
+        if pv {
+            let base = if pfirst { 0 } else { sum }
+            let s = base + p
+            if Saturate {
+                sum = if s > hi { hi as sint<Acc> } else if s < lo { lo as sint<Acc> } else { s as sint<Acc> }
+            } else {
+                sum = s as sint<Acc>
+            }
+        }
+    }
+
+    acc.valid = sv
+    acc.data = sum
+
+    /// Every operand pair updates the sum exactly LATENCY cycles later.
+    property fixed_latency {
+        always acc.valid == past(in.valid, 2)
+    }
+}
+
+test "mac: accumulates signed products" {
+    let dut = sim Mac<8, 8, 20>()
+    dut.reset()
+    let xs = [3, -2, 7, 1]
+    let ys = [4, 5, -1, 0]
+    let firsts = [true, false, false, true]
+    for i in 0..4 {
+        dut.in = Valid { valid: true, data: Operands { a: xs[i], b: ys[i] } }
+        dut.first = firsts[i]
+        dut.step()
+    }
+    dut.in.valid = false
+    dut.settle()
+    expect dut.acc.valid and dut.acc.data == -5     // 12 - 10 - 7
+    dut.step()
+    expect dut.acc.valid and dut.acc.data == 0      // restarted with 1 * 0
+    dut.step()
+    expect !dut.acc.valid
+}
+
+test "mac: saturates instead of wrapping" {
+    let dut = sim Mac<4, 4, 8, true>()
+    dut.reset()
+    dut.first = false
+    dut.in = Valid { valid: true, data: Operands { a: 7, b: 7 } }    // +49 per beat
+    dut.step(6)
+    dut.in.valid = false
+    dut.step(2)
+    expect dut.acc.data == 127
+    dut.in = Valid { valid: true, data: Operands { a: -8, b: 7 } }   // -56 per beat
+    dut.step(10)
+    dut.in.valid = false
+    dut.step(2)
+    expect dut.acc.data == -128
+}

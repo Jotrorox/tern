@@ -1,0 +1,197 @@
+package std::fifo
+
+use std::stream::Beat
+
+// ---------------------------------------------------------------------------
+// PacketFifo
+// ---------------------------------------------------------------------------
+
+/// Store-and-forward FIFO for packet streams. Beats are written
+/// speculatively; the packet becomes visible on `pop` only when its `last`
+/// beat is accepted, and is discarded instead if `drop` is high together
+/// with that last beat (typical use: drop frames whose CRC failed). A packet
+/// longer than `Depth` beats cannot ever fit: once it has filled the whole
+/// FIFO the rest of it is accepted and thrown away and the packet is
+/// dropped, so an oversized packet never deadlocks the input. `dropped`
+/// pulses for one cycle after every discarded packet.
+pub module PacketFifo<T: type, Depth: uint = 64>
+where Depth.is_pow2(), Depth >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; empties the FIFO and discards a partial packet.
+    in rst: reset
+    /// Packet beats to store.
+    in push: Stream<Beat<T>>
+    /// Sampled with the last beat of a packet: discard the packet.
+    in drop: bool
+    /// Beats of committed packets, in order.
+    out pop: Stream<Beat<T>>
+    /// Number of committed beats not yet popped.
+    out count: uint<clog2(Depth) + 1>
+    /// Pulses for one cycle after a packet was discarded.
+    out dropped: bool
+
+    /// Cycles from the last beat's `push.fire()` to the packet's first beat
+    /// being offered on an empty FIFO.
+    pub const LATENCY: uint = 1
+
+    const AW: uint = clog2(Depth)
+    type Ptr = uint<AW + 1>
+    type Addr = uint<AW>
+
+    #[ram(distributed)]
+    mem buf: [Beat<T>; Depth]
+    reg wr_ptr: Ptr = 0         // next write slot (speculative)
+    reg commit_ptr: Ptr = 0     // end of the last committed packet
+    reg rd_ptr: Ptr = 0
+    reg overflow: bool = false  // the current packet is being thrown away
+    reg dropped_q: bool = false
+
+    let full = (wr_ptr -% rd_ptr) == Depth
+    let pkt_fills = (wr_ptr -% commit_ptr) == Depth
+    let discard = overflow or pkt_fills
+
+    push.ready = !full or discard
+    pop.valid = rd_ptr != commit_ptr
+    pop.data = buf[rd_ptr as Addr]
+    count = commit_ptr -% rd_ptr
+    dropped = dropped_q
+
+    on clk {
+        dropped_q = false
+        if push.fire() {
+            if !discard {
+                buf[wr_ptr as Addr] = push.data
+                wr_ptr = wr_ptr +% 1
+            }
+            if push.data.last {
+                if discard or drop {
+                    wr_ptr = commit_ptr            // roll back
+                    dropped_q = true
+                } else {
+                    commit_ptr = wr_ptr +% 1       // includes this last beat
+                }
+                overflow = false
+            } else if discard {
+                overflow = true
+            }
+        }
+        if pop.fire() {
+            rd_ptr = rd_ptr +% 1
+        }
+    }
+
+    /// Stored (committed plus speculative) beats never exceed the depth.
+    property occupancy_bounded {
+        always (wr_ptr -% rd_ptr) <= Depth
+    }
+
+    /// Committed beats never exceed stored beats.
+    property commit_within_written {
+        always (commit_ptr -% rd_ptr) <= (wr_ptr -% rd_ptr)
+    }
+
+    /// A stalled output beat is held unchanged until it is popped.
+    property pop_stable {
+        always (pop.valid and !pop.ready) |=> pop.valid and stable(pop.data)
+    }
+
+    cover property drops_oversized { overflow }
+}
+
+test "packet fifo: packet invisible until its last beat" {
+    let dut = sim PacketFifo<u8, 8>()
+    dut.reset()
+    dut.drop = false
+    dut.pop.ready = false
+    for (d, l) in [(1, false), (2, false), (3, true)] {
+        dut.push = Stream { valid: true, data: Beat { data: d, last: l } }
+        dut.settle()
+        expect dut.push.ready
+        expect !dut.pop.valid
+        dut.step()
+    }
+    dut.push.valid = false
+    dut.settle()
+    expect dut.pop.valid and dut.count == 3
+    dut.pop.ready = true
+    for (d, l) in [(1, false), (2, false), (3, true)] {
+        dut.settle()
+        expect dut.pop.valid and dut.pop.data.data == d and dut.pop.data.last == l
+        dut.step()
+    }
+    expect !dut.pop.valid
+}
+
+test "packet fifo: drop discards the packet" {
+    let dut = sim PacketFifo<u8, 8>()
+    dut.reset()
+    dut.pop.ready = true
+    dut.drop = false
+    dut.push = Stream { valid: true, data: Beat { data: 7, last: false } }
+    dut.step()
+    dut.push.data = Beat { data: 8, last: true }
+    dut.drop = true
+    dut.step()
+    dut.push.valid = false
+    dut.drop = false
+    dut.settle()
+    expect dut.dropped
+    expect !dut.pop.valid and dut.count == 0
+    // the space is reused by the next packet
+    dut.push = Stream { valid: true, data: Beat { data: 9, last: true } }
+    dut.step()
+    dut.push.valid = false
+    dut.settle()
+    expect !dut.dropped
+    expect dut.pop.valid and dut.pop.data.data == 9 and dut.pop.data.last
+}
+
+test "packet fifo: oversized packet is dropped without deadlock" {
+    let dut = sim PacketFifo<u8, 4>()
+    dut.reset()
+    dut.drop = false
+    dut.pop.ready = true
+    for i in 0..6 {
+        dut.push = Stream { valid: true, data: Beat { data: i as u8, last: i == 5 } }
+        dut.settle()
+        expect dut.push.ready
+        expect !dut.pop.valid
+        dut.step()
+    }
+    dut.push.valid = false
+    dut.settle()
+    expect dut.dropped
+    expect !dut.pop.valid and dut.count == 0
+}
+
+test "packet fifo: back-pressure while committed data drains" {
+    let dut = sim PacketFifo<u8, 4>()
+    dut.reset()
+    dut.drop = false
+    dut.pop.ready = false
+    // one committed packet of 3 beats
+    for (d, l) in [(1, false), (2, false), (3, true)] {
+        dut.push = Stream { valid: true, data: Beat { data: d, last: l } }
+        dut.step()
+    }
+    // the next packet fills the last slot, then must wait
+    dut.push = Stream { valid: true, data: Beat { data: 4, last: false } }
+    dut.step()
+    dut.push.data = Beat { data: 5, last: true }
+    dut.settle()
+    expect !dut.push.ready
+    dut.pop.ready = true
+    dut.step()                    // pop 1, frees a slot
+    dut.settle()
+    expect dut.push.ready
+    dut.step()                    // pop 2, push 5 (commits 4, 5)
+    dut.push.valid = false
+    for d in [3, 4, 5] {
+        dut.settle()
+        expect dut.pop.valid and dut.pop.data.data == d
+        dut.step()
+    }
+    expect !dut.pop.valid
+}

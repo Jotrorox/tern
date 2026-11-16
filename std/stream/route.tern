@@ -1,0 +1,521 @@
+package std::stream
+
+// Routing: Fork, Join, Join3, Arbiter, Mux, Demux.
+
+// ---------------------------------------------------------------------------
+// Fork
+// ---------------------------------------------------------------------------
+
+/// How `Fork` hands one input beat to several consumers.
+pub enum ForkPolicy {
+    /// All outputs fire in the same cycle; the input waits until every
+    /// consumer is ready. No state, no added latency.
+    Sync,
+    /// Each output fires as soon as its own consumer is ready; a per-branch
+    /// flag remembers which branches already took the current beat, and the
+    /// input fires once all have. Tolerates consumers that are never ready
+    /// at the same time.
+    Eager,
+}
+
+/// Broadcast every input beat to `N` consumers. With `.Sync` the beat
+/// fires when all consumers are ready at once; with `.Eager` it is
+/// delivered to each consumer independently and retired when all have it.
+pub module Fork<T: type, N: uint = 2, Policy: ForkPolicy = .Sync>
+where N >= 1
+{
+    /// Clock (only used by `.Eager`).
+    in clk: clock
+    /// Reset (only used by `.Eager`).
+    in rst: reset
+    /// The beats to broadcast.
+    in in: Stream<T>
+    /// One copy of every beat per consumer.
+    out out: [Stream<T>; N]
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    for i in 0..N {
+        out[i].data = in.data
+    }
+
+    if Policy == .Sync {
+        var all_ready: bool
+        comb {
+            all_ready = true
+            for i in 0..N {
+                all_ready = all_ready and out[i].ready
+            }
+        }
+        in.ready = all_ready
+
+        for i in 0..N {
+            // valid must not depend on this branch's own ready
+            var others_ready: bool
+            comb {
+                others_ready = true
+                for j in 0..N {
+                    if j != i {
+                        others_ready = others_ready and out[j].ready
+                    }
+                }
+            }
+            out[i].valid = in.valid and others_ready
+        }
+
+        /// The input only retires a beat when every branch takes it.
+        property all_or_nothing {
+            always in.fire() |-> all_ready
+        }
+    } else {
+        reg done: bit<N> = all0
+        var accepted: bool
+        comb {
+            accepted = true
+            for i in 0..N {
+                accepted = accepted and (done[i] or out[i].ready)
+            }
+        }
+        in.ready = accepted
+
+        for i in 0..N {
+            out[i].valid = in.valid and !done[i]
+        }
+
+        on clk {
+            if in.fire() {
+                done = all0
+            } else {
+                for i in 0..N {
+                    if out[i].fire() { done[i] = true }
+                }
+            }
+        }
+
+        /// After the input retires a beat every branch is ready for the next.
+        property clears_on_retire {
+            always in.fire() |=> done == all0
+        }
+
+        /// A branch never receives the same beat twice.
+        property no_duplicates {
+            always done[0] |-> !out[0].fire()
+        }
+    }
+}
+
+test "fork sync: fires only when all are ready" {
+    let dut = sim Fork<u8, 3>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: 5 }
+    dut.out[0].ready = true
+    dut.out[1].ready = false
+    dut.out[2].ready = true
+    dut.settle()
+    expect !dut.in.ready
+    expect !dut.out[0].valid       // branch 1 is not ready
+    expect dut.out[1].valid        // the others are ready, so branch 1 sees it
+    dut.out[1].ready = true
+    dut.settle()
+    expect dut.in.ready
+    for i in 0..3 {
+        expect dut.out[i].valid and dut.out[i].data == 5
+    }
+}
+
+test "fork eager: delivers to each branch once, then retires" {
+    let dut = sim Fork<u8, 2, .Eager>()
+    dut.reset()
+    dut.in = Stream { valid: true, data: 11 }
+    dut.out[0].ready = true
+    dut.out[1].ready = false
+    dut.settle()
+    expect dut.out[0].valid and dut.out[1].valid
+    expect !dut.in.ready
+    dut.step()                      // branch 0 takes the beat
+    dut.out[0].ready = false
+    dut.out[1].ready = true
+    dut.settle()
+    expect !dut.out[0].valid        // already delivered
+    expect dut.out[1].valid and dut.out[1].data == 11
+    expect dut.in.ready             // branch 1 completes the beat now
+    dut.step()
+    dut.in.data = 12
+    dut.out[0].ready = true
+    dut.settle()
+    expect dut.out[0].valid and dut.out[0].data == 12
+    expect dut.out[1].valid and dut.in.ready
+}
+
+test "fork eager: random readiness keeps all copies in order" {
+    let dut = sim Fork<u8, 2, .Eager>()
+    dut.reset()
+    var next_in: u8 = 0
+    var next0: u8 = 0
+    var next1: u8 = 0
+    for _ in 0..400 {
+        dut.in = Stream { valid: true, data: next_in }
+        dut.out[0].ready = rand<bool>()
+        dut.out[1].ready = rand<bool>()
+        dut.settle()
+        if dut.out[0].valid and dut.out[0].ready {
+            expect dut.out[0].data == next0
+            next0 = next0 +% 1
+        }
+        if dut.out[1].valid and dut.out[1].ready {
+            expect dut.out[1].data == next1
+            next1 = next1 +% 1
+        }
+        if dut.in.ready { next_in = next_in +% 1 }
+        dut.step()
+    }
+    expect next0 == next_in or next0 == next_in +% 1
+    expect next1 == next_in or next1 == next_in +% 1
+}
+
+// ---------------------------------------------------------------------------
+// Join / Join3
+// ---------------------------------------------------------------------------
+
+/// Wait for one beat on each input and emit them together as a `Pair`.
+/// Both inputs fire in the same cycle as the output. Purely combinational.
+pub module Join<A: type, B: type> {
+    /// First input.
+    in a: Stream<A>
+    /// Second input.
+    in b: Stream<B>
+    /// Both beats together.
+    out out: Stream<Pair<A, B>>
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    out.valid = a.valid and b.valid
+    out.data = Pair { a: a.data, b: b.data }
+    a.ready = out.ready and b.valid
+    b.ready = out.ready and a.valid
+}
+
+/// Wait for one beat on each of three inputs and emit them as a `Triple`.
+/// All inputs fire in the same cycle as the output. Purely combinational.
+pub module Join3<A: type, B: type, C: type> {
+    /// First input.
+    in a: Stream<A>
+    /// Second input.
+    in b: Stream<B>
+    /// Third input.
+    in c: Stream<C>
+    /// All three beats together.
+    out out: Stream<Triple<A, B, C>>
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    out.valid = a.valid and b.valid and c.valid
+    out.data = Triple { a: a.data, b: b.data, c: c.data }
+    a.ready = out.ready and b.valid and c.valid
+    b.ready = out.ready and a.valid and c.valid
+    c.ready = out.ready and a.valid and b.valid
+}
+
+test "join: waits for both inputs" {
+    let dut = sim Join<u8, u16>()
+    dut.out.ready = true
+    dut.a = Stream { valid: true, data: 1 }
+    dut.b = Stream { valid: false, data: 2 }
+    dut.settle()
+    expect !dut.out.valid
+    expect !dut.a.ready
+    dut.b.valid = true
+    dut.settle()
+    expect dut.out.valid
+    expect dut.out.data.a == 1 and dut.out.data.b == 2
+    expect dut.a.ready and dut.b.ready
+}
+
+test "join: back-pressure stalls both inputs" {
+    let dut = sim Join<u8, u8>()
+    dut.a = Stream { valid: true, data: 1 }
+    dut.b = Stream { valid: true, data: 2 }
+    dut.out.ready = false
+    dut.settle()
+    expect dut.out.valid
+    expect !dut.a.ready and !dut.b.ready
+}
+
+test "join3: waits for all three inputs" {
+    let dut = sim Join3<u8, u8, bool>()
+    dut.out.ready = true
+    dut.a = Stream { valid: true, data: 3 }
+    dut.b = Stream { valid: true, data: 4 }
+    dut.c = Stream { valid: false, data: true }
+    dut.settle()
+    expect !dut.out.valid and !dut.a.ready and !dut.b.ready
+    dut.c.valid = true
+    dut.settle()
+    expect dut.out.valid and dut.out.data.a == 3 and dut.out.data.b == 4 and dut.out.data.c
+    expect dut.a.ready and dut.b.ready and dut.c.ready
+}
+
+// ---------------------------------------------------------------------------
+// Arbiter
+// ---------------------------------------------------------------------------
+
+/// How `Arbiter` chooses between simultaneous requests.
+pub enum ArbPolicy {
+    /// The input after the last granted one wins; every requester is served
+    /// within N grants.
+    RoundRobin,
+    /// The lowest-numbered valid input always wins.
+    Fixed,
+}
+
+/// Merge `N` streams into one. A grant is locked while the output is
+/// stalled, so a beat that has been offered stays offered (with the same
+/// `index`) until it fires, as the Stream rules require. Arbitration itself
+/// is combinational (no added latency); put a `Skid` behind it to register
+/// the output.
+pub module Arbiter<T: type, N: uint = 2, Policy: ArbPolicy = .RoundRobin>
+where N >= 2
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; after reset input 0 has the highest priority.
+    in rst: reset
+    /// The competing inputs.
+    in in: [Stream<T>; N]
+    /// The merged stream.
+    out out: Stream<T>
+    /// Which input `out` currently carries (meaningful while `out.valid`).
+    out index: uint<clog2(N)>
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    type Idx = uint<clog2(N)>
+
+    reg last: Idx = N - 1
+    reg locked: bool = false
+    reg lock_idx: Idx = 0
+
+    var found: bool
+    var pick: Idx
+    comb {
+        found = false
+        pick = 0
+        if Policy == .RoundRobin {
+            // first pass: requesters after the last grant
+            for i in 0..N {
+                if !found and in[i].valid and i > last {
+                    found = true
+                    pick = i
+                }
+            }
+        }
+        // second pass (or the only pass for .Fixed): lowest index wins
+        for i in 0..N {
+            if !found and in[i].valid {
+                found = true
+                pick = i
+            }
+        }
+    }
+
+    let sel = if locked { lock_idx } else { pick }
+
+    var ovalid: bool
+    var odata: T
+    comb {
+        ovalid = false
+        odata = in[0].data
+        for i in 0..N {
+            if sel == i {
+                ovalid = in[i].valid
+                odata = in[i].data
+            }
+        }
+    }
+
+    out.valid = ovalid
+    out.data = odata
+    index = sel
+    for i in 0..N {
+        in[i].ready = out.ready and sel == i
+    }
+
+    on clk {
+        locked = out.valid and !out.ready
+        lock_idx = sel
+        if out.fire() { last = sel }
+    }
+
+    /// The grant does not move while the output is stalled.
+    property grant_holds {
+        always (out.valid and !out.ready) |=> stable(index)
+    }
+
+    cover property contention { in[0].valid and in[1].valid }
+}
+
+test "arbiter round robin alternates between busy inputs" {
+    let dut = sim Arbiter<u8, 3>()
+    dut.reset()
+    dut.out.ready = true
+    for i in 0..3 {
+        dut.in[i] = Stream { valid: true, data: (10 + i) as u8 }
+    }
+    for _ in 0..3 {
+        for k in 0..3 {
+            dut.settle()
+            expect dut.out.valid
+            expect dut.index == k as uint<2>
+            expect dut.out.data == (10 + k) as u8
+            dut.step()
+        }
+    }
+}
+
+test "arbiter fixed priority always prefers input 0" {
+    let dut = sim Arbiter<u8, 2, .Fixed>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in[0] = Stream { valid: true, data: 1 }
+    dut.in[1] = Stream { valid: true, data: 2 }
+    for _ in 0..5 {
+        dut.settle()
+        expect dut.index == 0 and dut.out.data == 1
+        expect dut.in[0].ready and !dut.in[1].ready
+        dut.step()
+    }
+    dut.in[0].valid = false
+    dut.settle()
+    expect dut.index == 1 and dut.out.data == 2
+}
+
+test "arbiter keeps a stalled grant" {
+    let dut = sim Arbiter<u8, 2, .Fixed>()
+    dut.reset()
+    dut.out.ready = false
+    dut.in[0] = Stream { valid: false, data: 1 }
+    dut.in[1] = Stream { valid: true, data: 2 }
+    dut.step()
+    dut.in[0].valid = true         // higher priority arrives during the stall
+    dut.settle()
+    expect dut.index == 1 and dut.out.data == 2
+    dut.out.ready = true
+    dut.settle()
+    expect dut.in[1].ready
+    dut.step()
+    dut.in[1].valid = false
+    dut.settle()
+    expect dut.index == 0 and dut.out.data == 1
+}
+
+test "arbiter idle output is not valid" {
+    let dut = sim Arbiter<u8, 4>()
+    dut.reset()
+    for i in 0..4 { dut.in[i].valid = false }
+    dut.out.ready = true
+    dut.settle()
+    expect !dut.out.valid
+}
+
+// ---------------------------------------------------------------------------
+// Mux / Demux
+// ---------------------------------------------------------------------------
+
+/// Select one of `N` input streams with `sel`. Unselected inputs see
+/// `ready` low. `sel` should only change between beats. Combinational.
+pub module Mux<T: type, N: uint = 2>
+where N >= 2
+{
+    /// Index of the input to forward.
+    in sel: uint<clog2(N)>
+    /// The candidate inputs.
+    in in: [Stream<T>; N]
+    /// The selected stream.
+    out out: Stream<T>
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    var ovalid: bool
+    var odata: T
+    comb {
+        ovalid = false
+        odata = in[0].data
+        for i in 0..N {
+            if sel == i {
+                ovalid = in[i].valid
+                odata = in[i].data
+            }
+        }
+    }
+    out.valid = ovalid
+    out.data = odata
+    for i in 0..N {
+        in[i].ready = out.ready and sel == i
+    }
+}
+
+/// Route one input stream to one of `N` outputs chosen by `sel`.
+/// Unselected outputs see `valid` low. `sel` should only change between
+/// beats. Combinational.
+pub module Demux<T: type, N: uint = 2>
+where N >= 2
+{
+    /// Index of the output to drive.
+    in sel: uint<clog2(N)>
+    /// The stream to route.
+    in in: Stream<T>
+    /// The candidate outputs.
+    out out: [Stream<T>; N]
+
+    /// Added latency in cycles.
+    pub const LATENCY: uint = 0
+
+    for i in 0..N {
+        out[i].valid = in.valid and sel == i
+        out[i].data = in.data
+    }
+    var r: bool
+    comb {
+        r = false
+        for i in 0..N {
+            if sel == i { r = out[i].ready }
+        }
+    }
+    in.ready = r
+}
+
+test "mux forwards the selected input only" {
+    let dut = sim Mux<u8, 4>()
+    for i in 0..4 {
+        dut.in[i] = Stream { valid: true, data: (i * 3) as u8 }
+    }
+    dut.out.ready = true
+    for s in 0..4 {
+        dut.sel = s as uint<2>
+        dut.settle()
+        expect dut.out.valid and dut.out.data == (s * 3) as u8
+        for i in 0..4 {
+            expect dut.in[i].ready == (i == s)
+        }
+    }
+}
+
+test "demux routes to the selected output only" {
+    let dut = sim Demux<u8, 2>()
+    dut.in = Stream { valid: true, data: 77 }
+    dut.out[0].ready = false
+    dut.out[1].ready = true
+    dut.sel = 0
+    dut.settle()
+    expect dut.out[0].valid and !dut.out[1].valid
+    expect !dut.in.ready
+    dut.sel = 1
+    dut.settle()
+    expect !dut.out[0].valid and dut.out[1].valid and dut.out[1].data == 77
+    expect dut.in.ready
+}
