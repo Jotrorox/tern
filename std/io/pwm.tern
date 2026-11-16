@@ -1,0 +1,120 @@
+package std::io
+
+/// Pulse-width modulator with a period of 2^W clock cycles.
+///
+/// * In each period the output is high for the first `duty` cycles and low
+///   for the rest: `duty` = 0 is always low, `duty` >= 2^W is always high
+///   (hence `duty` is one bit wider than the counter).
+/// * `duty` is sampled on the last cycle of each period and applies to the
+///   next one, so a change never produces a runt pulse. After reset the first
+///   period is low.
+/// * `en` = false forces the output low immediately; the counter keeps
+///   running so periods stay aligned.
+/// * `period_start` is high on the first cycle of every period.
+pub module Pwm<W: uint = 8>
+where W >= 1
+{
+    /// Clock cycles per PWM period.
+    pub const PERIOD: uint = 1 << W
+    /// Periods until a new `duty` is visible on `pwm` (at most).
+    pub const LATENCY: uint = 1
+
+    /// Clock.
+    in clk: clock
+    /// Reset: counter to zero, duty to zero.
+    in rst: reset
+    /// High cycles per period, 0 ..= 2^W.
+    in duty: uint<W + 1>
+    /// Output enable; low forces `pwm` low.
+    in en: bool
+    /// PWM output.
+    out pwm: bool
+    /// High on the first cycle of each period.
+    out period_start: bool
+
+    reg count: uint<W> = 0
+    reg duty_q: uint<W + 1> = 0
+
+    on clk {
+        count = count +% 1
+        if count == PERIOD - 1 { duty_q = duty }
+    }
+
+    pwm = en and count < duty_q
+    period_start = count == 0
+
+    /// Zero duty never drives the output high.
+    property zero_duty_low { always duty_q == 0 |-> !pwm }
+    /// Disabled means low.
+    property disabled_low { always !en |-> !pwm }
+    /// The duty in force only changes at a period boundary.
+    property duty_changes_at_boundary { always !period_start |-> stable(duty_q) }
+}
+
+test "Pwm high time equals duty" {
+    let dut = sim Pwm<4>()                             // 16-cycle period
+    dut.reset()
+    dut.en = true
+    for duty in [0, 1, 5, 8, 15, 16, 31] {
+        dut.duty = duty
+        dut.step_until(dut.period_start, max: 40)      // duty sampled at the end of the previous period
+        dut.step(16)                                   // the period that still uses the old duty
+        var high = 0
+        for _ in 0..16 {
+            if dut.pwm { high = high + 1 }
+            dut.step()
+        }
+        expect high == (if duty > 16 { 16 } else { duty })
+    }
+}
+
+test "Pwm output is high at the start of the period" {
+    let dut = sim Pwm<3>()
+    dut.reset()
+    dut.en = true
+    dut.duty = 3
+    dut.step(8)                                        // first period after reset is low; duty now in force
+    dut.step_until(dut.period_start, max: 10)
+    for i in 0..8 {
+        expect dut.pwm == (i < 3)
+        dut.step()
+    }
+}
+
+test "Pwm duty change mid-period waits for the next period" {
+    let dut = sim Pwm<4>()
+    dut.reset()
+    dut.en = true
+    dut.duty = 4
+    dut.step(16)
+    dut.step_until(dut.period_start, max: 20)
+    dut.step(2)
+    dut.duty = 12                                      // mid-period
+    var high = 0
+    for _ in 0..14 {
+        if dut.pwm { high = high + 1 }
+        dut.step()
+    }
+    expect high == 2                                   // remaining 2 of the old 4 high cycles
+    expect dut.period_start
+    high = 0
+    for _ in 0..16 {
+        if dut.pwm { high = high + 1 }
+        dut.step()
+    }
+    expect high == 12
+}
+
+test "Pwm enable forces low" {
+    let dut = sim Pwm<4>()
+    dut.reset()
+    dut.en = false
+    dut.duty = 16
+    for _ in 0..64 {
+        dut.step()
+        expect !dut.pwm
+    }
+    dut.en = true
+    dut.settle()
+    expect dut.pwm
+}

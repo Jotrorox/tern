@@ -1,0 +1,182 @@
+package std::io
+
+// std::io: peripheral and pin-level protocol engines.
+//
+// Files in this package:
+//   io.tern          EdgeDetect, Debounce
+//   uart.tern        UartTxCore, UartRxCore, UartTx, UartRx, Uart
+//   spi.tern         SpiMaster, SpiSlave, QspiMaster
+//   i2c.tern         I2cMaster, I2cSlave
+//   pwm.tern         Pwm
+//   quadrature.tern  QuadratureDecoder
+//   ws2812.tern      Ws2812
+//   sevenseg.tern    SevenSegment, hex_to_segments
+//   ps2.tern         Ps2
+//   onewire.tern     OneWire
+//   sdio.tern        Sdio (SPI-mode SD card)
+//
+// Conventions for pins:
+// * Inputs coming from pins are asynchronous; every engine that samples a pin
+//   synchronises it internally (two flops) unless its documentation says
+//   otherwise.
+// * Bidirectional and open-drain pins never appear as `tri<T>` here (that type
+//   exists only on #[top] modules). They are split into `<name>_o` (value to
+//   drive), `<name>_oe` (drive enable) and `<name>_i` (value read back). For an
+//   open-drain line (I2C, 1-Wire, PS/2) only `<name>_oe` is used: the line is
+//   pulled low while it is high and released otherwise. The #[top] module joins
+//   them to the pad.
+
+/// Edge detector for a synchronous `bool`: one-cycle pulses on each rising
+/// and falling edge of `d`.
+///
+/// `rose`, `fell` and `changed` are combinational from `d` and its value in
+/// the previous cycle (`LATENCY` = 0). For an asynchronous pin, synchronise it
+/// first (`std::cdc::Sync2`) or use [Debounce].
+pub module EdgeDetect<Init: bool = false> {
+    /// Cycles from `d` changing to the edge pulse.
+    pub const LATENCY: uint = 0
+
+    /// Clock.
+    in clk: clock
+    /// Reset: the previous value is taken to be `Init`.
+    in rst: reset
+    /// Signal to watch (synchronous to `clk`).
+    in d: bool
+    /// High for one cycle when `d` goes from false to true.
+    out rose: bool
+    /// High for one cycle when `d` goes from true to false.
+    out fell: bool
+    /// High for one cycle on either edge.
+    out changed: bool
+
+    reg prev: bool = Init
+    on clk { prev = d }
+
+    rose = d and !prev
+    fell = !d and prev
+    changed = d != prev
+
+    /// A rising edge is followed by a cycle where `d` was high.
+    property rose_means_high { always rose |=> past(d, 1) }
+    /// An edge pulse never lasts two cycles.
+    property pulse_is_single { never (rose and past(rose, 1)) or (fell and past(fell, 1)) }
+}
+
+/// Switch/button debouncer for an asynchronous input.
+///
+/// * `d` is synchronised with two flops.
+/// * `q` takes the synchronised value only after it has been stable for
+///   `Cycles` consecutive clock cycles; shorter pulses (bounce) are ignored.
+///   Pick `Cycles` from the clock, e.g. `Debounce<Cycles: ClkHz / 100>` for
+///   10 ms.
+/// * `rose`/`fell` pulse for one cycle when `q` changes.
+/// * After reset `q` = `Init`.
+pub module Debounce<Cycles: uint = 1_000_000, Init: bool = false>
+where Cycles >= 1
+{
+    /// Cycles from a stable change of `d` to the change of `q` (synchroniser +
+    /// stability window + output register).
+    pub const LATENCY: uint = Cycles + 2
+
+    /// Clock.
+    in clk: clock
+    /// Reset: output to `Init`.
+    in rst: reset
+    /// Raw input (asynchronous, bouncing).
+    in d: bool
+    /// Debounced level.
+    out q: bool
+    /// One-cycle pulse when `q` goes high.
+    out rose: bool
+    /// One-cycle pulse when `q` goes low.
+    out fell: bool
+
+    reg s1: bool = Init
+    reg s2: bool = Init
+    reg q_r: bool = Init
+    reg q_prev: bool = Init
+    reg count: uint<clog2(Cycles + 1)> = 0
+
+    on clk {
+        s1 = d
+        s2 = s1
+        q_prev = q_r
+        if s2 == q_r {
+            count = 0
+        } else if count == Cycles - 1 {
+            q_r = s2
+            count = 0
+        } else {
+            count = count +% 1
+        }
+    }
+
+    q = q_r
+    rose = q_r and !q_prev
+    fell = !q_r and q_prev
+
+    /// The output only changes towards the synchronised input.
+    property follows_input { always (q_r != past(q_r, 1)) |-> q_r == past(s2, 1) }
+}
+
+test "EdgeDetect pulses once per edge" {
+    let dut = sim EdgeDetect()
+    dut.d = false
+    dut.reset()
+    dut.settle()
+    expect !dut.rose and !dut.fell and !dut.changed
+    dut.d = true
+    dut.settle()
+    expect dut.rose and dut.changed and !dut.fell
+    dut.step()
+    expect !dut.rose and !dut.changed                  // still high: no pulse
+    dut.step(5)
+    expect !dut.rose
+    dut.d = false
+    dut.settle()
+    expect dut.fell and dut.changed and !dut.rose
+    dut.step()
+    expect !dut.fell
+}
+
+test "EdgeDetect honours Init after reset" {
+    let dut = sim EdgeDetect<Init: true>()
+    dut.d = true
+    dut.reset()
+    dut.settle()
+    expect !dut.rose and !dut.changed
+    dut.d = false
+    dut.settle()
+    expect dut.fell
+}
+
+test "Debounce ignores bounces shorter than the window" {
+    let dut = sim Debounce<Cycles: 8>()
+    dut.d = false
+    dut.reset()
+    for _ in 0..10 {
+        dut.d = true
+        dut.step(3)
+        dut.d = false
+        dut.step(3)
+        expect !dut.q and !dut.rose
+    }
+}
+
+test "Debounce follows a stable change after the window" {
+    let dut = sim Debounce<Cycles: 8>()
+    dut.d = false
+    dut.reset()
+    dut.d = true
+    var rose_seen = 0
+    for i in 0..20 {
+        dut.step()
+        if dut.rose { rose_seen = rose_seen + 1 }
+        if i + 1 < 10 { expect !dut.q }               // LATENCY = 10 cycles
+        if i + 1 >= 10 { expect dut.q }
+    }
+    expect rose_seen == 1
+    dut.d = false
+    dut.step(10)
+    expect !dut.q
+}

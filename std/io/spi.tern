@@ -1,0 +1,701 @@
+package std::io
+
+// SPI and quad-SPI.
+//
+// SPI modes (Mode = 2 * CPOL + CPHA):
+//
+//   Mode  CPOL  CPHA  SCK idle  data driven        data sampled
+//   0     0     0     low       before 1st edge,   leading (rising) edge
+//                               then trailing edge
+//   1     0     1     low       leading edge       trailing (falling) edge
+//   2     1     0     high      before 1st edge,   leading (falling) edge
+//                               then trailing edge
+//   3     1     1     high      leading edge       trailing (rising) edge
+//
+// Words are sent MSB first on both MOSI and MISO.
+
+/// SPI master, full duplex, one chip select, all four SPI modes.
+///
+/// * Every `in` handshake sends one `W`-bit word on `mosi` (MSB first) and
+///   receives one word from `miso`, delivered on `out` for one cycle when the
+///   word's last SCK edge has happened.
+/// * `Mode` is the usual SPI mode number 0..3 (CPOL = Mode / 2, CPHA = Mode & 1,
+///   see the table above). SCK idles at CPOL.
+/// * SCK runs at `ClkHz / (2 * HALF_DIV)` with `HALF_DIV = ClkHz / (2 * SckHz)`
+///   rounded down, so the real rate is at most `SckHz`.
+/// * `cs_n` falls half an SCK period before the first edge. If the next word is
+///   already `in.valid` when a word ends, it is accepted in that cycle and sent
+///   back to back with `cs_n` held low; otherwise `cs_n` rises half an SCK
+///   period after the last edge and stays high for at least another half
+///   period before the next transfer.
+/// * `miso` is sampled directly on the internal SCK edge: it is synchronous to
+///   the SCK this module generates, and the slave had half an SCK period to
+///   drive it.
+pub module SpiMaster<ClkHz: uint, SckHz: uint, Mode: uint = 0, W: uint = 8>
+where Mode <= 3, W >= 2, SckHz > 0
+{
+    const CPOL: bool = Mode >= 2
+    const CPHA: bool = Mode == 1 or Mode == 3
+    /// Clock cycles per half SCK period.
+    pub const HALF_DIV: uint = ClkHz / (2 * SckHz)
+    static_assert(HALF_DIV >= 1, "SckHz must be at most ClkHz / 2")
+    const LAST: uint = 2 * W - 1
+    /// Cycles from the `in` handshake (from Idle) until the received word is on `out`.
+    pub const LATENCY: uint = 2 * W * HALF_DIV
+
+    /// Clock.
+    in clk: clock
+    /// Reset: aborts a transfer, deselects the slave.
+    in rst: reset
+    /// Words to send; each handshake starts (or continues) a transfer.
+    in in: Stream<uint<W>>
+    /// Received words, one per sent word, valid for one cycle.
+    out out: Valid<uint<W>>
+    /// SPI clock, idles at CPOL.
+    out sck: bool
+    /// Master out, slave in.
+    out mosi: bool
+    /// Master in, slave out.
+    in miso: bool
+    /// Chip select, active low.
+    out cs_n: bool
+
+    enum State { Idle, Xfer, Hold, Gap }
+
+    reg state: State = .Idle
+    reg tick: uint<clog2(HALF_DIV + 1)> = 0
+    reg edge: uint<clog2(2 * W)> = 0
+    reg sck_q: bool = CPOL
+    reg mosi_q: bool = false
+    reg tx: uint<W> = 0
+    reg rx: uint<W> = 0
+    reg out_valid: bool = false
+    reg out_data: uint<W> = 0
+
+    let half = tick == HALF_DIV - 1
+    let leading = !edge[0]                 // even edges move SCK away from its idle level
+    let last = edge == LAST
+    let sample = leading != CPHA           // CPHA = 0: sample on leading edges, CPHA = 1: on trailing
+    let rx_next: uint<W> = rx[W - 2:0] ++ (miso as uint<1>)
+
+    in.ready = state == .Idle or (state == .Xfer and half and last)
+    out.valid = out_valid
+    out.data = out_data
+    sck = sck_q
+    mosi = mosi_q
+    cs_n = state == .Idle or state == .Gap
+
+    on clk {
+        out_valid = false
+        tick = if state == .Idle or half { 0 } else { tick +% 1 }
+        match state {
+            .Idle => {
+                sck_q = CPOL
+                edge = 0
+            },
+            .Xfer => if half {
+                sck_q = !sck_q
+                edge = edge +% 1
+                if sample { rx = rx_next }
+                // CPHA = 1: each bit goes out on a leading edge. CPHA = 0: the
+                // first bit is out before the first edge (see `in.fire()`), the
+                // rest go out on the trailing edges in between.
+                if (CPHA and leading) or (!CPHA and !leading and !last) {
+                    mosi_q = tx[W - 1]
+                    tx = tx << 1
+                }
+                if last {
+                    out_valid = true
+                    out_data = if CPHA { rx_next } else { rx }
+                    state = .Hold
+                }
+            },
+            .Hold => if half { state = .Gap },
+            .Gap => if half { state = .Idle },
+        }
+        if in.fire() {
+            state = .Xfer
+            edge = 0
+            if CPHA {
+                tx = in.data
+            } else {
+                mosi_q = in.data[W - 1]
+                tx = in.data << 1
+            }
+        }
+    }
+
+    /// SCK is at its idle level whenever the slave is deselected.
+    property sck_idle_while_deselected { always cs_n |-> sck == CPOL }
+    /// MOSI never changes on an edge on which the slave samples it.
+    property mosi_stable_on_sample_edges { always (state == .Xfer and half and sample) |=> stable(mosi) }
+    /// A word is delivered only at the end of a transfer.
+    property out_only_after_last_edge { always out.valid |-> past(state) == .Xfer }
+}
+
+/// SPI slave, oversampled: SCK, CS_N and MOSI are synchronised into `clk` with
+/// two flip-flops each and SCK edges are detected in the `clk` domain.
+///
+/// * `clk` must be at least 8x the SCK frequency (the synchroniser and edge
+///   detector add 3 cycles before MISO can change, and the master samples
+///   half an SCK period after its shifting edge).
+/// * Received words appear on `out` for one cycle, `LATENCY` cycles after the
+///   SCK edge that sampled their last bit (at the pin).
+/// * The reply word comes from `in`: for CPHA = 0 it is taken when CS_N falls
+///   and at every word boundary (its MSB must be on MISO before the first
+///   edge, so one word is also consumed after the last word of a transfer);
+///   for CPHA = 1 it is taken at the first SCK edge of each word. When `in`
+///   is not valid the slave sends all ones.
+/// * `miso_oe` is high while selected; at the top level connect MISO through
+///   a `tri<bool>` pad (or a shared line) driven only when `miso_oe`.
+pub module SpiSlave<W: uint = 8, Mode: uint = 0>
+where Mode <= 3, W >= 2
+{
+    const CPOL: bool = Mode >= 2
+    const CPHA: bool = Mode == 1 or Mode == 3
+    /// Cycles from the sampling SCK edge at the pin to `out.valid`.
+    pub const LATENCY: uint = 3
+
+    /// Clock, at least 8x SCK.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// SPI clock from the master (asynchronous to `clk`).
+    in sck: bool
+    /// Chip select from the master, active low (asynchronous).
+    in cs_n: bool
+    /// Master out, slave in (asynchronous).
+    in mosi: bool
+    /// Slave out, master in.
+    out miso: bool
+    /// High while selected: the slave drives MISO.
+    out miso_oe: bool
+    /// Reply words, sent MSB first; all ones when not valid.
+    in in: Stream<uint<W>>
+    /// Received words, valid for one cycle each.
+    out out: Valid<uint<W>>
+
+    reg sck_m: bool = CPOL
+    reg sck_s: bool = CPOL
+    reg sck_d: bool = CPOL
+    reg cs_m: bool = true
+    reg cs_s: bool = true
+    reg cs_d: bool = true
+    reg mosi_m: bool = false
+    reg mosi_s: bool = false
+
+    reg tx: uint<W> = 0
+    reg rx: uint<W> = 0
+    reg count: uint<clog2(W + 1)> = 0
+    reg miso_q: bool = true
+    reg out_valid: bool = false
+    reg out_data: uint<W> = 0
+
+    let active = !cs_s
+    let cs_fall = cs_d and !cs_s
+    let sck_rose = sck_s and !sck_d
+    let sck_fell = !sck_s and sck_d
+    let lead = active and (if CPOL { sck_fell } else { sck_rose })
+    let trail = active and (if CPOL { sck_rose } else { sck_fell })
+    let word_end = if CPHA { count == W - 1 } else { count == W }
+    let reload = if CPHA { lead and count == 0 } else { cs_fall or (trail and word_end) }
+    let reply: uint<W> = if in.valid { in.data } else { all1 }
+    let rx_next: uint<W> = rx[W - 2:0] ++ (mosi_s as uint<1>)
+
+    in.ready = reload
+    miso = miso_q
+    miso_oe = active
+    out.valid = out_valid
+    out.data = out_data
+
+    on clk {
+        sck_m = sck
+        sck_s = sck_m
+        sck_d = sck_s
+        cs_m = cs_n
+        cs_s = cs_m
+        cs_d = cs_s
+        mosi_m = mosi
+        mosi_s = mosi_m
+        out_valid = false
+        if CPHA {
+            // shift out on leading edges, sample on trailing edges
+            if lead {
+                if count == 0 {
+                    miso_q = reply[W - 1]
+                    tx = reply << 1
+                } else {
+                    miso_q = tx[W - 1]
+                    tx = tx << 1
+                }
+            }
+            if trail {
+                rx = rx_next
+                count = if word_end { 0 } else { count +% 1 }
+                if word_end {
+                    out_valid = true
+                    out_data = rx_next
+                }
+            }
+        } else {
+            // sample on leading edges, shift out on trailing edges
+            if lead {
+                rx = rx_next
+                count = count +% 1
+                if count == W - 1 {
+                    out_valid = true
+                    out_data = rx_next
+                }
+            }
+            if trail and !word_end {
+                miso_q = tx[W - 1]
+                tx = tx << 1
+            }
+            if reload {
+                miso_q = reply[W - 1]
+                tx = reply << 1
+                count = 0
+            }
+        }
+        if !active { count = 0 }
+    }
+
+    /// Nothing is received while deselected.
+    property idle_when_deselected { always !active |=> !out.valid }
+    /// The bit counter never passes one word.
+    property count_bounded { always count <= W }
+}
+
+/// Command for [QspiMaster].
+pub struct QspiCmd {
+    /// Instruction byte, sent MSB first on io0 (e.g. 0x6B Quad Output Fast
+    /// Read, 0x06 Write Enable, 0x05 Read Status... with `len` = 1 read in quad).
+    cmd: u8,
+    /// 24-bit address, sent MSB first on io0 when `has_addr`.
+    addr: uint<24>,
+    /// Send the address phase.
+    has_addr: bool,
+    /// Dummy clocks between address and data (8 for 0x6B).
+    dummy: uint<5>,
+    /// Number of bytes to read in quad mode (0: command only).
+    len: u16,
+}
+
+/// Quad-SPI flash master (SPI mode 0), a documented subset: 1-1-4 reads.
+///
+/// Each command on `in` is one CS_N-low transaction:
+/// 1. the instruction byte on io0 (single line),
+/// 2. optionally a 24-bit address on io0 (single line),
+/// 3. `dummy` clocks with all lines released,
+/// 4. `len` bytes read on io[3:0], high nibble first, delivered on `out`.
+///
+/// This covers Quad Output Fast Read (0x6B, 1-1-4, 8 dummy clocks) and every
+/// command without data (Write Enable 0x06, Chip Erase 0xC7, Sector Erase 0x20
+/// with an address, ...). Quad I/O addressing (1-4-4), quad writes and
+/// single-line data phases are not implemented; enable the flash's QE bit
+/// through another path (e.g. SpiMaster) before using 0x6B.
+///
+/// * io0..io3 are `io_o`/`io_oe`/`io_i` (bit 0 = io0): connect them to
+///   `tri<bool>` pads at the top level. During the single-line phases io2
+///   (WP#) and io3 (HOLD#) are driven high and io1 is released; during dummy
+///   and data phases everything is released.
+/// * The flash changes its outputs on falling SCK edges; `io_i` is sampled on
+///   the rising edges (`SckHz` <= `ClkHz / 4` recommended).
+/// * `out` has no backpressure: SCK is not stopped; buffer in a Fifo if needed.
+/// * `done` pulses when CS_N has risen again after a command.
+pub module QspiMaster<ClkHz: uint, SckHz: uint>
+where SckHz > 0
+{
+    /// Clock cycles per half SCK period.
+    pub const HALF_DIV: uint = ClkHz / (2 * SckHz)
+    static_assert(HALF_DIV >= 1, "SckHz must be at most ClkHz / 2")
+    /// Clock cycles per SCK period (one bit on io0 or one nibble on io[3:0]).
+    pub const SCK_PERIOD: uint = 2 * HALF_DIV
+
+    /// Clock.
+    in clk: clock
+    /// Reset: aborts a transaction.
+    in rst: reset
+    /// Commands, accepted only between transactions.
+    in in: Stream<QspiCmd>
+    /// Bytes read in the data phase, valid for one cycle each.
+    out out: Valid<u8>
+    /// Pulses once when a command has completed and CS_N is high again.
+    out done: bool
+    /// SPI clock (mode 0: idles low).
+    out sck: bool
+    /// Chip select, active low.
+    out cs_n: bool
+    /// Output values for io3..io0.
+    out io_o: bit<4>
+    /// Output enables for io3..io0 (high: drive `io_o`).
+    out io_oe: bit<4>
+    /// Pad values of io3..io0.
+    in io_i: bit<4>
+
+    enum State { Idle, Cmd, Addr, Dummy, Data, Hold, Gap }
+
+    reg state: State = .Idle
+    reg tick: uint<clog2(HALF_DIV + 1)> = 0
+    reg sck_q: bool = false
+    reg shift: bit<32> = 0
+    reg cnt: uint<17> = 0
+    reg req: QspiCmd = all0
+    reg hi: bool = true
+    reg hi_nib: bit<4> = 0
+    reg out_valid: bool = false
+    reg out_data: u8 = 0
+    reg done_q: bool = false
+
+    let half = tick == HALF_DIV - 1
+    let clocking = state == .Cmd or state == .Addr or state == .Dummy or state == .Data
+    let single = state == .Cmd or state == .Addr
+    let data_clocks: uint<17> = (req.len as uint<17>) << 1
+    // what follows the instruction (and the address, if any)
+    let after_addr: State = if req.len == 0 { .Hold } else if req.dummy != 0 { .Dummy } else { .Data }
+    let after_addr_cnt: uint<17> = if req.dummy != 0 { req.dummy as uint<17> } else { data_clocks }
+
+    in.ready = state == .Idle
+    out.valid = out_valid
+    out.data = out_data
+    done = done_q
+    sck = sck_q
+    cs_n = state == .Idle or state == .Gap
+    io_o = 0b110u3 ++ (shift[31] as uint<1>)
+    io_oe = if single { 0b1101 } else { 0b0000 }
+
+    on clk {
+        out_valid = false
+        done_q = false
+        tick = if state == .Idle or half { 0 } else { tick +% 1 }
+        if clocking and half {
+            sck_q = !sck_q
+            if !sck_q {
+                // rising edge: the flash samples io0; in the data phase we sample io[3:0]
+                if state == .Data {
+                    if hi {
+                        hi_nib = io_i
+                    } else {
+                        out_valid = true
+                        out_data = hi_nib ++ io_i
+                    }
+                    hi = !hi
+                }
+            } else {
+                // falling edge: next bit / phase (cnt = SCK periods left in the phase)
+                match state {
+                    .Cmd => {
+                        shift = shift << 1
+                        if cnt != 1 {
+                            cnt = cnt -% 1
+                        } else if req.has_addr {
+                            state = .Addr
+                            cnt = 24
+                        } else {
+                            state = after_addr
+                            cnt = after_addr_cnt
+                        }
+                    },
+                    .Addr => {
+                        shift = shift << 1
+                        if cnt != 1 {
+                            cnt = cnt -% 1
+                        } else {
+                            state = after_addr
+                            cnt = after_addr_cnt
+                        }
+                    },
+                    .Dummy => if cnt != 1 {
+                        cnt = cnt -% 1
+                    } else {
+                        state = .Data
+                        cnt = data_clocks
+                    },
+                    .Data => if cnt != 1 { cnt = cnt -% 1 } else { state = .Hold },
+                    .Idle | .Hold | .Gap => {},
+                }
+            }
+        }
+        if state == .Hold and half { state = .Gap }
+        if state == .Gap and half {
+            state = .Idle
+            done_q = true
+        }
+        if in.fire() {
+            req = in.data
+            shift = in.data.cmd ++ in.data.addr
+            cnt = 8
+            hi = true
+            state = .Cmd
+        }
+    }
+
+    /// SCK idles low while the flash is deselected.
+    property sck_low_when_deselected { always cs_n |-> !sck }
+    /// The single-line output only changes on falling SCK edges.
+    property io0_stable_on_rising_edges { always (clocking and half and !sck) |=> stable(io_o) }
+}
+
+// ---------------------------------------------------------------------------
+// Test benches (not public).
+
+/// SpiMaster wired to SpiSlave; counts and latches the words each side received.
+module SpiPair<Mode: uint> {
+    in clk: clock
+    in rst: reset
+    /// Words the master sends.
+    in m_in: Stream<u8>
+    /// Words the slave replies with.
+    in s_in: Stream<u8>
+    /// Chip select on the wire.
+    out cs_n: bool
+    /// Last word received by the master.
+    out m_last: u8
+    /// Words received by the master.
+    out m_count: u8
+    /// Last word received by the slave.
+    out s_last: u8
+    /// Words received by the slave.
+    out s_count: u8
+
+    let m = SpiMaster<ClkHz: 16, SckHz: 1, Mode: Mode, W: 8>(in: m_in)
+    let s = SpiSlave<W: 8, Mode: Mode>(sck: m.sck, cs_n: m.cs_n, mosi: m.mosi, in: s_in)
+    m.miso = s.miso
+    cs_n = m.cs_n
+
+    reg m_last_q: u8 = 0
+    reg m_count_q: u8 = 0
+    reg s_last_q: u8 = 0
+    reg s_count_q: u8 = 0
+    on clk {
+        if m.out.valid { m_last_q = m.out.data; m_count_q = m_count_q +% 1 }
+        if s.out.valid { s_last_q = s.out.data; s_count_q = s_count_q +% 1 }
+    }
+    m_last = m_last_q
+    m_count = m_count_q
+    s_last = s_last_q
+    s_count = s_count_q
+}
+
+/// SpiMaster with MISO tied to MOSI.
+module SpiLoopback<Mode: uint> {
+    in clk: clock
+    in rst: reset
+    /// Words to send.
+    in in: Stream<u8>
+    /// Words received.
+    out out: Valid<u8>
+    let m = SpiMaster<ClkHz: 16, SckHz: 1, Mode: Mode, W: 8>(in: in)
+    m.miso = m.mosi
+    out = m.out
+}
+
+test "SpiMaster mode 0 waveform: CS, idle level, MSB first, sample on rising edge" {
+    let dut = sim SpiMaster<ClkHz: 8, SckHz: 1, Mode: 0, W: 8>()   // HALF_DIV = 4
+    dut.reset()
+    dut.miso = false
+    expect dut.cs_n and !dut.sck
+    dut.in = Stream { valid: true, data: 0b1010_0110 }
+    dut.settle()
+    expect dut.in.ready
+    dut.step()
+    dut.in.valid = false
+    expect !dut.cs_n and !dut.sck
+    expect dut.mosi                       // MSB is out before the first edge
+    let bits = [true, false, true, false, false, true, true, false]
+    for b in bits {
+        expect dut.mosi == b
+        dut.step(4)
+        expect dut.sck                    // rising edge: slave samples
+        expect dut.mosi == b
+        dut.step(4)
+        expect !dut.sck
+    }
+    expect dut.out.valid and dut.out.data == 0
+    dut.step(4)
+    expect dut.cs_n
+}
+
+test "SpiMaster CPOL = 1 idles high" {
+    let dut = sim SpiMaster<ClkHz: 8, SckHz: 1, Mode: 3, W: 8>()
+    dut.reset()
+    dut.miso = true
+    expect dut.sck and dut.cs_n
+    dut.in = Stream { valid: true, data: 0x00 }
+    dut.step()
+    dut.in.valid = false
+    dut.step_until(dut.out.valid, max: 100)
+    expect dut.out.data == 0xFF
+    dut.step_until(dut.cs_n, max: 100)
+    expect dut.sck
+}
+
+test "SpiMaster loopback returns the sent word in all four modes" {
+    let d0 = sim SpiLoopback<0>()
+    let d1 = sim SpiLoopback<1>()
+    let d2 = sim SpiLoopback<2>()
+    let d3 = sim SpiLoopback<3>()
+    d0.reset(); d1.reset(); d2.reset(); d3.reset()
+    for v in [0xA5, 0x3C, 0x01, 0x80] {
+        d0.in = Stream { valid: true, data: v }
+        d1.in = Stream { valid: true, data: v }
+        d2.in = Stream { valid: true, data: v }
+        d3.in = Stream { valid: true, data: v }
+        d0.step(); d1.step(); d2.step(); d3.step()
+        d0.in.valid = false; d1.in.valid = false; d2.in.valid = false; d3.in.valid = false
+        d0.step_until(d0.out.valid, max: 300); expect d0.out.data == v
+        d1.step_until(d1.out.valid, max: 300); expect d1.out.data == v
+        d2.step_until(d2.out.valid, max: 300); expect d2.out.data == v
+        d3.step_until(d3.out.valid, max: 300); expect d3.out.data == v
+        d0.step(20); d1.step(20); d2.step(20); d3.step(20)
+    }
+}
+
+test "SpiMaster and SpiSlave exchange words in mode 0" {
+    let dut = sim SpiPair<0>()
+    dut.reset()
+    dut.s_in = Stream { valid: true, data: 0x3C }
+    dut.m_in = Stream { valid: true, data: 0xA5 }
+    dut.step()
+    dut.m_in.valid = false
+    dut.step_until(dut.m_count == 1 and dut.s_count == 1, max: 400)
+    expect dut.m_last == 0x3C and dut.s_last == 0xA5
+}
+
+test "SpiMaster and SpiSlave exchange words in mode 1" {
+    let dut = sim SpiPair<1>()
+    dut.reset()
+    dut.s_in = Stream { valid: true, data: 0x96 }
+    dut.m_in = Stream { valid: true, data: 0x5A }
+    dut.step()
+    dut.m_in.valid = false
+    dut.step_until(dut.m_count == 1 and dut.s_count == 1, max: 400)
+    expect dut.m_last == 0x96 and dut.s_last == 0x5A
+}
+
+test "SpiMaster and SpiSlave exchange words in mode 2" {
+    let dut = sim SpiPair<2>()
+    dut.reset()
+    dut.s_in = Stream { valid: true, data: 0x81 }
+    dut.m_in = Stream { valid: true, data: 0x7E }
+    dut.step()
+    dut.m_in.valid = false
+    dut.step_until(dut.m_count == 1 and dut.s_count == 1, max: 400)
+    expect dut.m_last == 0x81 and dut.s_last == 0x7E
+}
+
+test "SpiMaster and SpiSlave exchange words in mode 3" {
+    let dut = sim SpiPair<3>()
+    dut.reset()
+    dut.s_in = Stream { valid: true, data: 0xC3 }
+    dut.m_in = Stream { valid: true, data: 0x24 }
+    dut.step()
+    dut.m_in.valid = false
+    dut.step_until(dut.m_count == 1 and dut.s_count == 1, max: 400)
+    expect dut.m_last == 0xC3 and dut.s_last == 0x24
+}
+
+test "SpiMaster keeps CS low across back-to-back words" {
+    let dut = sim SpiPair<0>()
+    dut.reset()
+    dut.s_in = Stream { valid: true, data: 0x55 }
+    dut.m_in = Stream { valid: true, data: 0x11 }
+    dut.step()
+    var cs_rose = false
+    for _ in 0..1000 {
+        dut.settle()
+        // the third word is already accepted when the second one is delivered
+        if dut.m_count == 2 { dut.m_in.valid = false }
+        if dut.m_count < 3 and dut.cs_n { cs_rose = true }
+        dut.step()
+    }
+    expect !cs_rose
+    expect dut.m_count == 3 and dut.s_count == 3
+    expect dut.s_last == 0x11 and dut.m_last == 0x55
+    expect dut.cs_n
+}
+
+test "SpiSlave sends all ones when it has no reply" {
+    let dut = sim SpiPair<1>()
+    dut.reset()
+    dut.s_in.valid = false
+    dut.m_in = Stream { valid: true, data: 0x42 }
+    dut.step()
+    dut.m_in.valid = false
+    dut.step_until(dut.m_count == 1, max: 400)
+    expect dut.m_last == 0xFF
+    dut.step(20)
+    expect dut.s_count == 1 and dut.s_last == 0x42
+}
+
+test "QspiMaster quad output fast read (0x6B, 1-1-4, 8 dummy clocks)" {
+    let dut = sim QspiMaster<ClkHz: 8, SckHz: 1>()        // HALF_DIV = 4
+    dut.reset()
+    dut.io_i = 0
+    dut.in = Stream { valid: true, data: QspiCmd { cmd: 0x6B, addr: 0x01_2345, has_addr: true, dummy: 8, len: 4 } }
+    dut.step()
+    dut.in.valid = false
+    expect !dut.cs_n and dut.io_oe == 0b1101 and dut.io_o[3] and dut.io_o[2]
+    // behavioural flash: samples io0 on rising edges, drives nibbles on falling edges
+    var prev_sck = false
+    var rises: u16 = 0
+    var cmd: u8 = 0
+    var addr: uint<24> = 0
+    var got: [u8; 4] = [0, 0, 0, 0]
+    var count: u8 = 0
+    var done = false
+    for _ in 0..1000 {
+        dut.settle()
+        if dut.out.valid {
+            got[count as uint<2>] = dut.out.data
+            count = count +% 1
+        }
+        if dut.done { done = true }
+        if !dut.cs_n {
+            if dut.sck and !prev_sck {
+                let b: u8 = if dut.io_o[0] { 1 } else { 0 }
+                if rises < 8 { cmd = (cmd << 1) | b }
+                else if rises < 32 { addr = (addr << 1) | b }
+                if rises >= 40 { expect dut.io_oe == 0 }
+                rises = rises +% 1
+            }
+            if !dut.sck and prev_sck and rises >= 40 {
+                let k = rises -% 40                       // nibble index
+                let v = (0xA0 + (k >> 1)) as u8           // byte j = 0xA0 + j
+                dut.io_i = if k[0] { v[3:0] } else { v[7:4] }
+            }
+        }
+        prev_sck = dut.sck
+        dut.step()
+    }
+    expect cmd == 0x6B and addr == 0x01_2345
+    expect rises == 8 + 24 + 8 + 8
+    expect count == 4
+    expect got[0] == 0xA0 and got[1] == 0xA1 and got[2] == 0xA2 and got[3] == 0xA3
+    expect done and dut.cs_n
+}
+
+test "QspiMaster command without address or data (write enable)" {
+    let dut = sim QspiMaster<ClkHz: 8, SckHz: 1>()
+    dut.reset()
+    dut.io_i = 0
+    dut.in = Stream { valid: true, data: QspiCmd { cmd: 0x06, addr: 0, has_addr: false, dummy: 0, len: 0 } }
+    dut.step()
+    dut.in.valid = false
+    var prev_sck = false
+    var rises: u8 = 0
+    var cmd: u8 = 0
+    var outs: u8 = 0
+    for _ in 0..200 {
+        dut.settle()
+        if dut.out.valid { outs = outs +% 1 }
+        if !dut.cs_n and dut.sck and !prev_sck {
+            cmd = (cmd << 1) | (if dut.io_o[0] { 1 } else { 0 })
+            rises = rises +% 1
+        }
+        prev_sck = dut.sck
+        dut.step()
+    }
+    expect rises == 8 and cmd == 0x06 and outs == 0
+    expect dut.cs_n and dut.in.ready
+}

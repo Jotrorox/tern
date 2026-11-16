@@ -1,0 +1,161 @@
+package std::io
+
+/// Segment pattern of a hexadecimal digit, active high, bit 0 = segment a
+/// through bit 6 = segment g (the usual gfedcba order):
+///
+/// ```
+///    aaa
+///   f   b
+///    ggg
+///   e   c
+///    ddd
+/// ```
+/// Letters A-F are drawn as A, b, C, d, E, F.
+pub fn hex_to_segments(v: uint<4>) -> bit<7> {
+    match v {
+        0x0 => 0b011_1111,
+        0x1 => 0b000_0110,
+        0x2 => 0b101_1011,
+        0x3 => 0b100_1111,
+        0x4 => 0b110_0110,
+        0x5 => 0b110_1101,
+        0x6 => 0b111_1101,
+        0x7 => 0b000_0111,
+        0x8 => 0b111_1111,
+        0x9 => 0b110_1111,
+        0xA => 0b111_0111,
+        0xB => 0b111_1100,
+        0xC => 0b011_1001,
+        0xD => 0b101_1110,
+        0xE => 0b111_1001,
+        0xF => 0b111_0001,
+    }
+}
+
+/// Multiplexed driver for a `Digits`-digit seven-segment display that shares
+/// one set of segment lines between digits.
+///
+/// * Digit `i` shows the hex value `digits[i]` with its decimal point from
+///   `dp[i]`; a digit whose `enable[i]` is low stays dark.
+/// * The digits are lit one at a time, each for `ScanCycles` clock cycles,
+///   in order 0, 1, ..., Digits - 1. For a flicker-free display choose
+///   `ScanCycles` so that every digit is refreshed at 60 Hz or more, e.g.
+///   `ClkHz / (1000 * Digits)` for 1 kHz per digit.
+/// * `seg` uses bit 0 = a .. bit 6 = g (see [hex_to_segments]); `an[i]`
+///   selects digit `i`. Polarity is set per board with `SegActiveLow` and
+///   `AnActiveLow` (common-anode boards with PNP drivers use both low).
+/// * Outputs are combinational from the scan registers and the inputs.
+pub module SevenSegment<Digits: uint = 4, ScanCycles: uint = 50_000, SegActiveLow: bool = true, AnActiveLow: bool = true>
+where Digits >= 1, ScanCycles >= 2
+{
+    const SW: uint = if Digits > 1 { clog2(Digits) } else { 1 }
+
+    /// Clock.
+    in clk: clock
+    /// Reset: scanning restarts at digit 0.
+    in rst: reset
+    /// Value of each digit, 0x0 ..= 0xF.
+    in digits: [uint<4>; Digits]
+    /// Decimal point of each digit.
+    in dp: bit<Digits>
+    /// Digit enable; a disabled digit stays dark.
+    in enable: bit<Digits>
+    /// Segment lines a (bit 0) .. g (bit 6).
+    out seg: bit<7>
+    /// Decimal-point segment line.
+    out dot: bool
+    /// Digit select lines; digit `i` is lit while `an[i]` is active.
+    out an: bit<Digits>
+
+    reg sel: uint<SW> = 0
+    reg tick: uint<clog2(ScanCycles)> = 0
+
+    on clk {
+        if tick == ScanCycles - 1 {
+            tick = 0
+            sel = if sel == Digits - 1 { 0 } else { sel +% 1 }
+        } else {
+            tick = tick +% 1
+        }
+    }
+
+    var cur: uint<4> = 0
+    var cur_dp: bool = false
+    var cur_en: bool = false
+    var an_hi: bit<Digits> = all0
+    comb {
+        for i in 0..Digits {
+            if sel == i {
+                cur = digits[i]
+                cur_dp = dp[i]
+                cur_en = enable[i]
+            }
+            an_hi[i] = sel == i and enable[i]
+        }
+    }
+
+    let seg_hi: bit<7> = if cur_en { hex_to_segments(cur) } else { all0 }
+    let dot_hi = cur_en and cur_dp
+    seg = if SegActiveLow { ~seg_hi } else { seg_hi }
+    dot = if SegActiveLow { !dot_hi } else { dot_hi }
+    an = if AnActiveLow { ~an_hi } else { an_hi }
+
+    /// At most one digit is lit at a time.
+    property one_digit_at_a_time { always count_ones(an_hi) <= 1 }
+    /// The scan index stays in range.
+    property sel_in_range { always sel <= Digits - 1 }
+}
+
+test "hex_to_segments matches the standard patterns" {
+    let want = [0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07,
+                0x7F, 0x6F, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71]
+    for v in 0..16 {
+        expect hex_to_segments(v) == want[v]
+    }
+}
+
+test "SevenSegment scans the digits in order" {
+    let dut = sim SevenSegment<Digits: 4, ScanCycles: 3, SegActiveLow: false, AnActiveLow: false>()
+    dut.reset()
+    dut.digits = [0x1, 0x2, 0xA, 0xF]
+    dut.dp = 0b0100
+    dut.enable = 0b1111
+    for _ in 0..2 {
+        for i in 0..4 {
+            for _ in 0..3 {
+                dut.settle()
+                expect dut.an == (1 << i)
+                expect dut.seg == hex_to_segments(dut.digits[i])
+                expect dut.dot == (i == 2)
+                dut.step()
+            }
+        }
+    }
+}
+
+test "SevenSegment applies active-low polarity and blanks disabled digits" {
+    let dut = sim SevenSegment<Digits: 2, ScanCycles: 2>()      // both active low
+    dut.reset()
+    dut.digits = [0x8, 0x8]
+    dut.dp = 0b11
+    dut.enable = 0b10
+    dut.settle()
+    expect dut.an == 0b11                             // digit 0 disabled: nothing selected
+    expect dut.seg == 0b111_1111 and dut.dot         // all segments off (high)
+    dut.step(2)
+    expect dut.an == 0b01                             // digit 1 selected (low)
+    expect dut.seg == 0b000_0000 and !dut.dot        // "8." lit
+}
+
+test "SevenSegment works with a digit count that is not a power of two" {
+    let dut = sim SevenSegment<Digits: 3, ScanCycles: 2, SegActiveLow: false, AnActiveLow: false>()
+    dut.reset()
+    dut.digits = [0x0, 0x1, 0x2]
+    dut.dp = 0
+    dut.enable = 0b111
+    for i in [0, 1, 2, 0, 1, 2] {
+        dut.settle()
+        expect dut.an == (1 << i)
+        dut.step(2)
+    }
+}

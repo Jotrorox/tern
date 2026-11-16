@@ -1,0 +1,149 @@
+package std::io
+
+/// WS2812/WS2812B ("NeoPixel") LED chain driver.
+///
+/// * Each `in` beat is one LED: 24 bits as 0xGGRRBB (the chip's wire order),
+///   sent MSB first.
+/// * Bit timing is derived from `ClkHz`: a bit lasts 1.25 us; a 0 is high for
+///   0.40 us, a 1 for 0.80 us (datasheet: +-150 ns), the rest of the bit low.
+/// * Pixels offered back to back are sent without a gap: the next pixel is
+///   accepted in the last cycle of the previous one's last bit.
+/// * When no pixel is waiting at that point the frame ends: the line is held
+///   low for `ResetUs` microseconds, which latches the colours into the LEDs,
+///   and only then is the next pixel accepted. Use `ResetUs` = 50 for original
+///   WS2812, 280 (default) for WS2812B and later revisions.
+/// * Within a frame the producer must therefore keep `in.valid` high (e.g. by
+///   reading from a FIFO); a stall ends the frame.
+pub module Ws2812<ClkHz: uint, ResetUs: uint = 280> {
+    /// Clock cycles per bit (1.25 us).
+    pub const T_BIT: uint = ClkHz * 125 / 100_000_000
+    /// High time of a 0 bit (0.40 us), in cycles.
+    pub const T0H: uint = ClkHz * 40 / 100_000_000
+    /// High time of a 1 bit (0.80 us), in cycles.
+    pub const T1H: uint = ClkHz * 80 / 100_000_000
+    /// Low time that latches the frame, in cycles.
+    pub const T_RESET: uint = ClkHz * ResetUs / 1_000_000
+    static_assert(ClkHz >= 5_000_000, "Ws2812: needs a clock of at least 5 MHz")
+    static_assert(T_RESET >= 1, "Ws2812: ResetUs must be at least 1")
+    /// Cycles from the `in` handshake to the first rising edge on `dout`.
+    pub const LATENCY: uint = 1
+
+    /// Clock at `ClkHz`.
+    in clk: clock
+    /// Reset: line low, no frame in progress.
+    in rst: reset
+    /// Pixels, 0xGGRRBB.
+    in in: Stream<uint<24>>
+    /// Data line to the first LED.
+    out dout: bool
+    /// High while a frame is being sent or latched.
+    out busy: bool
+
+    enum State { Idle, Bit, Latch }
+    reg state: State = .Idle
+    reg shift: uint<24> = 0
+    reg bit_idx: uint<5> = 0
+    reg cnt: uint<clog2(T_BIT)> = 0
+    reg rcnt: uint<clog2(T_RESET + 1)> = 0
+
+    let bit_end = cnt == T_BIT - 1
+    let last_bit = bit_idx == 23
+    let high_time: uint<clog2(T_BIT)> = if shift[23] { T1H } else { T0H }
+
+    in.ready = state == .Idle or (state == .Bit and bit_end and last_bit)
+    dout = state == .Bit and cnt < high_time
+    busy = state != .Idle
+
+    on clk {
+        match state {
+            .Idle => if in.valid {
+                shift = in.data
+                bit_idx = 0
+                cnt = 0
+                state = .Bit
+            },
+            .Bit => {
+                cnt = if bit_end { 0 } else { cnt +% 1 }
+                if bit_end {
+                    if !last_bit {
+                        shift = shift << 1
+                        bit_idx = bit_idx +% 1
+                    } else if in.valid {
+                        shift = in.data
+                        bit_idx = 0
+                    } else {
+                        rcnt = 0
+                        state = .Latch
+                    }
+                }
+            },
+            .Latch => if rcnt == T_RESET - 1 { state = .Idle } else { rcnt = rcnt +% 1 },
+        }
+    }
+
+    /// The line is low while latching.
+    property latch_low { always state == .Latch |-> !dout }
+    /// An accepted pixel starts with a high pulse in the next cycle.
+    property accept_starts_bit { always in.fire() |=> state == .Bit and dout }
+    /// No pixel is accepted mid-pixel.
+    property accept_only_at_pixel_boundary { always (state == .Bit and !(bit_end and last_bit)) |-> !in.ready }
+}
+
+test "Ws2812 encodes 0 and 1 bits with the datasheet high times" {
+    let dut = sim Ws2812<ClkHz: 20_000_000, ResetUs: 50>()   // T_BIT 25, T0H 8, T1H 16
+    dut.reset()
+    let v: uint<24> = 0xA5_3C_F0
+    dut.in = Stream { valid: true, data: v }
+    dut.step()
+    dut.in.valid = false
+    for i in 0..24 {
+        var high = 0
+        for _ in 0..25 {
+            if dut.dout { high = high + 1 }
+            dut.step()
+        }
+        expect high == (if v[23 - i] { 16 } else { 8 })
+    }
+    expect dut.busy and !dut.dout                      // latching
+}
+
+test "Ws2812 latches for ResetUs after the last pixel" {
+    let dut = sim Ws2812<ClkHz: 20_000_000, ResetUs: 50>()   // T_RESET 1000
+    dut.reset()
+    dut.in = Stream { valid: true, data: 0x000000 }
+    dut.step()
+    dut.in.valid = false
+    dut.step(24 * 25)
+    expect dut.busy and !dut.in.ready
+    for _ in 0..999 {
+        expect !dut.dout and !dut.in.ready
+        dut.step()
+    }
+    dut.step()
+    expect !dut.busy and dut.in.ready
+}
+
+test "Ws2812 sends back-to-back pixels without a gap" {
+    let dut = sim Ws2812<ClkHz: 20_000_000, ResetUs: 50>()
+    dut.reset()
+    let pixels = [0xFFFFFF, 0x000001]
+    var accepted = 0
+    var highs = 0
+    var rises = 0
+    var last = false
+    dut.in = Stream { valid: true, data: pixels[0] }
+    for _ in 0..(2 * 24 * 25 + 1) {
+        let fire = dut.in.valid and dut.in.ready
+        if dut.dout { highs = highs + 1 }
+        if dut.dout and !last { rises = rises + 1 }
+        last = dut.dout
+        dut.step()
+        if fire {
+            accepted = accepted + 1
+            if accepted == 1 { dut.in.data = pixels[1] } else { dut.in.valid = false }
+        }
+    }
+    expect accepted == 2
+    expect rises == 48                                 // one rising edge per bit, no missing bit
+    expect highs == 24 * 16 + 23 * 8 + 16
+}

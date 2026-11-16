@@ -1,0 +1,540 @@
+package std::io
+
+use std::fifo::Fifo
+
+// UART, 8N1: one start bit (low), 8 data bits LSB first, no parity, one stop
+// bit (high). The line idles high.
+//
+// UartTxCore / UartRxCore take the bit time as a runtime divisor (clock cycles
+// per bit); UartTx / UartRx fix it at elaboration from ClkHz / Baud; Uart
+// combines both cores with FIFOs and a runtime divisor.
+
+/// 8N1 UART transmitter with a runtime bit time.
+///
+/// * A byte is accepted on `in` (handshake) only while idle; the start bit
+///   begins on the following cycle and the byte is sent LSB first, followed
+///   by one stop bit. `in.ready` rises again after the stop bit.
+/// * `divisor` is the number of clock cycles per bit (`ClkHz / Baud`). It is
+///   sampled when a byte is accepted, so it may change between frames but not
+///   within one. Must be at least 1.
+pub module UartTxCore<DivW: uint = 16>
+where DivW >= 1
+{
+    /// Cycles from the `in` handshake to the start bit on `txd`.
+    pub const LATENCY: uint = 1
+
+    /// Clock.
+    in clk: clock
+    /// Reset: line idle (high), nothing in flight.
+    in rst: reset
+    /// Clock cycles per bit, at least 1. Sampled at the start of each frame.
+    in divisor: uint<DivW>
+    /// Bytes to send; accepted only while idle.
+    in in: Stream<u8>
+    /// Serial output, idle high.
+    out txd: bool
+    /// High while a frame is being sent.
+    out busy: bool
+
+    enum State { Idle, Start, Data, Stop }
+    reg state: State = .Idle
+    reg div_q: uint<DivW> = 1
+    reg tick: uint<DivW> = 0        // counts down; a bit ends when it reaches 0
+    reg bit_idx: uint<3> = 0
+    reg shift: u8 = 0
+
+    let baud_tick = tick == 0
+
+    in.ready = state == .Idle
+    busy = state != .Idle
+    txd = match state {
+        .Idle | .Stop => true,
+        .Start => false,
+        .Data => shift[0],
+    }
+
+    on clk {
+        if state != .Idle {
+            tick = if baud_tick { div_q -% 1 } else { tick -% 1 }
+        }
+        match state {
+            .Idle => if in.valid {
+                shift = in.data
+                div_q = divisor
+                tick = divisor -% 1
+                bit_idx = 0
+                state = .Start
+            },
+            .Start => if baud_tick { state = .Data },
+            .Data => if baud_tick {
+                shift = shift >> 1
+                bit_idx = bit_idx +% 1
+                if bit_idx == 7 { state = .Stop }
+            },
+            .Stop => if baud_tick { state = .Idle },
+        }
+    }
+
+    /// The line is high whenever no frame is in flight.
+    property idle_line_high { always !busy |-> txd }
+    /// An accepted byte always starts a frame with a start bit.
+    property accept_starts_frame { always in.fire() |=> state == .Start and !txd }
+    /// The shift register only moves on bit boundaries.
+    property data_stable_within_bit { always (state == .Data and !baud_tick) |=> stable(shift) }
+}
+
+/// 8N1 UART receiver with a runtime bit time.
+///
+/// * `rxd` is asynchronous; it passes through a two-flop synchroniser.
+/// * A frame starts on a falling edge of the line. The start bit is
+///   re-checked at its middle (a shorter low pulse is ignored as a glitch);
+///   each data bit and the stop bit are then sampled at their middle.
+/// * A frame whose stop bit is high delivers its byte on `out`; one whose stop
+///   bit is low is dropped and pulses `frame_error` for one cycle.
+/// * `out` holds one byte until it is accepted. A byte that completes while
+///   the previous one is still unaccepted is dropped and pulses `overrun`.
+/// * `out.valid` rises 9.5 bit times plus `LATENCY` cycles after the falling
+///   edge of the start bit (`LATENCY` covers the synchroniser, the edge
+///   detector and the output register).
+/// * `divisor` is clock cycles per bit, at least 4 (16 or more gives the best
+///   tolerance to baud-rate mismatch). It is sampled at each start bit.
+pub module UartRxCore<DivW: uint = 16>
+where DivW >= 3
+{
+    /// Cycles beyond 9.5 bit times from the start-bit edge to `out.valid`.
+    pub const LATENCY: uint = 3
+
+    /// Clock.
+    in clk: clock
+    /// Reset: receiver idle, output empty.
+    in rst: reset
+    /// Clock cycles per bit, at least 4. Sampled at each start bit.
+    in divisor: uint<DivW>
+    /// Serial input (asynchronous), idle high.
+    in rxd: bool
+    /// Received bytes, held until accepted.
+    out out: Stream<u8>
+    /// One-cycle pulse: a frame ended with a low stop bit (byte dropped).
+    out frame_error: bool
+    /// One-cycle pulse: a byte arrived while `out` was still full (new byte dropped).
+    out overrun: bool
+
+    // two-flop synchroniser plus one flop for edge detection; idle high
+    reg s1: bool = true
+    reg s2: bool = true
+    reg s3: bool = true
+    let line = s2
+    let fall = s3 and !s2
+
+    enum State { Idle, Start, Data, Stop }
+    reg state: State = .Idle
+    reg div_q: uint<DivW> = 4
+    reg tick: uint<DivW> = 0
+    reg bit_idx: uint<3> = 0
+    reg shift: u8 = 0
+    reg out_valid: bool = false
+    reg out_data: u8 = 0
+    reg frame_error_q: bool = false
+    reg overrun_q: bool = false
+
+    let baud_tick = tick == 0
+
+    out.valid = out_valid
+    out.data = out_data
+    frame_error = frame_error_q
+    overrun = overrun_q
+
+    on clk {
+        s1 = rxd
+        s2 = s1
+        s3 = s2
+        frame_error_q = false
+        overrun_q = false
+        if out.fire() { out_valid = false }
+        if state != .Idle {
+            tick = if baud_tick { div_q -% 1 } else { tick -% 1 }
+        }
+        match state {
+            .Idle => if fall {
+                div_q = divisor
+                tick = (divisor >> 1) -% 1      // wait half a bit: middle of the start bit
+                state = .Start
+            },
+            .Start => if baud_tick {
+                // still low at its middle: a real start bit; otherwise a glitch
+                state = if line { .Idle } else { .Data }
+                bit_idx = 0
+            },
+            .Data => if baud_tick {
+                shift = (line as uint<1>) ++ shift[7:1]     // LSB first: shift in from the top
+                bit_idx = bit_idx +% 1
+                if bit_idx == 7 { state = .Stop }
+            },
+            .Stop => if baud_tick {
+                state = .Idle
+                if !line {
+                    frame_error_q = true
+                } else if out_valid and !out.ready {
+                    overrun_q = true
+                } else {
+                    out_valid = true
+                    out_data = shift
+                }
+            },
+        }
+    }
+
+    /// A received byte is held until it is accepted.
+    property out_held { always (out.valid and !out.ready) |=> out.valid and stable(out.data) }
+    /// A frame error never delivers a byte.
+    property frame_error_drops { never frame_error and rose(out.valid) }
+}
+
+/// 8N1 UART transmitter at a fixed baud rate (`ClkHz / Baud` cycles per bit).
+///
+/// See [UartTxCore] for the frame format and handshake: one byte per `in`
+/// handshake, accepted only while idle, LSB first, one stop bit.
+pub module UartTx<ClkHz: uint, Baud: uint = 115_200>
+where Baud > 0
+{
+    /// Clock cycles per bit.
+    pub const DIV: uint = ClkHz / Baud
+    static_assert(DIV >= 1, "UartTx: clock slower than the baud rate")
+    /// Cycles from the `in` handshake to the start bit on `txd`.
+    pub const LATENCY: uint = 1
+
+    /// Clock at `ClkHz`.
+    in clk: clock
+    /// Reset: line idle (high).
+    in rst: reset
+    /// Bytes to send.
+    in in: Stream<u8>
+    /// Serial output, idle high.
+    out txd: bool
+    /// High while a frame is being sent.
+    out busy: bool
+
+    let core = UartTxCore<clog2(DIV + 1)>(divisor: DIV, in: in)
+    txd = core.txd
+    busy = core.busy
+
+    /// The line is high whenever no frame is in flight.
+    property idle_line_high { always !busy |-> txd }
+}
+
+/// 8N1 UART receiver at a fixed baud rate (`ClkHz / Baud` cycles per bit).
+///
+/// See [UartRxCore]: two-flop synchroniser, mid-bit sampling, glitch-rejecting
+/// start bit, `frame_error` and `overrun` pulses, one-byte output buffer.
+pub module UartRx<ClkHz: uint, Baud: uint = 115_200>
+where Baud > 0
+{
+    /// Clock cycles per bit.
+    pub const DIV: uint = ClkHz / Baud
+    static_assert(DIV >= 4, "UartRx: needs at least 4 clock cycles per bit (16 recommended)")
+    /// Cycles beyond 9.5 bit times from the start-bit edge to `out.valid`.
+    pub const LATENCY: uint = 3
+
+    /// Clock at `ClkHz`.
+    in clk: clock
+    /// Reset: receiver idle.
+    in rst: reset
+    /// Serial input (asynchronous), idle high.
+    in rxd: bool
+    /// Received bytes, held until accepted.
+    out out: Stream<u8>
+    /// One-cycle pulse: a frame ended with a low stop bit.
+    out frame_error: bool
+    /// One-cycle pulse: a byte was dropped because `out` was still full.
+    out overrun: bool
+
+    let core = UartRxCore<clog2(DIV + 1)>(divisor: DIV, rxd: rxd)
+    out = core.out
+    frame_error = core.frame_error
+    overrun = core.overrun
+
+    /// A received byte is held until it is accepted.
+    property out_held { always (out.valid and !out.ready) |=> out.valid and stable(out.data) }
+}
+
+/// Full-duplex 8N1 UART with transmit and receive FIFOs and a runtime baud
+/// divisor.
+///
+/// * Bytes pushed on `in` are queued in a `Depth`-entry FIFO and sent on
+///   `txd`; received bytes are queued in a second FIFO and popped from `out`.
+/// * `divisor` = clock cycles per bit (`ClkHz / Baud`), at least 4; it is
+///   shared by both directions and may be changed at run time (it takes
+///   effect at the next frame of each direction).
+/// * `overrun` pulses when a received byte is lost because the receive FIFO
+///   is full; `frame_error` pulses for a frame with a low stop bit.
+pub module Uart<DivW: uint = 16, Depth: uint = 16>
+where DivW >= 3, Depth.is_pow2()
+{
+    /// Clock.
+    in clk: clock
+    /// Reset: both FIFOs empty, line idle.
+    in rst: reset
+    /// Clock cycles per bit, at least 4.
+    in divisor: uint<DivW>
+    /// Bytes to transmit.
+    in in: Stream<u8>
+    /// Received bytes.
+    out out: Stream<u8>
+    /// Serial input (asynchronous), idle high.
+    in rxd: bool
+    /// Serial output, idle high.
+    out txd: bool
+    /// Bytes waiting in the transmit FIFO.
+    out tx_count: uint<clog2(Depth) + 1>
+    /// Bytes waiting in the receive FIFO.
+    out rx_count: uint<clog2(Depth) + 1>
+    /// High while the transmitter is sending or has bytes queued.
+    out tx_busy: bool
+    /// One-cycle pulse: a received frame had a low stop bit.
+    out frame_error: bool
+    /// One-cycle pulse: a received byte was lost (receive FIFO full).
+    out overrun: bool
+
+    let tx_fifo = Fifo<u8, Depth>(push: in)
+    let tx = UartTxCore<DivW>(divisor: divisor, in: tx_fifo.pop)
+    let rx = UartRxCore<DivW>(divisor: divisor, rxd: rxd)
+    let rx_fifo = Fifo<u8, Depth>(push: rx.out)
+
+    out = rx_fifo.pop
+    txd = tx.txd
+    tx_count = tx_fifo.count
+    rx_count = rx_fifo.count
+    tx_busy = tx.busy or tx_fifo.count != 0
+    frame_error = rx.frame_error
+    overrun = rx.overrun
+
+    /// The line is high whenever nothing is queued or in flight.
+    property idle_line_high { always !tx_busy |-> txd }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "UartTx sends 0x55 LSB first with start and stop bits" {
+    let dut = sim UartTx<ClkHz: 16, Baud: 1>()          // 16 cycles per bit
+    dut.reset()
+    expect dut.txd and dut.in.ready
+    dut.in = Stream { valid: true, data: 0x55 }
+    dut.step()                                         // byte accepted
+    dut.in.valid = false
+    expect !dut.in.ready and dut.busy
+    let line = [false, true, false, true, false, true, false, true, false, true]
+    for b in line {
+        dut.step(8)                                    // middle of the bit
+        expect dut.txd == b
+        dut.step(8)
+    }
+    expect dut.in.ready and !dut.busy and dut.txd
+}
+
+test "UartTx frames random bytes" {
+    let dut = sim UartTx<ClkHz: 8, Baud: 1>()
+    dut.reset()
+    for _ in 0..50 {
+        let v = rand<u8>()
+        dut.in = Stream { valid: true, data: v }
+        dut.step()
+        dut.in.valid = false
+        dut.step(4)
+        expect !dut.txd                                // start bit
+        for i in 0..8 {
+            dut.step(8)
+            expect dut.txd == v[i]
+        }
+        dut.step(8)
+        expect dut.txd                                 // stop bit
+        dut.step(4)
+        expect dut.in.ready
+    }
+}
+
+test "UartTx holds the line high and ready while idle" {
+    let dut = sim UartTx<ClkHz: 16, Baud: 1>()
+    dut.reset()
+    dut.in.valid = false
+    for _ in 0..100 {
+        dut.step()
+        expect dut.txd and dut.in.ready and !dut.busy
+    }
+}
+
+test "UartTxCore uses the divisor sampled at the start of the frame" {
+    let dut = sim UartTxCore<8>()
+    dut.reset()
+    dut.divisor = 4
+    dut.in = Stream { valid: true, data: 0x01 }
+    dut.step()
+    dut.in.valid = false
+    dut.divisor = 100                                  // ignored until the next frame
+    dut.step(2)
+    expect !dut.txd                                    // start bit, 4 cycles
+    dut.step(4)
+    expect dut.txd                                     // bit 0 = 1
+    dut.step(4)
+    expect !dut.txd                                    // bit 1 = 0
+}
+
+test "UartRx receives a byte at the documented time" {
+    let dut = sim UartRx<ClkHz: 16, Baud: 1>()
+    dut.rxd = true
+    dut.reset()
+    dut.out.ready = false
+    let v: u8 = 0xA7
+    let bits = [false, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], true]
+    // drive the whole frame bit by bit; out.valid must rise exactly
+    // 9.5 bit times + LATENCY cycles after the start edge (= 155 cycles)
+    var t = 0
+    for b in bits {
+        dut.rxd = b
+        for _ in 0..16 {
+            dut.step()
+            t = t + 1
+            if t == 154 { expect !dut.out.valid }
+            if t == 155 { expect dut.out.valid and dut.out.data == v }
+        }
+    }
+    dut.step(20)
+    expect dut.out.valid and dut.out.data == v         // held until accepted
+    dut.out.ready = true
+    dut.step()
+    expect !dut.out.valid
+    expect !dut.frame_error and !dut.overrun
+}
+
+test "UartRx flags a low stop bit as a frame error and drops the byte" {
+    let dut = sim UartRx<ClkHz: 16, Baud: 1>()
+    dut.rxd = true
+    dut.reset()
+    dut.out.ready = true
+    var seen_error = false
+    for b in [false, true, true, true, true, true, true, true, true, false] {
+        dut.rxd = b
+        for _ in 0..16 {
+            dut.step()
+            if dut.frame_error { seen_error = true }
+            expect !dut.out.valid
+        }
+    }
+    dut.rxd = true
+    dut.step(20)
+    expect seen_error
+    expect !dut.out.valid
+}
+
+test "UartRx ignores a glitch shorter than half a bit" {
+    let dut = sim UartRx<ClkHz: 16, Baud: 1>()
+    dut.rxd = true
+    dut.reset()
+    dut.out.ready = true
+    dut.rxd = false
+    dut.step(3)
+    dut.rxd = true
+    for _ in 0..200 {
+        dut.step()
+        expect !dut.out.valid and !dut.frame_error
+    }
+}
+
+test "UartRx reports overrun and keeps the first byte" {
+    let dut = sim UartRx<ClkHz: 16, Baud: 1>()
+    dut.rxd = true
+    dut.reset()
+    dut.out.ready = false
+    var seen_overrun = false
+    for v in [0x11, 0x22] {
+        let x: u8 = v
+        for b in [false, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], true] {
+            dut.rxd = b
+            for _ in 0..16 {
+                dut.step()
+                if dut.overrun { seen_overrun = true }
+            }
+        }
+    }
+    dut.step(20)
+    expect seen_overrun
+    expect dut.out.valid and dut.out.data == 0x11
+}
+
+test "UartTx into UartRx round-trips random bytes" {
+    let tx = sim UartTx<ClkHz: 16, Baud: 1>()
+    let rx = sim UartRx<ClkHz: 16, Baud: 1>()
+    rx.rxd = true
+    tx.reset()
+    rx.reset()
+    rx.out.ready = true
+    for _ in 0..20 {
+        let v = rand<u8>()
+        tx.in = Stream { valid: true, data: v }
+        var got = false
+        for _ in 0..200 {
+            rx.rxd = tx.txd
+            tx.step()
+            rx.step()
+            if tx.in.ready { tx.in.valid = false }
+            if rx.out.valid {
+                expect rx.out.data == v
+                got = true
+            }
+        }
+        expect got
+    }
+}
+
+test "Uart loops back through both FIFOs" {
+    let dut = sim Uart<DivW: 8, Depth: 4>()
+    dut.rxd = true
+    dut.reset()
+    dut.divisor = 8
+    dut.out.ready = false
+    let data = [0x00, 0xFF, 0x5A, 0xC3]
+    for v in data {
+        dut.rxd = dut.txd
+        dut.in = Stream { valid: true, data: v }
+        dut.step()
+    }
+    dut.in.valid = false
+    expect dut.tx_busy
+    for _ in 0..(4 * 10 * 8 + 50) {
+        dut.rxd = dut.txd                              // loopback wire
+        dut.step()
+    }
+    expect !dut.tx_busy
+    expect dut.rx_count == 4
+    dut.out.ready = true
+    for v in data {
+        dut.settle()
+        expect dut.out.valid and dut.out.data == v
+        dut.step()
+    }
+    dut.settle()
+    expect !dut.out.valid
+    expect !dut.overrun and !dut.frame_error
+}
+
+test "Uart divisor changes the bit time at run time" {
+    let dut = sim Uart<DivW: 8, Depth: 4>()
+    dut.rxd = true
+    dut.reset()
+    dut.out.ready = true
+    for div in [8, 12, 20] {
+        dut.divisor = div
+        dut.in = Stream { valid: true, data: 0x00 }
+        dut.step()
+        dut.in.valid = false
+        dut.step_until(!dut.txd, max: 20)              // start bit begins
+        var low = 0
+        for _ in 0..(10 * div) {                       // start + 8 zero bits, then stop
+            if !dut.txd { low = low + 1 }
+            dut.step()
+        }
+        expect low == 9 * div
+        dut.step_until(!dut.tx_busy, max: 4 * div)
+    }
+}
