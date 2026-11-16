@@ -68,6 +68,7 @@ typedef struct Token {
     uint8_t nl_before;    /* a line break separates it from the previous token */
     uint8_t suffix;       /* TK_INT: 0, 'u' or 's' (typed literal) */
     uint32_t off, len;    /* bytes in the source (a typed literal includes its suffix) */
+    uint32_t line, col;   /* of `off`, as in Span (1-based; col counts code points) */
     /* TK_IDENT, keywords, TK_RESERVED: the interned spelling.
      * TK_INT: the number without suffix, as written (arena copy, `_` kept).
      * TK_STRING: the decoded contents (arena copy, NUL-terminated). */

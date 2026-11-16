@@ -141,7 +141,12 @@ typedef struct Lexer {
     LexDocVec docs;
     StrBuf doc_text;      /* pending doc block */
     size_t doc_start, doc_end;
+    uint32_t doc_line, doc_col;
     int doc_pending;
+    /* line/col cursor: positions are computed in one forward pass instead of
+     * rescanning each line (span_make is O(line length)) */
+    size_t cur_off;
+    uint32_t cur_line, cur_col;
     LexDiagVec diags;     /* errors, reported later in source order (lex_emit_diag) */
 } Lexer;
 
@@ -149,9 +154,43 @@ typedef struct Lexer {
  * to its last error. */
 static Lexer *lex_current;
 
+/* Line and code-point column of `off`, moving the cursor forward. */
+static void lex_pos(Lexer *lx, size_t off, uint32_t *line, uint32_t *col)
+{
+    if (off < lx->cur_off) {
+        src_linecol(lx->file, (uint32_t)off, line, col);
+        return;
+    }
+    while (lx->cur_off < off) {
+        unsigned char c = (unsigned char)lx->s[lx->cur_off];
+        if (c == '\n') {
+            lx->cur_line++;
+            lx->cur_col = 1;
+            lx->cur_off++;
+        } else if (c < 0x80) {
+            lx->cur_col++;
+            lx->cur_off++;
+        } else {
+            size_t adv;
+            utf8_decode(lx->s + lx->cur_off, lx->n - lx->cur_off, &adv);
+            if (adv > off - lx->cur_off)
+                adv = off - lx->cur_off;
+            lx->cur_col++;
+            lx->cur_off += adv;
+        }
+    }
+    *line = lx->cur_line;
+    *col = lx->cur_col;
+}
+
 static Span lex_span(Lexer *lx, size_t off, size_t len)
 {
-    return span_make(lx->file, (uint32_t)off, (uint32_t)len);
+    Span sp;
+    sp.file = lx->file;
+    sp.off = (uint32_t)off;
+    sp.len = (uint32_t)len;
+    lex_pos(lx, off, &sp.line, &sp.col);
+    return sp;
 }
 
 static void lex_error(Lexer *lx, size_t off, size_t len, const char *fmt, ...) TERN_PRINTF(4, 5);
@@ -195,9 +234,14 @@ static Token *lex_push(Lexer *lx, TokenKind kind, size_t off, size_t len)
     t.off = (uint32_t)off;
     t.len = (uint32_t)len;
     t.doc = -1;
+    lex_pos(lx, off, &t.line, &t.col);
     if (lx->doc_pending) {
         TokDoc d;
-        d.span = lex_span(lx, lx->doc_start, lx->doc_end - lx->doc_start);
+        d.span.file = lx->file;
+        d.span.off = (uint32_t)lx->doc_start;
+        d.span.len = (uint32_t)(lx->doc_end - lx->doc_start);
+        d.span.line = lx->doc_line;
+        d.span.col = lx->doc_col;
         d.text = arena_strndup(lx->arena, sb_cstr(&lx->doc_text), lx->doc_text.len);
         vec_push(lx->docs, d);
         t.doc = (int32_t)(lx->docs.len - 1);
@@ -245,6 +289,7 @@ static void lex_line_comment(Lexer *lx)
         if (!lx->doc_pending) {
             lx->doc_pending = 1;
             lx->doc_start = start;
+            lex_pos(lx, start, &lx->doc_line, &lx->doc_col);
         } else {
             sb_putc(&lx->doc_text, '\n');
         }
@@ -571,6 +616,8 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
     lx.s = sf ? sf->text : "";
     lx.n = sf ? sf->len : 0;
     lx.nl = 1;
+    lx.cur_line = 1;
+    lx.cur_col = 1;
     lex_current = &lx;
     if (lx.n >= 3 && (unsigned char)lx.s[0] == 0xEF && (unsigned char)lx.s[1] == 0xBB &&
         (unsigned char)lx.s[2] == 0xBF)

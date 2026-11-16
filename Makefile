@@ -4,6 +4,8 @@
 #   make test             build and run the unit tests and the golden tests
 #   make unity            one-command build: $(CC) ... -o tern src/unity.c
 #   make check-warnings   -Werror builds of everything as C99 and as C11
+#   make fuzz             libFuzzer parser harness build/fuzz_parser (clang;
+#                         on macOS: FUZZ_CC=/opt/homebrew/opt/llvm/bin/clang)
 #   make clean
 #
 # Variables: CC, STD (c11 | c99), OPT, WARN, EXTRA (appended to CFLAGS),
@@ -143,6 +145,17 @@ test: $(BIN) tests/run build/test_base
 	./$(BIN) parse std
 	./tests/run --tern ./$(BIN)
 
+# ----------------------------------------------------------------- fuzz ---
+# Not part of `all`/`test`: needs clang with libFuzzer. Run it with e.g.
+#   ./build/fuzz_parser -max_total_time=120 build/fuzz-corpus tests/fixtures/parse std
+
+FUZZ_CC = clang
+FUZZ_FLAGS = -g -O1 -fsanitize=fuzzer,address,undefined
+
+fuzz: $(OBJ)/.dir
+	mkdir -p build/fuzz-corpus
+	$(FUZZ_CC) -std=c11 $(FUZZ_FLAGS) $(WARN) -o build/fuzz_parser tests/fuzz/fuzz_parser.c
+
 # ---------------------------------------------------------------- other ---
 
 unity:
@@ -166,4 +179,4 @@ clean:
 	rm -rf build tests/out
 	rm -f tern tern.exe tools/embed tools/embed.exe tests/run tests/run.exe
 
-.PHONY: all test unity check-warnings install clean
+.PHONY: all test unity check-warnings fuzz install clean

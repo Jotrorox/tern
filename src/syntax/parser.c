@@ -36,6 +36,7 @@ typedef struct Parser {
     int spec;             /* > 0 while speculating: errors are not reported */
     int panic;            /* an error was reported; unwinding to a sync point */
     int eof_reported;     /* an unclosed `{` at end of file was reported */
+    int depth;            /* recursion depth (PS_MAX_DEPTH) */
     uint32_t construct_pos; /* first token of the statement/item/entry being parsed */
     int nerrors;
 } Parser;
@@ -98,8 +99,17 @@ typedef VEC(Type *) PsTypeVec;
 #define PS_BP_MUL 30
 #define PS_BP_UNARY 32
 
+/* Recursion limit: deeper input is rejected instead of overflowing the C
+ * stack. Each syntactic nesting level costs one or two units. */
+#define PS_MAX_DEPTH 400
+/* Speculative generic arguments nest at most this deep (each level may
+ * re-parse what follows, so unbounded nesting would be exponential). */
+#define PS_MAX_SPEC 2
+
 static Expr *ps_expr(Parser *p);
 static Expr *ps_expr_bp(Parser *p, int min_bp);
+static Expr *ps_unary(Parser *p);
+static Pattern *ps_pattern1(Parser *p);
 static Type *ps_type(Parser *p);
 static Pattern *ps_pattern(Parser *p);
 static Block *ps_block(Parser *p);
@@ -193,16 +203,43 @@ static void ps_eat_gt(Parser *p)
         ps_advance(p);
 }
 
+/* Span of [off, off+len): line/col come from the token at `off` (computed by
+ * the lexer in one pass) instead of rescanning the line. */
+static Span ps_span_at(Parser *p, uint32_t off, uint32_t len)
+{
+    uint32_t lo = 0, hi = p->ntoks;
+    const Token *t;
+    Span sp;
+    while (hi - lo > 1) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (p->toks[mid].off <= off)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    t = &p->toks[lo];
+    if (t->off <= off && off <= t->off + t->len && (off == t->off || (t->kind != TK_STRING && t->kind != TK_ERROR))) {
+        /* token text other than strings is ASCII */
+        sp.file = p->file;
+        sp.off = off;
+        sp.len = len;
+        sp.line = t->line;
+        sp.col = t->col + (off - t->off);
+        return sp;
+    }
+    return span_make(p->file, off, len);
+}
+
 static Span ps_span(Parser *p, uint32_t start)
 {
     uint32_t end = p->prev_end > start ? p->prev_end : start;
-    return span_make(p->file, start, end - start);
+    return ps_span_at(p, start, end - start);
 }
 
 static Span ps_tok_span(Parser *p)
 {
     Token *t = &p->toks[p->pos];
-    return span_make(p->file, t->off + p->split, t->len - p->split);
+    return ps_span_at(p, t->off + p->split, t->len - p->split);
 }
 
 /* Where to report "expected X, found Y": the token, or the end of the
@@ -210,7 +247,7 @@ static Span ps_tok_span(Parser *p)
 static Span ps_err_span(Parser *p)
 {
     if (ps_nl(p) && p->pos > 0 && p->pos != p->construct_pos)
-        return span_make(p->file, p->prev_end, 0);
+        return ps_span_at(p, p->prev_end, 0);
     return ps_tok_span(p);
 }
 
@@ -363,7 +400,7 @@ static void ps_close_brace(Parser *p, uint32_t lbrace)
         }
         if (ps_error(p, ps_tok_span(p), "unexpected end of file: a `{` is not closed")) {
             p->eof_reported = 1;
-            diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
+            diag_note(ps_span_at(p, lbrace, 1), "unclosed `{` opens here");
         }
         return;
     }
@@ -372,16 +409,22 @@ static void ps_close_brace(Parser *p, uint32_t lbrace)
         return;
     }
     if (ps_error(p, ps_err_span(p), "expected `}`, found %s", ps_describe(p)))
-        diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
+        diag_note(ps_span_at(p, lbrace, 1), "unclosed `{` opens here");
 }
 
 /* ------------------------------------------------------------ helpers */
+
+static void ps_too_deep(Parser *p)
+{
+    if (ps_error(p, ps_tok_span(p), "nesting is too deep (more than %d levels)", PS_MAX_DEPTH / 2))
+        diag_help("split the expression or block into named parts");
+}
 
 static Expr *ps_new_expr(Parser *p, ExprKind k, uint32_t start)
 {
     Expr *e = ANEW(p->a, Expr);
     e->kind = k;
-    e->span = span_make(p->file, start, 0);
+    e->span = ps_span_at(p, start, 0);
     return e;
 }
 
@@ -603,13 +646,13 @@ static Expr *ps_int_lit(Parser *p)
         if (t->width_len) {
             Expr *w = ps_new_expr(p, EXPR_INT, t->width_off);
             ps_int_value(w, arena_strndup(p->a, p->src + t->width_off, t->width_len));
-            w->span = span_make(p->file, t->width_off, t->width_len);
+            w->span = ps_span_at(p, t->width_off, t->width_len);
             e->u.int_lit.width = w;
         } else {
             /* 0xFFu<W> */
             ParseCtx saved = p->ctx;
             if (ps_kind(p) != TK_LT || p->toks[p->pos].off != p->prev_end) {
-                ps_error(p, span_make(p->file, start, p->prev_end - start),
+                ps_error(p, ps_span_at(p, start, p->prev_end - start),
                          "typed literal needs a width after `%c`", t->suffix);
                 return ps_done(p, e, start);
             }
@@ -677,7 +720,7 @@ static void ps_path(Parser *p, Path *out, PsPathMode mode)
         if (ps_kind(p) == TK_LT && !ps_nl(p)) {
             if (mode == PS_PATH_TYPE || p->ctx.generic) {
                 ps_generic_args(p, &seg);
-            } else {
+            } else if (p->spec < PS_MAX_SPEC) {
                 ParseMark m = ps_mark(p);
                 int ok;
                 p->spec++;
@@ -806,7 +849,7 @@ Type *ast_type_from_expr(Arena *a, Expr *e)
 
 static void ps_field_list(Parser *p, PsFieldVec *fields, PsItemVec *fns, int allow_flip, const char *what);
 
-static Type *ps_type(Parser *p)
+static Type *ps_type_inner(Parser *p)
 {
     uint32_t start = ps_off(p);
     TokenKind k = ps_kind(p);
@@ -898,6 +941,19 @@ static Type *ps_type(Parser *p)
     }
     ps_error(p, ps_err_span(p), "expected a type, found %s", ps_describe(p));
     return ps_error_type(p, start);
+}
+
+static Type *ps_type(Parser *p)
+{
+    Type *r;
+    if (p->depth >= PS_MAX_DEPTH) {
+        ps_too_deep(p);
+        return ps_error_type(p, ps_off(p));
+    }
+    p->depth++;
+    r = ps_type_inner(p);
+    p->depth--;
+    return r;
 }
 
 /* ------------------------------------------------------------ expressions */
@@ -1049,7 +1105,7 @@ static void ps_field_inits(Parser *p, FieldInit **out, uint32_t *n, int *has_res
             if (has_rest)
                 *has_rest = 1;
             else
-                ps_error_soft(p, span_make(p->file, fstart, 2), "`..` is not allowed in this literal");
+                ps_error_soft(p, ps_span_at(p, fstart, 2), "`..` is not allowed in this literal");
         } else {
             fi.name = ps_name(p, "a field name", 1);
             if (!p->panic && ps_accept(p, TK_COLON))
@@ -1168,7 +1224,7 @@ static Expr *ps_match_expr(Parser *p)
     p->ctx = saved;
     if (ps_kind(p) != TK_RBRACE) {
         if (ps_error(p, ps_err_span(p), "expected `}` to close the match, found %s", ps_describe(p)))
-            diag_note(span_make(p->file, lbrace, 1), "the match arms open here");
+            diag_note(ps_span_at(p, lbrace, 1), "the match arms open here");
     } else {
         ps_advance(p);
     }
@@ -1241,7 +1297,7 @@ static Expr *ps_postfix(Parser *p, Expr *e, uint32_t start)
             } else {
                 f->u.field.name = ps_name(p, "a field name after `.`", 1);
             }
-            if (!p->panic && ps_kind(p) == TK_LT && !ps_nl(p)) {
+            if (!p->panic && ps_kind(p) == TK_LT && !ps_nl(p) && p->spec < PS_MAX_SPEC) {
                 /* method generics: x.trunc<8>() */
                 PathSeg seg;
                 ParseMark m = ps_mark(p);
@@ -1486,7 +1542,7 @@ static Expr *ps_primary(Parser *p)
     return ps_error_expr(p, start);
 }
 
-static Expr *ps_unary(Parser *p)
+static Expr *ps_unary_inner(Parser *p)
 {
     uint32_t start = ps_off(p);
     TokenKind k = ps_kind(p);
@@ -1528,6 +1584,19 @@ static Expr *ps_unary(Parser *p)
     e->u.unary.op = op;
     e->u.unary.operand = ps_unary(p);
     return ps_done(p, e, start);
+}
+
+static Expr *ps_unary(Parser *p)
+{
+    Expr *r;
+    if (p->depth >= PS_MAX_DEPTH) {
+        ps_too_deep(p);
+        return ps_error_expr(p, ps_off(p));
+    }
+    p->depth++;
+    r = ps_unary_inner(p);
+    p->depth--;
+    return r;
 }
 
 /* Binary operator at the current token: returns 1 and fills op/lbp/rbp. */
@@ -1589,7 +1658,7 @@ static int ps_binop(Parser *p, BinaryOp *op, int *lbp, int *rbp)
     return 1;
 }
 
-static Expr *ps_expr_bp(Parser *p, int min_bp)
+static Expr *ps_expr_bp_inner(Parser *p, int min_bp)
 {
     uint32_t start = ps_off(p);
     Expr *lhs = ps_unary(p);
@@ -1646,6 +1715,19 @@ static Expr *ps_expr_bp(Parser *p, int min_bp)
     return lhs;
 }
 
+static Expr *ps_expr_bp(Parser *p, int min_bp)
+{
+    Expr *r;
+    if (p->depth >= PS_MAX_DEPTH) {
+        ps_too_deep(p);
+        return ps_error_expr(p, ps_off(p));
+    }
+    p->depth++;
+    r = ps_expr_bp_inner(p, min_bp);
+    p->depth--;
+    return r;
+}
+
 static Expr *ps_expr(Parser *p)
 {
     return ps_expr_bp(p, 0);
@@ -1697,7 +1779,14 @@ static Pattern *ps_new_pat(Parser *p, PatternKind k)
     return pt;
 }
 
-static Pattern *ps_pattern1(Parser *p)
+static Pattern *ps_deep_pat(Parser *p)
+{
+    Pattern *pt = ps_new_pat(p, PAT_ERROR);
+    pt->span = ps_tok_span(p);
+    return pt;
+}
+
+static Pattern *ps_pattern1_inner(Parser *p)
 {
     uint32_t start = ps_off(p);
     TokenKind k = ps_kind(p);
@@ -1785,6 +1874,19 @@ static Pattern *ps_pattern1(Parser *p)
     }
     pt->span = ps_span(p, start);
     return pt;
+}
+
+static Pattern *ps_pattern1(Parser *p)
+{
+    Pattern *r;
+    if (p->depth >= PS_MAX_DEPTH) {
+        ps_too_deep(p);
+        return ps_deep_pat(p);
+    }
+    p->depth++;
+    r = ps_pattern1_inner(p);
+    p->depth--;
+    return r;
 }
 
 static Pattern *ps_pattern(Parser *p)
@@ -1888,7 +1990,7 @@ static void ps_stmt_list(Parser *p, PsStmtVec *out)
     }
 }
 
-static Block *ps_block(Parser *p)
+static Block *ps_block_inner(Parser *p)
 {
     Block *b = ANEW(p->a, Block);
     uint32_t start = ps_off(p);
@@ -1932,6 +2034,19 @@ static Block *ps_block(Parser *p)
     }
     b->span = ps_span(p, start);
     return b;
+}
+
+static Block *ps_block(Parser *p)
+{
+    Block *r;
+    if (p->depth >= PS_MAX_DEPTH) {
+        ps_too_deep(p);
+        return ANEW(p->a, Block);
+    }
+    p->depth++;
+    r = ps_block_inner(p);
+    p->depth--;
+    return r;
 }
 
 typedef struct PsSvWord {
@@ -2315,13 +2430,13 @@ static Stmt *ps_stmt(Parser *p)
         if (lhs->kind == EXPR_BINARY && lhs->u.binary.op == BIN_LE &&
             (lhs->u.binary.lhs->kind == EXPR_PATH || lhs->u.binary.lhs->kind == EXPR_FIELD ||
              lhs->u.binary.lhs->kind == EXPR_INDEX || lhs->u.binary.lhs->kind == EXPR_SLICE)) {
-            Span op = span_make(p->file, lhs->u.binary.lhs->span.off + lhs->u.binary.lhs->span.len, 0);
+            Span op = ps_span_at(p, lhs->u.binary.lhs->span.off + lhs->u.binary.lhs->span.len, 0);
             uint32_t i;
             /* find the `<=` token for the span */
             for (i = p->pos; i > 0; i--) {
                 if (p->toks[i - 1].kind == TK_LE && p->toks[i - 1].off >= lhs->span.off &&
                     p->toks[i - 1].off < lhs->u.binary.rhs->span.off) {
-                    op = span_make(p->file, p->toks[i - 1].off, 2);
+                    op = ps_span_at(p, p->toks[i - 1].off, 2);
                     break;
                 }
             }
@@ -2726,7 +2841,7 @@ static Expr *ps_temporal_body(Parser *p, const char *what)
     if (ps_kind(p) == TK_RBRACE) {
         ps_advance(p);
     } else if (ps_error(p, ps_err_span(p), "expected `}` after the property expression, found %s", ps_describe(p))) {
-        diag_note(span_make(p->file, lbrace, 1), "the property body opens here");
+        diag_note(ps_span_at(p, lbrace, 1), "the property body opens here");
     }
     return e;
 }
@@ -3332,3 +3447,5 @@ const char *ast_binary_op_text(BinaryOp op)
 #undef PS_BP_ADD
 #undef PS_BP_MUL
 #undef PS_BP_UNARY
+#undef PS_MAX_DEPTH
+#undef PS_MAX_SPEC
