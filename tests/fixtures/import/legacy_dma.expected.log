@@ -1,0 +1,4 @@
+legacy_dma.v:2:1: warning: macro definitions (`define) are ignored; macro uses are kept with a TODO
+legacy_dma.v:3:1: warning: `include is not followed; import the included file separately if it declares modules
+legacy_dma.v:19:1: warning: conditional compilation (`ifdef) is not evaluated: declarations of every branch are imported
+legacy_dma.v:22:12: warning: port `irq` is declared again; the first declaration is used

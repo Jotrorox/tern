@@ -32,6 +32,9 @@
 #include "pkg/git.c"
 #include "pkg/cmd_pkg.c"
 
+#include "tools/import.c"
+#include "tools/remap.c"
+
 #include "std_embed.c"
 #include "cmd_stubs.c"
 #include "main.c"

@@ -1,0 +1,1 @@
+uart_tx.sv:1:1: warning: `timescale ignored: Tern designs have no time scale

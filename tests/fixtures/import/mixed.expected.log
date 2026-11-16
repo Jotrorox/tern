@@ -1,0 +1,1 @@
+mixed.sv:5:1: warning: interface `axi_lite_if` is not imported

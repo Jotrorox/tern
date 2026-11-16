@@ -27,6 +27,4 @@ int cmd_synth(int argc, char **argv) { return stub_not_implemented("synth", argc
 int cmd_fmt(int argc, char **argv) { return stub_not_implemented("fmt", argc, argv); }
 int cmd_lsp(int argc, char **argv) { return stub_not_implemented("lsp", argc, argv); }
 int cmd_doc(int argc, char **argv) { return stub_not_implemented("doc", argc, argv); }
-int cmd_import(int argc, char **argv) { return stub_not_implemented("import", argc, argv); }
-int cmd_remap(int argc, char **argv) { return stub_not_implemented("remap", argc, argv); }
 int cmd_parse(int argc, char **argv) { return stub_not_implemented("parse", argc, argv); }

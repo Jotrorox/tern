@@ -49,7 +49,9 @@ PKG_SRCS = \
 	src/pkg/toml.c src/pkg/manifest.c src/pkg/lock.c src/pkg/git.c \
 	src/pkg/cmd_pkg.c
 
-SRCS = $(OS_SRCS) $(BASE_SRCS) $(PKG_SRCS) \
+TOOLS_SRCS = src/tools/import.c src/tools/remap.c
+
+SRCS = $(OS_SRCS) $(BASE_SRCS) $(PKG_SRCS) $(TOOLS_SRCS) \
 	src/std_embed.c src/cmd_stubs.c src/main.c
 
 OBJS = \
@@ -59,6 +61,7 @@ OBJS = \
 	$(OBJ)/base_utf8.o $(OBJ)/base_diag.o $(OBJ)/base_args.o \
 	$(OBJ)/pkg_toml.o $(OBJ)/pkg_manifest.o $(OBJ)/pkg_lock.o \
 	$(OBJ)/pkg_git.o $(OBJ)/pkg_cmd.o \
+	$(OBJ)/tools_import.o $(OBJ)/tools_remap.o \
 	$(OBJ)/std_embed.o $(OBJ)/cmd_stubs.o $(OBJ)/main.o
 
 all: $(BIN)
@@ -109,6 +112,11 @@ $(OBJ)/pkg_git.o: src/pkg/git.c $(HDRS) $(OBJ)/.dir
 $(OBJ)/pkg_cmd.o: src/pkg/cmd_pkg.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/pkg/cmd_pkg.c -o $@
 
+$(OBJ)/tools_import.o: src/tools/import.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/tools/import.c -o $@
+$(OBJ)/tools_remap.o: src/tools/remap.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/tools/remap.c -o $@
+
 $(OBJ)/std_embed.o: src/std_embed.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/std_embed.c -o $@
 $(OBJ)/cmd_stubs.o: src/cmd_stubs.c $(HDRS) $(OBJ)/.dir
@@ -143,9 +151,13 @@ build/test_base: tests/unit/test_base.c $(TEST_DEPS) $(OBJ)/.dir
 build/test_pkg: tests/unit/test_pkg.c $(TEST_DEPS) $(PKG_SRCS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_pkg.c $(LDLIBS)
 
-test: $(BIN) tests/run build/test_base build/test_pkg
+build/test_tools: tests/unit/test_tools.c $(TEST_DEPS) $(TOOLS_SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_tools.c $(LDLIBS)
+
+test: $(BIN) tests/run build/test_base build/test_pkg build/test_tools
 	./build/test_base
 	./build/test_pkg
+	./build/test_tools
 	./tests/run --tern ./$(BIN)
 
 # ---------------------------------------------------------------- other ---
@@ -160,6 +172,7 @@ check-warnings:
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/run-$$s tests/run.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/test_base-$$s tests/unit/test_base.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/test_pkg-$$s tests/unit/test_pkg.c || exit 1; \
+	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/test_tools-$$s tests/unit/test_tools.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/embed-$$s tools/embed.c || exit 1; \
 	done
 	@echo "check-warnings: OK (c99 and c11, -Werror)"
