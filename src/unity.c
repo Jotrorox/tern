@@ -36,6 +36,14 @@
 #include "sim/netlist.c"
 #include "sim/eval.c"
 #include "sim/vcd.c"
+#include "pkg/toml.c"
+#include "pkg/manifest.c"
+#include "pkg/lock.c"
+#include "pkg/git.c"
+#include "pkg/cmd_pkg.c"
+
+#include "tools/import.c"
+#include "tools/remap.c"
 
 #include "std_embed.c"
 #include "cmd_parse.c"

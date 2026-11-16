@@ -52,13 +52,13 @@ spaces — the real syntax is ASCII).
 | `src/emit/` | `sv.c constraints.c regmap.c` | SystemVerilog/Verilog-2005, .xdc/.sdc, regmap .h/.svd/.md |
 | `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
 | `src/backend/` | `verilator.c formal.c synth.c` | scripts for external tools |
-| `src/pkg/` | `toml.c lock.c git.c` (+ `pkg.h`) | tern.toml, tern.lock, dependency resolution, git |
+| `src/pkg/` | `toml.c manifest.c lock.c git.c cmd_pkg.c` (+ `pkg.h`) | tern.toml, tern.lock, semver, dependency resolution, git; `tern new/add/update/vendor/publish` (docs/packages.md, docs/registry.md) |
 | `src/lsp/` | `rpc.c lsp.c` | JSON-RPC language server over stdio |
-| `src/tools/` | `fmt.c doc.c import.c` | formatter, HTML docs, `tern import` (SV → extern) |
+| `src/tools/` | `fmt.c doc.c import.c remap.c` | formatter, HTML docs, `tern import` (SV → extern), `tern remap` (docs/migration.md) |
 | `src/` | `main.c cmds.h cmd_stubs.c cmd_parse.c cmd_check.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, stubs for unimplemented commands, `tern parse` and the interim parse-only `tern check`, shared front-end driver, embedded std |
-| `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>.tern` or `std/<pkg>/`) |
+| `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>/`) |
 | `tools/` | `embed.c` | embeds `std/**/*.tern` into `src/std_embed.c` (committed) |
-| `tests/` | `run.c`, `unit/test_base.c`, `fixtures/**`, `fuzz/fuzz_parser.c` | golden-file test runner, base/os unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
+| `tests/` | `run.c`, `unit/test_{base,sim,pkg,tools}.c`, `fixtures/**`, `fuzz/fuzz_parser.c` | golden-file test runner, unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
 
 ## Pipeline
 
@@ -266,9 +266,12 @@ int  sim_vcd_open(SimModel*, const char *path); void sim_vcd_close(SimModel*);
 ## Testing the compiler
 
 `make test` builds and runs `build/test_base` (unit tests for `src/base` and
-`src/os`, `tests/unit/test_base.c`) and `tests/run` (the golden-file runner,
-`tests/run.c`); both are single translation units that `#include` the
-sources they need. The runner walks `tests/fixtures/`. Each fixture is a
+`src/os`, `tests/unit/test_base.c`), `build/test_pkg` (`src/pkg`, including an
+end-to-end run of the package commands against local bare git repositories,
+skipped without git), `build/test_tools` (`tern import` goldens in
+`tests/fixtures/import/<stem>.expected.tern|.log`, `tern remap`) and
+`tests/run` (the golden-file runner, `tests/run.c`); all are single
+translation units that `#include` the sources they need. The runner walks `tests/fixtures/`. Each fixture is a
 `.tern` file with sibling expectation files; for each expectation, `tern`
 runs (in parallel worker processes) with the fixture's directory as working
 directory and the bare file name as argument:

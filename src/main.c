@@ -17,8 +17,10 @@ typedef struct MainCmd {
 } MainCmd;
 
 static const MainCmd main_cmds[] = {
-    {"new", cmd_new, "Project", "<name>",
-     "create a project skeleton (tern.toml, src/, tests/)", NULL},
+    {"new", cmd_new, "Project", "<name> [--no-git]",
+     "create a project skeleton (tern.toml, src/, tests/)",
+     "  <name>              project directory and package name\n"
+     "  --no-git            do not run `git init`\n"},
     {"build", cmd_build, "Project", "[--target <t>] [--std sv|verilog2005]",
      "elaborate, check and emit build/<target>/*.sv, constraints, regmaps",
      "  --target <t>        build target from tern.toml ([target.<t>])\n"
@@ -45,18 +47,44 @@ static const MainCmd main_cmds[] = {
      "  --induct            also try k-induction for an unbounded proof\n"},
     {"synth", cmd_synth, "Verification", "[--target <t>]",
      "drive Yosys / Vivado / Quartus; utilization and timing summary", NULL},
-    {"add", cmd_add, "Packages", "<pkg>[@<ver>] | <git-url>",
-     "add a dependency (index short name or git URL); writes tern.lock", NULL},
+    {"add", cmd_add, "Packages", "<pkg>[@<ver>]... | <git-url> [--tag|--rev|--branch <r>] | --path <dir>",
+     "add a dependency (index short name or git URL); writes tern.lock",
+     "  <pkg>[@<ver>]       registry package; <ver> is a requirement (1.2, =1.2.3, ~1.2,\n"
+     "                      \">=1, <2\"); default: the newest release\n"
+     "  <git-url>           git dependency; default: its newest vX.Y.Z tag\n"
+     "  --tag/--rev/--branch <r>  pin a git dependency\n"
+     "  --path <dir>        local path dependency\n"
+     "  --name <n>          dependency name for a git URL or --path (default: its\n"
+     "                      [package] name)\n"
+     "  -q, --quiet         no progress output\n"
+     "  (no argument)       fetch the versions in tern.lock (after a fresh clone)\n"},
     {"update", cmd_update, "Packages", "[<pkg>...]",
-     "move dependencies to newer compatible tags", NULL},
-    {"vendor", cmd_vendor, "Packages", "",
-     "copy every dependency into vendor/", NULL},
-    {"publish", cmd_publish, "Packages", "",
-     "push the version tag and prepare the registry index entry", NULL},
-    {"import", cmd_import, "Interop", "<file.sv>...",
-     "generate extern module declarations from SystemVerilog", NULL},
-    {"remap", cmd_remap, "Interop", "[<log>]",
-     "translate synthesis/simulator logs to Tern source locations", NULL},
+     "move dependencies to newer compatible tags",
+     "  <pkg>...            update only these packages (default: all)\n"
+     "  -q, --quiet         no progress output\n"},
+    {"vendor", cmd_vendor, "Packages", "[--remove]",
+     "copy every dependency into vendor/",
+     "  --remove            delete the vendored copies; builds use the cache again\n"
+     "  -q, --quiet         no progress output\n"},
+    {"publish", cmd_publish, "Packages", "[--dry-run] [--fork <url>] [--pr]",
+     "push the version tag and prepare the registry index entry",
+     "  -n, --dry-run       check everything and show the index entry; change nothing\n"
+     "  --fork <url>        push the index branch to this fork of the index\n"
+     "                      (also TERN_INDEX_FORK or [registry] fork)\n"
+     "  --pr                open the pull request with `gh pr create`\n"},
+    {"import", cmd_import, "Interop", "<file.sv|dir>... [-o <out>] [--package <name>]",
+     "generate extern module declarations from SystemVerilog",
+     "  <file.sv|file.v>    import every module header of the file\n"
+     "  <dir>               import every .sv/.v file below dir (one .tern per file)\n"
+     "  -o, --output <out>  output file (one input file; default: stdout) or\n"
+     "                      directory (directories; default: src/imported)\n"
+     "  --package <name>    package of the generated files\n"
+     "  --root <dir>        make extern paths relative to dir (default: the project)\n"},
+    {"remap", cmd_remap, "Interop", "[<build-dir>] [<log>]",
+     "translate synthesis/simulator logs to Tern source locations",
+     "  <build-dir>         directory with the emitted .sv files (default: build/)\n"
+     "  <log>               tool log to translate (default: stdin)\n"
+     "  -o, --output <f>    write the result to f (default: stdout)\n"},
     {"lsp", cmd_lsp, "Interop", "",
      "language server on stdio: diagnostics, go-to-definition, hover", NULL},
     {"parse", cmd_parse, NULL, "--dump <file.tern>",
