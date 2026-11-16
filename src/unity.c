@@ -1,0 +1,31 @@
+/* unity.c — the whole compiler as one translation unit:
+ *
+ *     cc -std=c11 -O2 -o tern src/unity.c
+ *     cc -std=c99 -O2 -o tern src/unity.c
+ *     cl /std:c11 /W4 /O2 src\unity.c /Fe:tern.exe
+ *
+ * Every .c file under src/ is listed here exactly once. Keep this list, the
+ * Makefile (SRCS) and build.bat in sync when adding files. Because all
+ * files share one translation unit, file-local (static) names and macros
+ * must be unique across the tree: prefix them with the module name.
+ */
+
+/* Must stay first: it defines the POSIX feature-test macros, which have to
+ * precede every system header. */
+#include "os/os_posix.c"
+#include "os/os_win32.c"
+#include "os/os_common.c"
+
+#include "base/common.c"
+#include "base/arena.c"
+#include "base/str.c"
+#include "base/map.c"
+#include "base/bignum.c"
+#include "base/json.c"
+#include "base/utf8.c"
+#include "base/diag.c"
+#include "base/args.c"
+
+#include "std_embed.c"
+#include "cmd_stubs.c"
+#include "main.c"
