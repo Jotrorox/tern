@@ -245,7 +245,7 @@ struct SimModel {
     VEC(SimCovRaw) covraw;
     VEC(SimCovPoint) covout;
     VEC(uint32_t) derived;   /* groups clocked by derived clocks */
-    Map by_path;             /* interned path -> handle + 1 */
+    Map by_path;             /* hash of path / SV path -> handle + 1 (first one wins) */
 
     /* code */
     VEC(SimInsn) code;

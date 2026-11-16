@@ -1895,6 +1895,151 @@ static void test_perf(void)
     sim_free(sm);
 }
 
+
+/* byte-masked memory writes, dynamic-index lvalues, immediate cover,
+ * a register listed only in IrProcess.regs */
+static void test_mem_mask_and_index(void)
+{
+    IrModule *m;
+    IrType *u8 = NULL, *arr;
+    uint32_t clk, rst, we, addr, data, mask, idx, d, rd, arr_r, held, mem, sel, o;
+    SimModel *sm;
+    IrStmtList body = {0};
+    ts_new_design();
+    u8 = ir_type_uint(D, 8);
+    arr = ir_type_array(D, u8, 4);
+    m = ir_module_new(D, "MemMask", NULL, NULL, SP(250));
+    clk = ts_sig(m, "clk", IRS_IN, ir_type_clock(D, 0), 251);
+    rst = ts_sig(m, "rst", IRS_IN, ir_type_reset(D, 0, 0), 251);
+    we = ts_sig(m, "we", IRS_IN, ir_type_bool(D), 252);
+    addr = ts_sig(m, "addr", IRS_IN, ir_type_uint(D, 3), 253);
+    data = ts_sig(m, "data", IRS_IN, ir_type_uint(D, 20), 254);
+    mask = ts_sig(m, "mask", IRS_IN, ir_type_bits(D, 3), 255);
+    idx = ts_sig(m, "idx", IRS_IN, ir_type_uint(D, 2), 256);
+    d = ts_sig(m, "d", IRS_IN, u8, 257);
+    sel = ts_sig(m, "sel", IRS_IN, ir_type_uint(D, 2), 258);
+    rd = ts_sig(m, "rd", IRS_OUT, ir_type_uint(D, 20), 259);
+    o = ts_sig(m, "o", IRS_OUT, u8, 260);
+    arr_r = ts_sig(m, "arr", IRS_REG, arr, 261);
+    held = ts_sig(m, "held", IRS_REG, u8, 262);
+    mem = ir_add_memory(D, m, "mem", ir_type_uint(D, 20), 6, SP(263));
+    ir_add_domain(D, m, "", clk, rst, 0);
+    ir_set_init(D, m, arr_r, ir_bits_u64(TA, 32, 0));
+    ir_set_init(D, m, held, ir_bits_u64(TA, 8, 0x5C));
+    CONT(m, rd, ir_memread(TA, m, mem, S(m, addr), SP(264)));
+    CONT(m, o, ir_index(TA, S(m, arr_r), S(m, sel), 8, SP(265)));
+    ir_stmts_push(&body, ir_stmt_if(TA, S(m, we),
+                                    B1(ir_stmt_memwrite(TA, m, mem, S(m, addr), S(m, data), S(m, mask), SP(267))),
+                                    B0(), SP(266)));
+    ir_stmts_push(&body, ir_stmt_assign(TA, ir_lv_index(m, arr_r, 0, 8, S(m, idx)), S(m, d), SP(268)));
+    ir_stmts_push(&body, ir_stmt_assert(TA, IRA_COVER, BIN(IROP_EQ, S(m, d), K(8, 0x99)), "d is 0x99",
+                                        SP(269)));
+    ir_add_process(D, m, IRP_CLOCKED, 0, ir_stmts_finish(TA, &body), SP(266));
+    /* `held` is only listed as a register of the process (reset, never assigned) */
+    {
+        IrProcess *p = &m->procs[m->nprocs - 1];
+        uint32_t *regs = ANEWN(TA, uint32_t, p->nregs + 1);
+        memcpy(regs, p->regs, sizeof(uint32_t) * p->nregs);
+        regs[p->nregs] = held;
+        p->regs = regs;
+        p->nregs++;
+    }
+    ir_design_set_top(D, m);
+    sm = sim_new(D, D->top, 3);
+    TS_CHECK(sm != NULL);
+    if (!sm)
+        return;
+    {
+        int hm = sim_find(sm, "mem");
+        IrBits z;
+        uint64_t zl = 0;
+        const SimCovPoint *cp, *x;
+        size_t n;
+        z.width = 20;
+        z.w = &zl;
+        sim_mem_poke(sm, hm, 2, &z);
+        sim_reset(sm);
+        sim_coverage_reset(sm);
+        sim_poke_u64(sm, sim_find(sm, "we"), 1);
+        sim_poke_u64(sm, sim_find(sm, "addr"), 2);
+        sim_poke_u64(sm, sim_find(sm, "data"), 0xABCDE);
+        sim_poke_u64(sm, sim_find(sm, "mask"), 5);     /* bytes 0 and 2 (a 4-bit partial byte) */
+        sim_poke_u64(sm, sim_find(sm, "idx"), 2);
+        sim_poke_u64(sm, sim_find(sm, "d"), 0x99);
+        sim_step(sm, 0, 1);
+        TS_EQ(sim_peek_u64(sm, sim_find(sm, "rd")), 0xA00DE);
+        sim_poke_u64(sm, sim_find(sm, "mask"), 2);
+        sim_poke_u64(sm, sim_find(sm, "data"), 0x12345);
+        sim_poke_u64(sm, sim_find(sm, "idx"), 0);
+        sim_poke_u64(sm, sim_find(sm, "d"), 0x11);
+        sim_step(sm, 0, 1);
+        TS_EQ(sim_peek_u64(sm, sim_find(sm, "rd")), 0xA23DE);
+        sim_poke_u64(sm, sim_find(sm, "addr"), 7);    /* out of range: write ignored, read 0 */
+        sim_step(sm, 0, 1);
+        sim_settle(sm);
+        TS_EQ(sim_peek_u64(sm, sim_find(sm, "rd")), 0);
+        TS_EQ(sim_peek_u64(sm, sim_find(sm, "arr")), 0x00990011u);
+        sim_poke_u64(sm, sim_find(sm, "sel"), 2);
+        sim_settle(sm);
+        TS_EQ(sim_peek_u64(sm, sim_find(sm, "o")), 0x99);
+        TS_EQ(sim_peek_u64(sm, sim_find(sm, "held")), 0x5C);
+        n = sim_coverage(sm, &cp);
+        x = ts_cov_find(cp, n, SIM_COV_COVER, 269, 0);
+        TS_CHECK(x && x->count == 1);
+    }
+    sim_free(sm);
+}
+
+/* a child domain on the falling edge of the top clock, and a derived clock
+ * (a register toggling every cycle feeding a child's clock port) */
+static void test_falling_and_derived(void)
+{
+    IrModule *cnt, *top;
+    uint32_t clk, tog, inst1, inst2, w1, w2, o1, o2, cclk, ccnt;
+    SimModel *sm;
+    ts_new_design();
+    cnt = ir_module_new(D, "FCnt", NULL, NULL, SP(270));
+    cclk = ts_sig(cnt, "clk", IRS_IN, ir_type_clock(D, 1), 271);
+    ccnt = ts_sig(cnt, "count", IRS_OUT, ir_type_uint(D, 8), 272);
+    {
+        uint32_t q = ts_sig(cnt, "q", IRS_REG, ir_type_uint(D, 8), 273);
+        ir_add_domain(D, cnt, "", cclk, IR_NONE, 0);
+        ir_set_init(D, cnt, q, ir_bits_u64(TA, 8, 0));
+        CONT(cnt, ccnt, S(cnt, q));
+        ir_add_process(D, cnt, IRP_CLOCKED, 0, B1(ASG(cnt, q, BIN(IROP_ADD, S(cnt, q), K(8, 1)), 274)), SP(274));
+    }
+    ir_design_add_module(D, cnt);
+    top = ir_module_new(D, "Top", NULL, NULL, SP(275));
+    clk = ts_sig(top, "clk", IRS_IN, ir_type_clock(D, 0), 276);
+    tog = ts_sig(top, "tog", IRS_REG, ir_type_bool(D), 277);
+    w1 = ts_sig(top, "f_count", IRS_WIRE, ir_type_uint(D, 8), 278);
+    w2 = ts_sig(top, "d_count", IRS_WIRE, ir_type_uint(D, 8), 279);
+    o1 = ts_sig(top, "fc", IRS_OUT, ir_type_uint(D, 8), 280);
+    o2 = ts_sig(top, "dc", IRS_OUT, ir_type_uint(D, 8), 281);
+    ir_add_domain(D, top, "", clk, IR_NONE, 0);
+    ir_set_init(D, top, tog, ir_bits_u64(TA, 1, 0));
+    ir_add_process(D, top, IRP_CLOCKED, 0, B1(ASG(top, tog, ir_unary(TA, IROP_LNOT, S(top, tog), SP(1)), 282)),
+                   SP(282));
+    inst1 = ir_add_instance(D, top, "f", cnt, SP(283));
+    ir_connect(D, top, inst1, cclk, S(top, clk));
+    ir_connect(D, top, inst1, ccnt, S(top, w1));
+    inst2 = ir_add_instance(D, top, "dv", cnt, SP(284));
+    ir_connect(D, top, inst2, cclk, S(top, tog));     /* derived clock: falling edges of tog */
+    ir_connect(D, top, inst2, ccnt, S(top, w2));
+    CONT(top, o1, S(top, w1));
+    CONT(top, o2, S(top, w2));
+    ir_design_set_top(D, top);
+    sm = sim_new(D, D->top, 1);
+    TS_CHECK(sm != NULL);
+    if (!sm)
+        return;
+    sim_step(sm, 0, 8);
+    TS_EQ(sim_peek_u64(sm, sim_find(sm, "fc")), 8);   /* one falling edge per cycle */
+    TS_EQ(sim_peek_u64(sm, sim_find(sm, "dc")), 4);   /* tog falls every other cycle */
+    TS_EQ(sim_peek_u64(sm, sim_find(sm, "f.clk")), 0);
+    sim_free(sm);
+}
+
 int main(void)
 {
     ts_setup_source();
@@ -1915,6 +2060,8 @@ int main(void)
     test_vcd_scopes();
     test_json_roundtrip();
     test_seeds();
+    test_mem_mask_and_index();
+    test_falling_and_derived();
     test_perf();
     arena_release(&ts_arena);
     src_free_all();

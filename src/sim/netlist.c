@@ -30,7 +30,7 @@ static const char *nl_join(const char *a, const char *b)
     return r;
 }
 
-static void nl_flatten(SimModel *m, const IrModule *mod, uint32_t parent, const char *name)
+static void nl_flatten(SimModel *m, const IrModule *mod, uint32_t parent, const char *name, Span loc)
 {
     uint32_t idx = (uint32_t)m->insts.len, i;
     SimInst in;
@@ -81,10 +81,10 @@ static void nl_flatten(SimModel *m, const IrModule *mod, uint32_t parent, const 
             is->type->kind != IRT_RESET)
             s.writable = 1;
         vec_push(m->sigs, s);
-        slot = map_ref(&m->by_path, MAP_PTR(s.path), &inserted);
+        slot = map_ref(&m->by_path, hash_bytes(s.path, strlen(s.path)), &inserted);
         if (inserted)
             *slot = h + 1;
-        slot = map_ref(&m->by_path, MAP_PTR(s.svpath), &inserted);
+        slot = map_ref(&m->by_path, hash_bytes(s.svpath, strlen(s.svpath)), &inserted);
         if (inserted)
             *slot = h + 1;
     }
@@ -103,11 +103,16 @@ static void nl_flatten(SimModel *m, const IrModule *mod, uint32_t parent, const 
         d.group = IR_NONE;
         vec_push(m->doms, d);
     }
-    if (mod->is_extern)
+    if (mod->is_extern) {
+        diag_warning(parent == IR_NONE ? mod->loc : loc,
+                     "extern module `%s` (instance `%s`) is a black box in simulation; its outputs "
+                     "read as 0",
+                     mod->name, *path ? path : mod->name);
         return;
+    }
     for (i = 0; i < mod->ninsts; i++) {
         m->insts.data[idx].children[i] = (uint32_t)m->insts.len;
-        nl_flatten(m, mod->insts[i].module, idx, mod->insts[i].name);
+        nl_flatten(m, mod->insts[i].module, idx, mod->insts[i].name, mod->insts[i].loc);
     }
 }
 
@@ -377,7 +382,7 @@ static void nl_mark_state(SimModel *m, uint32_t inst, const IrLvalue *lv, void *
 
 static void nl_classify(SimModel *m)
 {
-    uint32_t ii, i;
+    uint32_t ii, i, k;
     for (ii = 0; ii < m->insts.len; ii++) {
         const SimInst *in = &m->insts.data[ii];
         if (in->mod->is_extern)
@@ -389,6 +394,13 @@ static void nl_classify(SimModel *m)
                 continue;
             g = m->doms.data[in->dom_base + p->domain].group;
             nl_walk_targets(m, ii, &p->body, nl_mark_state, &g);
+            for (k = 0; k < p->nregs; k++) {
+                IrLvalue lv;
+                memset(&lv, 0, sizeof lv);
+                lv.sig = p->regs[k];
+                if (lv.sig < in->mod->nsigs)
+                    nl_mark_state(m, ii, &lv, &g);
+            }
         }
     }
 }
@@ -1361,7 +1373,7 @@ static void nl_init_cb(SimModel *m, uint32_t inst, const IrLvalue *lv, void *use
 
 static void nl_compile(SimModel *m, NlBuild *b, NlComp *c)
 {
-    uint32_t i, j, g;
+    uint32_t i, j, g, k;
     /* combinational segment */
     c->clocked = 0;
     c->fd = IR_NONE;
@@ -1395,6 +1407,13 @@ static void nl_compile(SimModel *m, NlBuild *b, NlComp *c)
                 continue;
             nl_block(c, &p->body, -1, p->loc, 0);
             nl_walk_targets(m, d->inst, &p->body, nl_init_cb, &ic);
+            for (k = 0; k < p->nregs; k++) {
+                IrLvalue lv;
+                memset(&lv, 0, sizeof lv);
+                lv.sig = p->regs[k];
+                if (lv.sig < in->mod->nsigs)
+                    nl_init_cb(m, d->inst, &lv, &ic);
+            }
         }
         d->code_hi = nl_pc(c);
         d->init_n = (uint32_t)m->initregs.len - d->init_lo;
@@ -1525,7 +1544,7 @@ int sim_build(SimModel *m)
     nl_pnode(m, SPK_FALSE, 0, 0, 0, 0, 0);
     nl_pnode(m, SPK_VAC, 0, 0, 0, 0, 0);
 
-    nl_flatten(m, m->top, IR_NONE, "");
+    nl_flatten(m, m->top, IR_NONE, "", m->top->loc);
     nl_collect_nodes(m, &b);
     nl_groups(m, &b);
     nl_classify(m);

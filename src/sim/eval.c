@@ -925,6 +925,8 @@ static void ev_toggle(SimModel *m, const uint32_t *cs, uint32_t nc)
         if (nl == (c->falling ? 0 : 1))
             c->cycles++;
     }
+    if (m->derived.len)
+        m->dirty = 1; /* derived clocks may depend combinationally on a top clock */
     sim_settle_now(m);
     sim_vcd_sample(m);
 }
@@ -1032,10 +1034,21 @@ static const SimSig *ev_sig(const SimModel *m, int h)
 int sim_find(SimModel *m, const char *path)
 {
     uint64_t v;
+    size_t i;
     if (!m || !path)
         return -1;
-    if (map_get(&m->by_path, MAP_PTR(intern_cstr(path)), &v))
-        return (int)v - 1;
+    if (map_get(&m->by_path, hash_bytes(path, strlen(path)), &v)) {
+        const SimSig *s = &m->sigs.data[v - 1];
+        if (strcmp(s->path, path) == 0 || strcmp(s->svpath, path) == 0)
+            return (int)v - 1;
+    }
+    /* hash collision (or SV path shadowed by a Tern path): exact scan */
+    for (i = 0; i < m->sigs.len; i++)
+        if (strcmp(m->sigs.data[i].path, path) == 0)
+            return (int)i;
+    for (i = 0; i < m->sigs.len; i++)
+        if (strcmp(m->sigs.data[i].svpath, path) == 0)
+            return (int)i;
     return -1;
 }
 
