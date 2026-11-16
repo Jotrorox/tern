@@ -1,0 +1,78 @@
+module Router
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in up_req_valid (up.req.valid): bool @0
+  3: in up_req_addr (up.req.addr): uint<4> @0
+  4: out up_req_ready (up.req.ready): bool @0 flipped
+  5: out up_rsp_valid (up.rsp.valid): bool @0 flipped
+  6: out up_rsp_data (up.rsp.data): uint<8> @0 flipped
+  7: out down_0_req_valid (down[0].req.valid): bool @0
+  8: out down_0_req_addr (down[0].req.addr): uint<4> @0
+  9: in down_0_req_ready (down[0].req.ready): bool @0 flipped
+  10: in down_0_rsp_valid (down[0].rsp.valid): bool @0 flipped
+  11: in down_0_rsp_data (down[0].rsp.data): uint<8> @0 flipped
+  12: out down_1_req_valid (down[1].req.valid): bool @0
+  13: out down_1_req_addr (down[1].req.addr): uint<4> @0
+  14: in down_1_req_ready (down[1].req.ready): bool @0 flipped
+  15: in down_1_rsp_valid (down[1].rsp.valid): bool @0 flipped
+  16: in down_1_rsp_data (down[1].rsp.data): uint<8> @0 flipped
+  17: out fired: bool @0
+  assign down_0_req_valid = up_req_valid
+  assign down_0_req_addr = up_req_addr
+  assign up_req_ready = down_0_req_ready
+  assign down_1_req_valid = 1'h0
+  assign down_1_req_addr = 4'h0
+  assign up_rsp_valid = down_0_rsp_valid
+  assign up_rsp_data = down_0_rsp_data
+  assign fired = (up_req_valid && up_req_ready)
+end
+module Top top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in s_valid (s.valid): bool @0
+  3: in s_data (s.data): uint<8> @0
+  4: out s_ready (s.ready): bool @0 flipped
+  5: out m_valid (m.valid): bool @0
+  6: out m_data (m.data): uint<8> @0
+  7: in m_ready (m.ready): bool @0 flipped
+  8: in bus_req_valid (bus.req.valid): bool @0
+  9: in bus_req_addr (bus.req.addr): uint<4> @0
+  10: out bus_req_ready (bus.req.ready): bool @0 flipped
+  11: out bus_rsp_valid (bus.rsp.valid): bool @0 flipped
+  12: out bus_rsp_data (bus.rsp.data): uint<8> @0 flipped
+  13: out any: bool @0
+  14: wire r_up_req_valid (r.up.req.valid): bool @0
+  15: wire r_up_req_addr (r.up.req.addr): uint<4> @0
+  16: wire r_up_req_ready (r.up.req.ready): bool @0
+  17: wire r_up_rsp_valid (r.up.rsp.valid): bool @0
+  18: wire r_up_rsp_data (r.up.rsp.data): uint<8> @0
+  19: wire r_down_0_req_valid (r.down[0].req.valid): bool @0
+  20: wire r_down_0_req_addr (r.down[0].req.addr): uint<4> @0
+  21: wire r_down_0_req_ready (r.down[0].req.ready): bool @0
+  22: wire r_down_0_rsp_valid (r.down[0].rsp.valid): bool @0
+  23: wire r_down_0_rsp_data (r.down[0].rsp.data): uint<8> @0
+  24: wire r_down_1_req_valid (r.down[1].req.valid): bool @0
+  25: wire r_down_1_req_addr (r.down[1].req.addr): uint<4> @0
+  26: wire r_down_1_req_ready (r.down[1].req.ready): bool @0
+  27: wire r_down_1_rsp_valid (r.down[1].rsp.valid): bool @0
+  28: wire r_down_1_rsp_data (r.down[1].rsp.data): uint<8> @0
+  29: wire r_fired (r.fired): bool @0
+  assign m_valid = s_valid
+  assign m_data = s_data
+  assign s_ready = m_ready
+  assign r_up_req_valid = bus_req_valid
+  assign r_up_req_addr = bus_req_addr
+  assign bus_req_ready = r_up_req_ready
+  assign bus_rsp_valid = r_up_rsp_valid
+  assign bus_rsp_data = r_up_rsp_data
+  assign r_down_1_rsp_valid = 1'h0
+  assign r_down_1_rsp_data = 8'h0
+  assign r_down_0_rsp_valid = r_down_0_req_valid
+  assign r_down_0_rsp_data = 8'h7
+  assign r_down_0_req_ready = 1'h1
+  assign r_down_1_req_ready = 1'h0
+  assign any = (r_fired || (s_valid && s_ready))
+  inst r: Router (clk = clk, rst = rst, up_req_valid = r_up_req_valid, up_req_addr = r_up_req_addr, up_req_ready -> r_up_req_ready, up_rsp_valid -> r_up_rsp_valid, up_rsp_data -> r_up_rsp_data, down_0_req_valid -> r_down_0_req_valid, down_0_req_addr -> r_down_0_req_addr, down_0_req_ready = r_down_0_req_ready, down_0_rsp_valid = r_down_0_rsp_valid, down_0_rsp_data = r_down_0_rsp_data, down_1_req_valid -> r_down_1_req_valid, down_1_req_addr -> r_down_1_req_addr, down_1_req_ready = r_down_1_req_ready, down_1_rsp_valid = r_down_1_rsp_valid, down_1_rsp_data = r_down_1_rsp_data, fired -> r_fired)
+end

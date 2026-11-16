@@ -1,0 +1,3 @@
+dynamic_index.tern:9:13: error: index uint<3> is too narrow for 16 elements: it must be exactly uint<4>
+dynamic_index.tern:10:13: error: index uint<5> is too wide for 16 elements: it may be out of range
+dynamic_index.tern:11:9: error: index 16 out of range for [uint<8>; 16]

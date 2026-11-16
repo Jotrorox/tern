@@ -1,0 +1,35 @@
+module Ram top
+  domain 0 "" clock=clk reset=none default
+  0: in clk: clock
+  1: in we: bool @0
+  2: in wr_addr: uint<4> @0
+  3: in wr_data: uint<32> @0
+  4: in rd_addr: uint<4> @0
+  5: in be: bit<4> @0
+  6: in idx: uint<2> @0
+  7: out rd: uint<32> @0
+  8: out rd_new: uint<32> @0
+  9: out async_rd: uint<8> @0
+  10: mem buf: uint<32> x 16 #[ram(block)]
+  11: mem lut: uint<8> x 4 mem_init #[ram(distributed)]
+  12: reg buf_rd0: uint<32> @0
+  13: reg buf_rd1: uint<32> @0
+  14: mem bytes: uint<32> x 16
+  assign rd = buf_rd0
+  assign rd_new = buf_rd1
+  assign async_rd = lut[idx]
+  on 0 regs(buf_rd0) {
+    buf_rd0 = buf[rd_addr]
+  }
+  on 0 regs(buf_rd1) {
+    buf_rd1 = ((we && (wr_addr == rd_addr)) ? wr_data : buf[rd_addr])
+  }
+  on 0 regs() {
+    if we {
+      buf[wr_addr] = wr_data
+    }
+  }
+  on 0 regs() {
+    bytes[wr_addr] = wr_data mask be
+  }
+end

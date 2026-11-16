@@ -1,0 +1,15 @@
+// §7.2: every `in` port of an instance must be connected
+module Adder {
+    in a: u8
+    in b: u8
+    in cin: bool
+    out s: uint<10>
+    s = a + b + (cin as uint<1>)
+}
+
+module Top {
+    in x: u8
+    out y: uint<10>
+    let add = Adder(a: x)
+    y = add.s
+}

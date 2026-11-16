@@ -285,7 +285,8 @@ static uint32_t elb_domain_for_clock(Elab *el, uint32_t clk, int create)
             return i;
     if (!create)
         return IR_NONE;
-    return ir_add_domain(el->design, m, "", clk, IR_NONE, 0);
+    /* an implicit, reset-less domain named after its clock */
+    return ir_add_domain(el->design, m, m->sigs[clk].name, clk, IR_NONE, 0);
 }
 
 uint32_t el_domain_of(Elab *el, Expr *e, Env *env, Span at)
@@ -662,11 +663,8 @@ static Value elb_force_let(Elab *el, Binding *b, Stmt *s, Env *env)
     if (s->u.let.constraint)
         el_error(el, s->u.let.constraint->span, "`where` on `let` is only allowed in tests");
     if (elb_is_instance_init(el, s->u.let.init, env, &callee)) {
-        const char *iname = pat->kind == PAT_BIND ? pat->u.bind.name
-                          : pat->kind == PAT_STRUCT && pat->u.struct_pat.path.nsegs
-                              ? arena_printf(&el->arena, "%s_inst", pat->u.struct_pat.path.segs[pat->u.struct_pat.path.nsegs - 1].name.name)
-                              : "inst";
-        v = el_instance(el, s->u.let.init, env, elb_name(el, env, iname), s->span, callee);
+        v = el_instance(el, s->u.let.init, env, pat->kind == PAT_BIND ? elb_name(el, env, pat->u.bind.name) : NULL,
+                        s->span, callee);
         b->sem = SEM_INSTANCE;
         if (pat->kind == PAT_STRUCT) {
             uint32_t k;
@@ -835,6 +833,21 @@ static Place *elb_inst_tree(Elab *el, ElbConnCtx *cc, Place *cp, Ty *t, const ch
     }
 }
 
+static void elb_mark_tree_assigned(Elab *el, Place *p)
+{
+    uint32_t i;
+    uint64_t k;
+    if (!p)
+        return;
+    if (p->kind == PL_SIG) {
+        if (map_get(&el->mod->pending, p->sig, &k))
+            el->mod->pendings.data[k - 1].assigned = 1;
+        return;
+    }
+    for (i = 0; i < p->n; i++)
+        elb_mark_tree_assigned(el, p->subs[i]);
+}
+
 static int elb_find_port(ModInfo *mi, const char *name)
 {
     uint32_t i;
@@ -899,7 +912,7 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
         snprintf(buf, sizeof buf, "%s_%u", vm->item->name.name, (unsigned)mc->ninline++);
         for (k = 0; buf[k]; k++)
             buf[k] = (char)tern_to_lower((unsigned char)buf[k]);
-        name = elb_name(el, env, buf);
+        name = elb_name(el, env, intern_cstr(buf));
     }
     frame = arena_printf(&el->arena, "%s: %s", name, el_text(call->u.call.callee));
     diag_push_path(frame);
@@ -1012,7 +1025,7 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
     cc.inst = inst;
     for (i = 0; i < mi->nports; i++) {
         ModPort *pp = &mi->ports[i];
-        uint32_t pdom = elb_map_child_domain(el, mi, conn, pp->domain, dom);
+        uint32_t pdom = mi->ir->ndomains ? elb_map_child_domain(el, mi, conn, pp->domain, dom) : IR_NONE;
         if ((pp->is_clock || pp->is_reset) && pp->place->kind == PL_SIG && conn[i]) {
             ir_connect(el->design, m, inst, pp->place->sig, conn[i]);
             vi->ports[i] = el_hw(el, pp->ty, conn[i]);
@@ -1036,9 +1049,10 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
             continue;
         ae = args[given[i] - 1].value;
         av = elab_eval(el, ae, env, pp->ty);
-        if (av.kind == VAL_ERROR || !vi->ports[i].place)
-            continue;
-        el_assign(el, vi->ports[i].place, av, ae, NULL, args[given[i] - 1].span);
+        if (av.kind != VAL_ERROR && vi->ports[i].place)
+            el_assign(el, vi->ports[i].place, av, ae, NULL, args[given[i] - 1].span);
+        /* connected (even when it failed): not reported as unconnected */
+        elb_mark_tree_assigned(el, vi->ports[i].place);
     }
     free(conn);
     free(given);
@@ -1222,7 +1236,7 @@ Value el_maybe_temp(Elab *el, Value v, Span at)
     Value r;
     if (v.kind != VAL_HW || !el->design || !mc || !v.ty || !v.ty->hw || v.place || mc->in_property)
         return v;
-    if (elb_tree_size(v.u.e, 40) <= 24)
+    if (elb_tree_size(v.u.e, 40) <= 16)
         return v;
     m = mc->ir;
     nm = intern_cstr(arena_printf(&el->arena, "_t%u", (unsigned)mc->ntemps++));

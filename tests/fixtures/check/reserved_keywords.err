@@ -1,0 +1,2 @@
+reserved_keywords.tern:5:5: error: `wire` is SystemVerilog, not Tern
+reserved_keywords.tern:6:5: error: `logic` is SystemVerilog, not Tern

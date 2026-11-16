@@ -1,0 +1,1 @@
+width_tick.tern:8:16: error: width mismatch: `tick + 1` is uint<5>, `tick` is uint<4>

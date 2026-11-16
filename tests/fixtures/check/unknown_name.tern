@@ -1,0 +1,12 @@
+// unknown names get suggestions
+use std::fifo::Fifo
+
+module Top {
+    in clk: clock
+    in rst: reset
+    in count_in: u8
+    out y: u8
+    y = count_inn
+    let s = Strem { valid: true, data: 0 }
+    let p = Pipe<u8, 2>(in: s)
+}

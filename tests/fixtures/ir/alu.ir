@@ -1,0 +1,36 @@
+enum Op (2 bits, tag 2, binary) { Nop = 2'h0, Add = 2'h1, Sub = 2'h2, And = 2'h3 }
+struct Flags (2 bits) { carry: bool @1, zero: bool @0 }
+module Alu top
+  0: in op: Op
+  1: in a: uint<32>
+  2: in b: uint<32>
+  3: out y: uint<32>
+  4: out flags: Flags
+  5: out is_arith: bool
+  6: out code: uint<2>
+  7: var alu_out: uint<32>
+  8: var f: Flags
+  assign y = alu_out
+  assign flags = f
+  assign is_arith = ((op == 2'h1) || (op == 2'h2))
+  assign code = ((op == 2'h0) ? 2'h0 : (((op == 2'h1) || (op == 2'h2)) ? 2'h1 : 2'h3))
+  comb {
+    f = 2'h0
+    case op {
+      2'h1 => {
+        alu_out = zext32((zext33(a) + zext33(b)))
+        f.carry = (zext33(a) + zext33(b))[32]
+      }
+      2'h2 => {
+        alu_out = (a - b)
+      }
+      2'h3 => {
+        alu_out = (a & b)
+      }
+      2'h0 => {
+        alu_out = 32'h0
+      }
+    }
+    f.zero = (alu_out == 32'h0)
+  }
+end

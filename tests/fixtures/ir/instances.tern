@@ -1,0 +1,43 @@
+// §7.2: instances with clock/reset inherited from the default domain,
+// shorthand connections, destructuring, an inline instance read as
+// `M(..).port`, an input assigned after the instantiation, a module const
+// read as `M<..>::NAME`, and named / defaulted generic arguments.
+
+module Counter<W: uint = 4, Step: uint = 1> {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out count: uint<W>
+    pub const MAX: uint = (1 << W) - 1
+    reg c: uint<W> = 0
+    on clk {
+        if en { c = c +% Step }
+    }
+    count = c
+}
+
+module Inv {
+    in a: bool
+    out y: bool
+    y = !a
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out a: uint<4>
+    out b: uint<8>
+    out c: bool
+    out top_max: uint<8>
+
+    let c0 = Counter(en)
+    a = c0.count
+    let Counter { count } = Counter<Step: 3, W: 8>(en: !en)
+    b = count
+    let late = Counter()
+    late.en = c0.count == 0
+    c = Inv(a: late.count[0]).y
+    top_max = Counter<8>::MAX
+}

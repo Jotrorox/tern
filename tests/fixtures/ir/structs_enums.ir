@@ -1,0 +1,36 @@
+enum Event (2 bits, tag 2, binary) { Start = 2'h0, Done = 2'h1, Abort = 2'h2, None = 2'h3 }
+struct Pixel (24 bits) { r: uint<8> @16, g: uint<8> @8, b: uint<8> @0 }
+enum Cmd (50 bits, tag 2, binary) { Write = 2'h0 struct { addr: uint<16>, data: uint<32> }, Read = 2'h1 struct { addr: uint<16> }, Idle = 2'h2 }
+enum State (3 bits, tag 3, onehot) { Idle = 3'h1, Run = 3'h2, Finish = 3'h4 }
+struct Pair_u8 (16 bits) { a: uint<8> @8, b: uint<8> @0 }
+module Top top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in grad: uint<16> @0
+  3: in payload: uint<32> @0
+  4: in sel: bool @0
+  5: in event: Event @0
+  6: out grey: uint<10> @0
+  7: out addr: uint<16> @0
+  8: out raw: bit<24> @0
+  9: out back: Pixel @0
+  10: out busy: bool @0
+  11: out sum: uint<9> @0
+  12: wire p: Pixel
+  13: wire c: Cmd
+  14: reg state: State @0 = 3'h1
+  15: wire pr: Pair_u8
+  assign p = {8'hff, 8'h0, grad[0+:8]}
+  assign grey = ((zext10((zext9(p.r) + zext9(p.g))) + zext10(p.b)) / 10'h3)
+  assign c = (sel ? {2'h0, {16'h10, payload}} : {2'h1, 32'h0, {grad}})
+  assign addr = (((c[48+:2] == 2'h0) || (c[48+:2] == 2'h1)) ? ((c[48+:2] == 2'h0) ? c[0+:48].addr : c[0+:16].addr) : 16'h0)
+  assign raw = p
+  assign back = zext24(raw)
+  assign busy = ((state == 3'h2) || (state == 3'h4))
+  assign pr = {p.r, p.g}
+  assign sum = (zext9(pr.a) + zext9(pr.b))
+  on 0 regs(state) {
+    state = (((state == 3'h1) && (event == 2'h0)) ? 3'h2 : (((state == 3'h2) && (event == 2'h1)) ? 3'h4 : (((state == 3'h2) && (event == 2'h2)) ? 3'h1 : ((state == 3'h4) ? 3'h1 : state))))
+  }
+end

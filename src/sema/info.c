@@ -115,6 +115,13 @@ const SemInfo *sema_info_at(Sema *S, uint32_t file, uint32_t off)
 
 const SemInfo *sema_info_decl(Sema *S, Span def)
 {
+    if (S->info_sorted) {
+        size_t i;
+        map_clear(&S->info_index);
+        for (i = 0; i < S->info.len; i++)
+            map_put(&S->info_index, info_key(S->info.data[i].span), i);
+        S->info_sorted = 0;
+    }
     return info_find(S, def);
 }
 

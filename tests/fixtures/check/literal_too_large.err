@@ -1,0 +1,3 @@
+literal_too_large.tern:5:9: error: literal 300 does not fit in uint<8> (0..=255)
+literal_too_large.tern:6:9: error: literal -9 does not fit in sint<4> (-8..=7)
+literal_too_large.tern:7:13: error: literal 511 does not fit in uint<8> (0..=255)

@@ -1,0 +1,8 @@
+// §3.3: reserved words and pasted SystemVerilog
+module Top {
+    in a: bool
+    out y: bool
+    wire w = a
+    logic l
+    y = a
+}

@@ -1,0 +1,3 @@
+unknown_name.tern:9:9: error: cannot find `count_inn` in this scope
+unknown_name.tern:10:13: error: cannot find `Strem` in this scope
+unknown_name.tern:11:13: error: cannot find `Pipe` in this scope

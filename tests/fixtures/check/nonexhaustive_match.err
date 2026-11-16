@@ -1,0 +1,2 @@
+nonexhaustive_match.tern:11:15: error: non-exhaustive match: `.Nop` is not covered
+nonexhaustive_match.tern:18:31: error: non-exhaustive match: `.Sub`, `.And` are not covered

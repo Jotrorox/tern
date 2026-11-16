@@ -1,0 +1,1 @@
+unconnected_input.tern:13:5: error: instance `add` of `Adder` has unconnected inputs `b`, `cin`

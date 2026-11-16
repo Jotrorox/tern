@@ -1,0 +1,19 @@
+// §6.2: match must cover every variant
+enum Op { Nop, Add, Sub, And }
+
+module Top {
+    in op: Op
+    in a: u8
+    in b: u8
+    out y: u8
+    var r: u8
+    comb {
+        match op {
+            .Add => r = a +% b,
+            .Sub => r = a -% b,
+            .And => r = a & b,
+        }
+    }
+    y = r
+    let code: uint<2> = match op { .Nop => 0, .Add => 1 }
+}

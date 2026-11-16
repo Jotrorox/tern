@@ -1,0 +1,1 @@
+bool_arith.tern:6:9: error: bool is not an integer: `+` on bool

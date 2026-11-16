@@ -1,0 +1,45 @@
+// §8.1: bundle ports flattened with directions from in/out x flip, nested
+// bundles, arrays of bundles as ports, whole-bundle assignment (both
+// directions in one line), bundle literals, and a bundle method.
+
+bundle Req<AW: uint> {
+    valid: bool
+    addr: uint<AW>
+    flip ready: bool
+}
+
+bundle Bus<AW: uint> {
+    req: Req<AW>
+    flip rsp: Valid<u8>
+}
+
+module Router {
+    in clk: clock
+    in rst: reset
+    in up: Bus<4>
+    out down: [Bus<4>; 2]
+    out fired: bool
+
+    down[0].req = up.req
+    down[1].req = Req { valid: false, addr: 0 }
+    up.rsp = down[0].rsp
+    fired = up.req.valid and up.req.ready
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in s: Stream<u8>
+    out m: Stream<u8>
+    in bus: Bus<4>
+    out any: bool
+
+    m = s
+    let r = Router(up: bus)
+    r.down[1].rsp = Valid { valid: false, data: 0 }
+    r.down[0].rsp = Valid { valid: r.down[0].req.valid, data: 7 }
+    r.down[0].req.ready = true
+    r.down[1].req.ready = false
+    any = r.fired or s.fire()
+}

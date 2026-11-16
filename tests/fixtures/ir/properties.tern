@@ -1,0 +1,55 @@
+// §11.3-11.4: immediate assertions in on/comb blocks, properties with
+// always / never / |-> / |=> / ##n / ##[a:$] / eventually / until,
+// stable / rose / fell / past, a named sequence, assume and cover
+// properties, and a property inside an elaboration-time `if`.
+
+module Fifo<Depth: uint = 4, Strict: bool = true> {
+    in clk: clock
+    in rst: reset
+    in push: Stream<u8>
+    out pop: Stream<u8>
+    out count: uint<3>
+
+    reg n: uint<3> = 0
+    on clk {
+        assert !(push.fire() and n == Depth), "push into full fifo"
+        if push.fire() and !pop.fire() { n = n +% 1 }
+        else if pop.fire() and !push.fire() { n = n -% 1 }
+    }
+    comb {
+        expect n <= Depth
+    }
+    count = n
+    push.ready = n != Depth
+    pop.valid = n != 0
+    pop.data = 0
+
+    sequence fill { push.fire() ##1 push.fire() }
+
+    property valid_holds_until_ready {
+        always (push.valid and !push.ready) |=> push.valid and stable(push.data)
+    }
+    property eventually_drains {
+        always (count > 0 and pop.ready) |-> eventually[..Depth] count == 0
+    }
+    property no_overflow { never n > Depth }
+    property edges { always rose(pop.valid) |-> past(n) == 0 }
+    property hold { always push.valid until push.ready }
+    property seq { always fill |=> count > 0 }
+    assume property no_push_during_reset { always rst |-> !push.valid }
+    cover property wraps_around { count == Depth ##[1:$] count == 0 }
+    cover property two_cycles { fell(pop.valid) ##2 pop.valid }
+    if Strict {
+        property strict_bound { always count <= Depth }
+    }
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in push: Stream<u8>
+    out pop: Stream<u8>
+    let f = Fifo(push)
+    pop = f.pop
+}

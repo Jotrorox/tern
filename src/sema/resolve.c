@@ -217,9 +217,22 @@ static void sema_flatten_use(Sema *S, FileUnit *f, UseDecl *ud, UseTree *t, cons
         if (n == 0)
             return;
         u->name = t->alias.name ? t->alias.name : segs[n - 1];
-        if (map_has(&f->uses, MAP_PTR(u->name))) {
-            diag_error(u->span, "`%s` is imported twice", u->name);
-            return;
+        {
+            uint64_t ov;
+            if (map_get(&f->uses, MAP_PTR(u->name), &ov)) {
+                UseEntry *o = (UseEntry *)(uintptr_t)ov;
+                int same = o->nsegs == n;
+                for (i = 0; same && i < n; i++)
+                    if (o->segs[i] != segs[i])
+                        same = 0;
+                if (!same) {
+                    diag_error(u->span, "`%s` is imported twice", u->name);
+                    return;
+                }
+                if (u->is_pub && !map_has(&f->pkg->reexports, MAP_PTR(u->name)))
+                    map_put(&f->pkg->reexports, MAP_PTR(u->name), MAP_PTR(u));
+                return;
+            }
         }
         map_put(&f->uses, MAP_PTR(u->name), MAP_PTR(u));
         if (u->is_pub) {

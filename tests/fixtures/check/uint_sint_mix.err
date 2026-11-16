@@ -1,0 +1,1 @@
+uint_sint_mix.tern:6:9: error: cannot mix uint<8> and sint<8> in `+`

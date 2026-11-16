@@ -1,0 +1,67 @@
+module Fifo_4_1 "Fifo<4, true>"
+  param Depth = 32'h4
+  param Strict = 1'h1
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in push_valid (push.valid): bool @0
+  3: in push_data (push.data): uint<8> @0
+  4: out push_ready (push.ready): bool @0 flipped
+  5: out pop_valid (pop.valid): bool @0
+  6: out pop_data (pop.data): uint<8> @0
+  7: in pop_ready (pop.ready): bool @0 flipped
+  8: out count: uint<3> @0
+  9: reg n: uint<3> @0 = 3'h0
+  assign count = n
+  assign push_ready = (n != 3'h4)
+  assign pop_valid = (n != 3'h0)
+  assign pop_data = 8'h0
+  on 0 regs(n) {
+    assert !((push_valid && push_ready) && (n == 3'h4)), "push into full fifo"
+    if ((push_valid && push_ready) && !(pop_valid && pop_ready)) {
+      n = (n + 3'h1)
+    } else {
+      if ((pop_valid && pop_ready) && !(push_valid && push_ready)) {
+        n = (n - 3'h1)
+      }
+    }
+  }
+  comb {
+    expect (n <= 3'h4)
+  }
+  assert property valid_holds_until_ready @0: always ((push_valid && !push_ready) |=> (push_valid && (push_data == past(push_data, 1))))
+  assert property eventually_drains @0: always (((count > 3'h0) && pop_ready) |-> eventually[..4] (count == 3'h0))
+  assert property no_overflow @0: never (n > 3'h4)
+  assert property edges @0: always ((pop_valid && !past(pop_valid, 1)) |-> (past(n, 1) == 3'h0))
+  assert property hold @0: always (push_valid until push_ready)
+  assert property seq @0: always (((push_valid && push_ready) ##1 (push_valid && push_ready)) |=> (count > 3'h0))
+  assume property no_push_during_reset @0: always (rst |-> !push_valid)
+  cover property wraps_around @0: ((count == 3'h4) ##[1:$] (count == 3'h0))
+  cover property two_cycles @0: ((!pop_valid && past(pop_valid, 1)) ##2 pop_valid)
+  assert property strict_bound @0: always (count <= 3'h4)
+end
+module Top top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in push_valid (push.valid): bool @0
+  3: in push_data (push.data): uint<8> @0
+  4: out push_ready (push.ready): bool @0 flipped
+  5: out pop_valid (pop.valid): bool @0
+  6: out pop_data (pop.data): uint<8> @0
+  7: in pop_ready (pop.ready): bool @0 flipped
+  8: wire f_push_valid (f.push.valid): bool @0
+  9: wire f_push_data (f.push.data): uint<8> @0
+  10: wire f_push_ready (f.push.ready): bool @0
+  11: wire f_pop_valid (f.pop.valid): bool @0
+  12: wire f_pop_data (f.pop.data): uint<8> @0
+  13: wire f_pop_ready (f.pop.ready): bool @0
+  14: wire f_count (f.count): uint<3> @0
+  assign f_push_valid = push_valid
+  assign f_push_data = push_data
+  assign push_ready = f_push_ready
+  assign pop_valid = f_pop_valid
+  assign pop_data = f_pop_data
+  assign f_pop_ready = pop_ready
+  inst f: Fifo_4_1 (clk = clk, rst = rst, push_valid = f_push_valid, push_data = f_push_data, push_ready -> f_push_ready, pop_valid -> f_pop_valid, pop_data -> f_pop_data, pop_ready = f_pop_ready, count -> f_count)
+end

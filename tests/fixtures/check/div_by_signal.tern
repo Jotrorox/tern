@@ -1,0 +1,9 @@
+// Table 5.2: division only by a constant
+module Top {
+    in a: u16
+    in b: u8
+    out q: u16
+    out r: u16
+    q = a / b
+    r = a / 0
+}

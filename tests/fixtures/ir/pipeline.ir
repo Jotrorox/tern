@@ -1,0 +1,65 @@
+module Pipeline_u8_3 "Pipeline<uint<8>, 3>"
+  param Stages = 32'h3
+  domain 0 "" clock=clk reset=none default
+  0: in clk: clock
+  1: in d: uint<8> @0
+  2: out q: uint<8> @0
+  3: var stage: [uint<8>; 4]
+  4: reg r_0: uint<8> @0
+  5: reg r_1: uint<8> @0
+  6: reg r_2: uint<8> @0
+  assign stage[0+:8] = d
+  assign stage[8+:8] = r_0
+  assign stage[16+:8] = r_1
+  assign stage[24+:8] = r_2
+  assign q = stage[24+:8]
+  on 0 regs(r_0) {
+    r_0 = stage[0+:8]
+  }
+  on 0 regs(r_1) {
+    r_1 = stage[8+:8]
+  }
+  on 0 regs(r_2) {
+    r_2 = stage[16+:8]
+  }
+end
+module Adder_4_0 "Adder<4, false>"
+  param W = 32'h4
+  param Fast = 1'h0
+  0: in a: uint<4>
+  1: in b: uint<4>
+  2: out s: uint<5>
+  3: var c: bit<5>
+  4: var r: bit<4>
+  assign s = {c[4], r}
+  comb {
+    c[0+:1] = 1'h0
+    r[0+:1] = ((a[0] ^ b[0]) ^ c[0])
+    c[1+:1] = ((a[0] && b[0]) || (c[0] && (a[0] ^ b[0])))
+    r[1+:1] = ((a[1] ^ b[1]) ^ c[1])
+    c[2+:1] = ((a[1] && b[1]) || (c[1] && (a[1] ^ b[1])))
+    r[2+:1] = ((a[2] ^ b[2]) ^ c[2])
+    c[3+:1] = ((a[2] && b[2]) || (c[2] && (a[2] ^ b[2])))
+    r[3+:1] = ((a[3] ^ b[3]) ^ c[3])
+    c[4+:1] = ((a[3] && b[3]) || (c[3] && (a[3] ^ b[3])))
+  }
+end
+module Top top
+  domain 0 "" clock=clk reset=none default
+  0: in clk: clock
+  1: in x: uint<8> @0
+  2: out y: uint<8> @0
+  3: out sum: uint<5> @0
+  4: wire p_d (p.d): uint<8> @0
+  5: wire p_q (p.q): uint<8> @0
+  6: wire add_a (add.a): uint<4>
+  7: wire add_b (add.b): uint<4>
+  8: wire add_s (add.s): uint<5>
+  assign p_d = x
+  assign y = p_q
+  assign add_a = x[0+:4]
+  assign add_b = x[4+:4]
+  assign sum = add_s
+  inst p: Pipeline_u8_3 (clk = clk, d = p_d, q -> p_q)
+  inst add: Adder_4_0 (a = add_a, b = add_b, s -> add_s)
+end

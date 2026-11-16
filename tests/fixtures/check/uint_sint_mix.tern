@@ -1,0 +1,7 @@
+// §5.3: mixing uint and sint in one operator needs a cast
+module Top {
+    in a: uint<8>
+    in b: sint<8>
+    out y: sint<10>
+    y = a + b
+}

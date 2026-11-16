@@ -1,0 +1,12 @@
+// `.Variant` needs a type from its context
+enum State { Idle, Run }
+
+module Top {
+    in clk: clock
+    in rst: reset
+    out busy: bool
+    reg s: State = .Idle
+    on clk { s = .Run }
+    busy = s == .Run
+    let x = .Idle
+}

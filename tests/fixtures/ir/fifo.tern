@@ -1,0 +1,52 @@
+// A FIFO in the style of std::fifo::Fifo: memory with a synchronous read,
+// pointer arithmetic with wrapping adds, a where clause, a module-local
+// type alias and properties.
+
+module SimpleFifo<T: type, Depth: uint = 4>
+where Depth.is_pow2()
+{
+    in clk: clock
+    in rst: reset
+    in push: Stream<T>
+    out pop: Stream<T>
+    out count: uint<clog2(Depth) + 1>
+
+    const AW: uint = clog2(Depth)
+    type Ptr = uint<AW + 1>
+
+    mem buf: [T; Depth]
+    reg wr_ptr: Ptr = 0
+    reg rd_ptr: Ptr = 0
+    reg wr_vis: Ptr = 0
+
+    let used = wr_ptr -% rd_ptr
+    count = used
+    push.ready = used != Depth
+    pop.valid = rd_ptr != wr_vis
+    let rd_next = if pop.fire() { rd_ptr +% 1 } else { rd_ptr }
+    pop.data = buf.read(rd_next as uint<AW>)
+
+    on clk {
+        if push.fire() {
+            buf[wr_ptr as uint<AW>] = push.data
+            wr_ptr = wr_ptr +% 1
+        }
+        wr_vis = wr_ptr
+        rd_ptr = rd_next
+    }
+
+    property count_bounded { always count <= Depth }
+    cover property wraps { count == Depth ##[1:$] count == 0 }
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in push: Stream<u8>
+    out pop: Stream<u8>
+    out level: uint<3>
+    let f = SimpleFifo<u8>(push)
+    pop = f.pop
+    level = f.count
+}

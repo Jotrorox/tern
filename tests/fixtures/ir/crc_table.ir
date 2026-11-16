@@ -1,0 +1,19 @@
+module Top top
+  domain 0 "" clock=clk reset=none default
+  0: in clk: clock
+  1: in addr: uint<8> @0
+  2: in x: uint<8> @0
+  3: out entry: uint<32> @0
+  4: out p: bool @0
+  5: out step: uint<8> @0
+  6: mem rom: uint<32> x 256 mem_init
+  7: reg rom_rd0: uint<32> @0
+  8: wire _t0: uint<8>
+  assign entry = rom_rd0
+  assign p = ^x
+  assign _t0 = ((x[7] ? ((x << 4'h1) ^ 8'h7) : (x << 4'h1))[7] ? (((x[7] ? ((x << 4'h1) ^ 8'h7) : (x << 4'h1)) << 4'h1) ^ 8'h7) : ((x[7] ? ((x << 4'h1) ^ 8'h7) : (x << 4'h1)) << 4'h1))
+  assign step = _t0
+  on 0 regs(rom_rd0) {
+    rom_rd0 = rom[addr]
+  }
+end

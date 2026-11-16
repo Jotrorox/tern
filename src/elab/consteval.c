@@ -765,7 +765,7 @@ void el_record_decl(Elab *el, Span at, const char *name, SemKind k, Ty *t, const
 void el_record_use(Elab *el, Span at, Binding *b, const char *name)
 {
     SemInfo si;
-    if (!el->S->record_info || el->quiet || !at.file)
+    if (!el->S->record_info || el->quiet || !at.file || sema_info_decl(el->S, at))
         return;
     memset(&si, 0, sizeof si);
     si.span = at;
@@ -777,7 +777,7 @@ void el_record_use(Elab *el, Span at, Binding *b, const char *name)
             si.type = ty_str(b->val.ty);
         if (b->val.kind == VAL_TYPE)
             si.value = ty_str(b->val.u.type);
-        else if (val_is_const(&b->val) && b->val.kind != VAL_VOID) {
+        else if (!b->is_mut && val_is_const(&b->val) && b->val.kind != VAL_VOID) {
             StrBuf sb = {0};
             val_print(&b->val, &sb);
             if (sb.len < 80)
@@ -791,7 +791,7 @@ void el_record_use(Elab *el, Span at, Binding *b, const char *name)
 static void ce_record_item_use(Elab *el, Span at, Item *it, const char *name)
 {
     SemInfo si;
-    if (!el->S->record_info || el->quiet || !at.file || !it)
+    if (!el->S->record_info || el->quiet || !at.file || !it || sema_info_decl(el->S, at))
         return;
     memset(&si, 0, sizeof si);
     si.span = at;
@@ -1235,6 +1235,14 @@ static Value ce_eval_path(Elab *el, Path *p, Env *env, Ty *expect, int type_ctx)
 }
 
 /* ========================================================== conversions */
+
+/* "<prefix><name>`", interned (no allocation growth in loops) */
+static const char *ce_what(const char *prefix, const char *name)
+{
+    char buf[256];
+    snprintf(buf, sizeof buf, "%s%s`", prefix, name ? name : "?");
+    return intern_cstr(buf);
+}
 
 static int ce_int_family(Ty *t)
 {
@@ -2315,7 +2323,8 @@ Value el_cast(Elab *el, Value v, Ty *to, Span at, Expr *src)
             return r;
         }
         if (to->width == from->width) {
-            if (from->kind == TY_STRUCT || from->kind == TY_ENUM || from->kind == TY_ARRAY || to->kind != from->kind)
+            if (from->kind == TY_STRUCT || from->kind == TY_ENUM || from->kind == TY_ARRAY ||
+                (to->kind == TY_SINT) != (from->kind == TY_SINT))
                 return el_hw(el, to, ir_resize(el->design->arena, v.u.e, to->width, 0, at));
             return el_hw(el, to, v.u.e);
         }
@@ -2755,7 +2764,7 @@ static int ce_literal_fields(Elab *el, Ty *ft, FieldInit *fs, uint32_t nfs, int 
             v = elab_eval(el, f->value, env, ft->fields[k].ty);
         else
             v = el_lookup_name(el, env, f->name.name, f->name.span, 1);
-        v = elab_convert(el, v, ft->fields[k].ty, f->value, arena_printf(&el->arena, "field `%s`", f->name.name),
+        v = elab_convert(el, v, ft->fields[k].ty, f->value, ce_what("field `", f->name.name),
                          f->span);
         if (v.kind == VAL_ERROR)
             ok = 0;
@@ -3235,7 +3244,7 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
             ok = 0;
             break;
         }
-        a = elab_convert(el, pv[i], pt, pe[i], arena_printf(&el->arena, "parameter `%s`", ps[i].name.name),
+        a = elab_convert(el, pv[i], pt, pe[i], ce_what("parameter `", ps[i].name.name),
                          pe[i] ? pe[i]->span : at);
         if (a.kind == VAL_ERROR) {
             ok = 0;
@@ -3294,7 +3303,7 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
     el->in_fn = saved_in_fn;
     if (hw)
         el->hw_calls.len--;
-    if (it->u.fn.ret && result.kind != VAL_ERROR) {
+    if (it->u.fn.ret && result.kind != VAL_ERROR && !el->limit_hit) {
         Ty *rt = elab_eval_type(el, it->u.fn.ret, genv);
         if (rt->kind != TY_ERROR) {
             if (result.kind == VAL_VOID) {
@@ -3449,8 +3458,7 @@ static Value ce_builtin(Elab *el, const char *name, Expr *call, Env *env, Ty *ex
         }
         if (v.ty->kind == TY_BIT)
             return v;
-        return el_hw(el, ty_bits(el->S, v.ty->width),
-                     ir_resize(el->design->arena, v.u.e, v.ty->width, 0, at));
+        return el_hw(el, ty_bits(el->S, v.ty->width), v.u.e);
     }
     if (strcmp(name, "static_assert") == 0) {
         Value c, m = val_void(el->S);
@@ -3970,9 +3978,38 @@ void el_bind_pattern(Elab *el, Pattern *p, Value v, Env *env, int is_mut)
         return;
     }
     case PAT_OR:
-        /* bindings must be the same in every alternative: bind from the first
-         * alternative whose shape fits (for hardware subjects the payload
-         * slices are identical for variants sharing field names) */
+        /* every alternative binds the same names; for a hardware subject the
+         * value of a name is selected by which alternative matched */
+        if (p->u.list.n > 1 && v.kind == VAL_HW && el->design) {
+            uint32_t n = p->u.list.n, k;
+            Env **tmps = (Env **)xcalloc(n, sizeof(Env *));
+            Value *conds = (Value *)xcalloc(n, sizeof(Value));
+            for (i = 0; i < n; i++) {
+                tmps[i] = elab_env_new(el, NULL, env->file);
+                el_bind_pattern(el, p->u.list.items[i], v, tmps[i], is_mut);
+                conds[i] = el_match_test(el, p->u.list.items[i], v, env);
+            }
+            for (k = 0; k < tmps[0]->n; k++) {
+                const char *nm = tmps[0]->b[k].name;
+                Binding *last = ce_env_find_local(tmps[n - 1], nm);
+                Value r = last ? last->val : tmps[0]->b[k].val;
+                Binding *nb;
+                uint32_t j;
+                for (j = n - 1; j-- > 0;) {
+                    Binding *bj = ce_env_find_local(tmps[j], nm);
+                    if (bj)
+                        r = el_unify_mux(el, conds[j], bj->val, r, bj->val.ty, p->span);
+                }
+                nb = elab_env_bind(el, env, nm, r, tmps[0]->b[k].def);
+                nb->is_mut = (uint8_t)is_mut;
+                nb->sem = SEM_LOCAL;
+            }
+            for (i = 0; i < n; i++)
+                elab_env_free(tmps[i]);
+            free(tmps);
+            free(conds);
+            return;
+        }
         if (p->u.list.n) {
             Pattern *first = p->u.list.items[0];
             if (v.ty && v.ty->kind == TY_ENUM && v.kind == VAL_ENUM) {
@@ -4559,6 +4596,15 @@ static int ce_case_vals(Elab *el, Pattern *p, Ty *t, Env *env, CeBitsVec *out, i
     }
 }
 
+static int ce_arms_have_stmts(CeArmRun *arms, uint32_t n)
+{
+    uint32_t a;
+    for (a = 0; a < n; a++)
+        if (arms[a].stmts.len)
+            return 1;
+    return 0;
+}
+
 static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_value)
 {
     Value subj = elab_eval(el, e->u.match.scrutinee, env, NULL);
@@ -4649,7 +4695,7 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
                 ir_stmts_finish(&el->arena, &arms[a + 1].stmts);
             ce_emit(el, ir_stmt_case(el->design->arena, el_to_ir(el, &subj, e->span), k, ca, e->span));
             free(ca);
-        } else if (el->blk) {
+        } else if (el->blk && ce_arms_have_stmts(arms, n)) {
             /* if-chain, built from the last arm backwards */
             IrBlock tail;
             int have = 0;
@@ -5098,7 +5144,7 @@ void el_assign_local(Elab *el, Place *p, Value v, Span at)
             Ty *t = b->val.ty;
             if (t->kind == TY_INT && v.ty && v.ty->kind == TY_INT)
                 t = v.ty->is_signed ? v.ty : t;
-            v = elab_convert(el, v, t, NULL, arena_printf(&el->arena, "`%s`", b->name), at);
+            v = elab_convert(el, v, t, NULL, ce_what("`", b->name), at);
         }
         if (v.kind == VAL_ERROR)
             return;
@@ -5223,7 +5269,7 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
             v = elab_eval(el, s->u.let.init, env, t);
             if (t && v.kind != VAL_ERROR)
                 v = elab_convert(el, v, t, s->u.let.init, s->u.let.pat->kind == PAT_BIND
-                                     ? arena_printf(&el->arena, "`%s`", s->u.let.pat->u.bind.name) : NULL,
+                                     ? ce_what("`", s->u.let.pat->u.bind.name) : NULL,
                                  s->u.let.init->span);
             if (!s->u.let.constraint)
                 break;
@@ -5248,7 +5294,7 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
         if (s->u.var.init) {
             v = elab_eval(el, s->u.var.init, env, t && t->kind != TY_ERROR ? t : NULL);
             if (t && t->kind != TY_ERROR && v.kind != VAL_ERROR)
-                v = elab_convert(el, v, t, s->u.var.init, arena_printf(&el->arena, "`%s`", s->u.var.name.name),
+                v = elab_convert(el, v, t, s->u.var.init, ce_what("`", s->u.var.name.name),
                                  s->u.var.init->span);
         } else if (t && t->kind != TY_ERROR) {
             v = el_zero(el, t);
