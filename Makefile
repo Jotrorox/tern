@@ -224,14 +224,26 @@ $(OBJ)/sim_vcd.o: src/sim/vcd.c $(HDRS) $(OBJ)/.dir
 # --- backend/
 BACKEND_SRCS = \
 	src/backend/build.c \
-	src/backend/verilator.c
+	src/backend/verilator.c \
+	src/backend/vcdread.c \
+	src/backend/formal.c \
+	src/backend/prove.c
 BACKEND_OBJS = \
 	$(OBJ)/backend_build.o \
-	$(OBJ)/backend_verilator.o
+	$(OBJ)/backend_verilator.o \
+	$(OBJ)/backend_vcdread.o \
+	$(OBJ)/backend_formal.o \
+	$(OBJ)/backend_prove.o
 $(OBJ)/backend_build.o: src/backend/build.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/build.c -o $@
 $(OBJ)/backend_verilator.o: src/backend/verilator.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/verilator.c -o $@
+$(OBJ)/backend_vcdread.o: src/backend/vcdread.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/vcdread.c -o $@
+$(OBJ)/backend_formal.o: src/backend/formal.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/formal.c -o $@
+$(OBJ)/backend_prove.o: src/backend/prove.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/prove.c -o $@
 
 # --- pkg/
 PKG_SRCS = \

@@ -20,6 +20,5 @@ static int stub_not_implemented(const char *name, int argc, char **argv)
 
 int cmd_test(int argc, char **argv) { return stub_not_implemented("test", argc, argv); }
 int cmd_sim(int argc, char **argv) { return stub_not_implemented("sim", argc, argv); }
-int cmd_prove(int argc, char **argv) { return stub_not_implemented("prove", argc, argv); }
 int cmd_synth(int argc, char **argv) { return stub_not_implemented("synth", argc, argv); }
 int cmd_lsp(int argc, char **argv) { return stub_not_implemented("lsp", argc, argv); }

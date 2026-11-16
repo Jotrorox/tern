@@ -229,21 +229,25 @@ typedef struct VcdrVar {
     const char *id;           /* identifier code */
     const char *scope;        /* "top.dut" (dot-separated scopes) */
     const char *name;         /* reference name without the bit range */
+    const char *full;         /* "top.dut.name" */
     uint32_t width;
+    uint32_t code;            /* index into series (aliases share one) */
 } VcdrVar;
 
-typedef struct VcdrChange {
-    uint64_t time;
-    uint32_t var;             /* index into vars */
-    const char *value;        /* MSB-first '0'/'1'/'x'/'z' digits, `width` long */
-} VcdrChange;
+typedef struct VcdrSeries {   /* the value changes of one identifier code */
+    uint64_t *times;          /* ascending */
+    const char **values;      /* MSB-first '0'/'1'/'x'/'z' digits, `width` long */
+    size_t n;
+    uint32_t width;
+    const char *unknown;      /* `width` x digits (the value before the first change) */
+} VcdrSeries;
 
 typedef struct VcdrTrace {
     Arena arena;
-    VcdrVar *vars;
+    VcdrVar *vars;            /* in declaration order */
     size_t nvars;
-    VcdrChange *changes;      /* in file order (non-decreasing time) */
-    size_t nchanges;
+    VcdrSeries *series;
+    size_t nseries;
     uint64_t *times;          /* distinct timestamps, ascending */
     size_t ntimes;
     const char *timescale;    /* "1ps", or NULL */
@@ -273,7 +277,9 @@ typedef struct FvCex {
     const char *source_line;  /* the Tern source of the check, or NULL */
     uint32_t reset_cycles;    /* leading reset cycles replaced by dut.reset() (2) */
     uint32_t fail_step;       /* step at which the check fails (last driven step) */
-    const char *clock;        /* clock port name (SV) for edge sampling, or NULL */
+    const char *clock;        /* clock variable for edge sampling, or NULL (the
+                                 module's first clock port) */
+    SvNames *names;           /* SV names of the ports in the trace (NULL: IR names) */
 } FvCex;
 
 /* Writes a Tern `test` that reproduces the trace: `sim M<..>()`,
