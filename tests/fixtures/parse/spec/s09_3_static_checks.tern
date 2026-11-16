@@ -1,0 +1,12 @@
+// §9.3 static checks, §9.4 type-level computation, §9.5 no preprocessor
+module M<Depth: uint, Debug: bool = false> where Depth > 1 {
+    static_assert(Depth.is_pow2(), "Depth must be a power of two")
+    type Addr = uint<clog2(Depth)>
+    in a: Addr
+    out w: uint<Addr::WIDTH>
+    let t: typeof(a) = a
+    let m = Addr::MAX
+    let n = Addr::MIN
+    const_log("depth is {}", Depth)
+    if cfg::debug_ila { w = 0 } else { w = a }
+}

@@ -1,0 +1,11 @@
+(file
+  (fn@2:1 parity (params (x bit<N>)) -> bool
+    (block
+      (tail (red^ x))))
+  (fn@3:1 saturate (params (x sint<W>) (lo sint<W>) (hi sint<W>)) -> sint<W>
+    (block
+      (tail (if (< x lo) (block
+        (tail lo)) else (if (> x hi) (block
+        (tail hi)) else (block
+        (tail x)))))))
+  (comments 2))

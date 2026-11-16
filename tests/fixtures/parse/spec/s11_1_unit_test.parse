@@ -1,0 +1,23 @@
+(file
+  (test@2:1 "fifo preserves order"
+    (block
+      (let@3:5 dut = (sim (call Fifo<u8, 4>)))
+      (expr@4:5 (call (. dut reset)))
+      (for@5:5 v (array 1 2 3 4) (block
+        (=@6:9 (. dut push) (struct Stream (valid true) (data v)))
+        (tail (call (. dut step)))))
+      (=@9:5 (. (. dut push) valid) false)
+      (expect@10:5 (== (. dut count) 4))
+      (=@11:5 (. (. dut pop) ready) true)
+      (for@12:5 v (array 1 2 3 4) (block
+        (expect@13:9 (and (. (. dut pop) valid) (== (. (. dut pop) data) v)))
+        (tail (call (. dut step)))))
+      (expect@16:5 (not (. (. dut pop) valid)))
+      (expr@17:5 (call (. dut step_until) (. (. dut pop) valid) max: 1000))
+      (expr@18:5 (call (. (. dut sys) step)))
+      (expr@19:5 (call (. (. dut pix) step)))
+      (expr@20:5 (call (. dut run) ns: 500))
+      (expr@21:5 (call log "count is {}" (. dut count)))
+      (expr@22:5 (call (. dut dump) "waves.vcd"))
+      (assert@23:5 (== (. dut count) 0) "drained")))
+  (comments 4))

@@ -1,0 +1,56 @@
+package uart
+
+use std::stream::Stream
+
+/// Sends one byte per `tx` handshake, 8 data bits, no parity, 1 stop bit.
+module UartTx<ClkHz: uint, Baud: uint = 115_200> {
+    in clk: clock
+    in rst: reset
+    in tx: Stream<uint<8>> // valid + data in, ready out
+    out txd: bool
+
+    const Div: uint = ClkHz / Baud
+    static_assert(Div >= 16, "clock too slow for this baud rate")
+
+    enum State { Idle, Start, Data, Stop }
+    reg state: State = .Idle
+    reg tick: uint<clog2(Div)> = 0
+    reg bit: uint<3> = 0
+    reg shift: uint<8> = 0
+
+    let baud_tick = tick == Div - 1
+    tx.ready = state == .Idle
+    txd = match state {
+        .Idle | .Stop => true,
+        .Start => false,
+        .Data => shift[0],
+    }
+
+    on clk {
+        tick = if baud_tick or state == .Idle { 0 } else { tick +% 1 }
+        match state {
+            .Idle => if tx.valid { shift = tx.data; state = .Start },
+            .Start => if baud_tick { state = .Data },
+            .Data => if baud_tick {
+                shift = shift >> 1
+                bit = bit +% 1
+                if bit == 7 { state = .Stop }
+            },
+            .Stop => if baud_tick { state = .Idle },
+        }
+    }
+}
+
+test "sends 0x55 LSB first" {
+    let dut = sim UartTx<ClkHz: 16, Baud: 1>() // Div = 16, clk/rst driven by the harness
+    dut.reset()
+    dut.tx = Stream { valid: true, data: 0x55 }
+    dut.step()
+    expect !dut.tx.ready
+    let line = [false, true, false, true, false, true, false, true, false, true]
+    for b in line {
+        dut.step(8) // sample mid-bit
+        expect dut.txd == b
+        dut.step(8)
+    }
+}

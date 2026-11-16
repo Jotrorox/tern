@@ -1,0 +1,55 @@
+(file
+  (package uart)
+  (use@3:1 std::stream::Stream)
+  (module@6:1 UartTx (doc "Sends one byte per `tx` handshake, 8 data bits, no parity, 1 stop bit.") (generics (ClkHz uint) (Baud uint = 115_200))
+    (in@7:5 clk clock)
+    (in@8:5 rst reset)
+    (in@9:5 tx Stream<uint<8>>)
+    (out@10:5 txd bool)
+    (const@12:5 Div : uint = (/ ClkHz Baud))
+    (static_assert@13:5 (>= Div 16) "clock too slow for this baud rate")
+    (enum@15:5 State
+      (variant Idle)
+      (variant Start)
+      (variant Data)
+      (variant Stop))
+    (reg@16:5 state : State = .Idle)
+    (reg@17:5 tick : uint<(call clog2 Div)> = 0)
+    (reg@18:5 bit : uint<3> = 0)
+    (reg@19:5 shift : uint<8> = 0)
+    (let@21:5 baud_tick = (== tick (- Div 1)))
+    (=@22:5 (. tx ready) (== state .Idle))
+    (=@23:5 txd (match state
+      (arm (| .Idle .Stop) => true)
+      (arm .Start => false)
+      (arm .Data => (index shift 0))))
+    (on@29:5 clk (block
+      (=@30:9 tick (if (or baud_tick (== state .Idle)) (block
+        (tail 0)) else (block
+        (tail (+% tick 1)))))
+      (tail (match state
+        (arm .Idle => (if (. tx valid) (block
+          (=@32:36 shift (. tx data))
+          (=@32:53 state .Start))))
+        (arm .Start => (if baud_tick (block
+          (=@33:38 state .Data))))
+        (arm .Data => (if baud_tick (block
+          (=@35:17 shift (>> shift 1))
+          (=@36:17 bit (+% bit 1))
+          (tail (if (== bit 7) (block
+            (=@37:31 state .Stop)))))))
+        (arm .Stop => (if baud_tick (block
+          (=@39:37 state .Idle)))))))))
+  (test@44:1 "sends 0x55 LSB first"
+    (block
+      (let@45:5 dut = (sim (call UartTx<ClkHz: 16, Baud: 1>)))
+      (expr@46:5 (call (. dut reset)))
+      (=@47:5 (. dut tx) (struct Stream (valid true) (data 0x55)))
+      (expr@48:5 (call (. dut step)))
+      (expect@49:5 (not (. (. dut tx) ready)))
+      (let@50:5 line = (array false true false true false true false true false true))
+      (for@51:5 b line (block
+        (expr@52:9 (call (. dut step) 8))
+        (expect@53:9 (== (. dut txd) b))
+        (tail (call (. dut step) 8))))))
+  (comments 4))

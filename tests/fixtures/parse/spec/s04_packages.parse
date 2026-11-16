@@ -1,0 +1,36 @@
+(file
+  (package uart::rx)
+  (use@3:1 std::stream::Stream)
+  (use@4:1 std::fifo::{Fifo, FifoFwft})
+  (use@5:1 std::math::*)
+  (use@6:1 std::{io::UartRx, fifo::AsyncFifo, stream::Gearbox, crc::Crc32})
+  (use@7:1 pub std::prelude::{clog2, count_ones})
+  (use@8:1 pub std::fifo::AsyncFifo)
+  (module@10:1 A pub)
+  (module@11:1 B)
+  (extern@12:1 C "c.sv")
+  (bundle@13:1 D pub (generics (T type))
+    (field x T))
+  (struct@14:1 E
+    (field a u8))
+  (enum@15:1 F pub
+    (variant G)
+    (variant H))
+  (const@16:1 I : uint = 1)
+  (fn@17:1 j pub const (params (n uint)) -> uint
+    (block
+      (tail n)))
+  (fn@18:1 k (params (x u8)) -> u8
+    (block
+      (tail x)))
+  (type@19:1 L pub = uint<8>)
+  (regmap@20:1 M
+    (reg@20:12 0x00 r rw u8))
+  (test@21:1 "n"
+    (block))
+  (property@22:1 o (always true))
+  (property@23:1 p assert (always true))
+  (property@24:1 q assume (always true))
+  (property@25:1 r cover true)
+  (sequence@26:1 s (## 1 true true))
+  (comments 0))

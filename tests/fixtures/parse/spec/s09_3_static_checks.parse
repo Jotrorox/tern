@@ -1,0 +1,14 @@
+(file
+  (module@2:1 M (generics (Depth uint) (Debug bool = false)) (where (> Depth 1))
+    (static_assert@3:5 (call (. Depth is_pow2)) "Depth must be a power of two")
+    (type@4:5 Addr = uint<(call clog2 Depth)>)
+    (in@5:5 a Addr)
+    (out@6:5 w uint<Addr::WIDTH>)
+    (let@7:5 t : (typeof a) = a)
+    (let@8:5 m = Addr::MAX)
+    (let@9:5 n = Addr::MIN)
+    (expr@10:5 (call const_log "depth is {}" Depth))
+    (expr@11:5 (if cfg::debug_ila (block
+      (=@11:25 w 0)) else (block
+      (=@11:40 w a)))))
+  (comments 1))

@@ -1,0 +1,14 @@
+// §7.3 elaboration-time code
+module Pipeline<T: type, Stages: uint> {
+    in clk: clock
+    in d: T
+    out q: T
+    var stage: [T; Stages + 1]
+    stage[0] = d
+    for i in 0..Stages {
+        reg r: T @ clk // one register per unrolled iteration: r_0, r_1, ...
+        on clk { r = stage[i] }
+        stage[i + 1] = r
+    }
+    q = stage[Stages]
+}

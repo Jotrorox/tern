@@ -1,0 +1,16 @@
+// §6.2 combinational blocks
+module Alu {
+    in op: Op
+    in a: u32
+    in b: u32
+    var alu_out: u32 // no default: every branch below must assign it
+    var flags: Flags = Flags::NONE // default given: branches may skip it
+    comb {
+        match op {
+            .Add => { alu_out = (a + b) as u32; flags.carry = (a + b)[32] },
+            .Sub => alu_out = a -% b,
+            .And => alu_out = a & b,
+            .Nop => alu_out = 0,
+        }
+    }
+}

@@ -1,0 +1,20 @@
+(file
+  (fn@2:1 clog2 const (params (n uint)) -> uint
+    (block
+      (var@3:5 r = 0)
+      (while@4:5 (< (paren (<< 1 r)) n) (block
+        (=@4:26 r (+ r 1))))
+      (tail r)))
+  (fn@8:1 crc_table const (params (poly uint<32>)) -> [uint<32>; 256]
+    (block
+      (var@9:5 t : [uint<32>; 256])
+      (for@10:5 i (.. 0 256) (block
+        (var@11:9 c = (as i uint<32>))
+        (for@12:9 _ (.. 0 8) (block
+          (=@12:25 c (if (index c 0) (block
+            (tail (^ (paren (>> c 1)) poly))) else (block
+            (tail (>> c 1)))))))
+        (=@13:9 (index t i) c)))
+      (tail t)))
+  (const@18:1 Crc32Table : [uint<32>; 256] = (call crc_table 0xEDB88320))
+  (comments 2))

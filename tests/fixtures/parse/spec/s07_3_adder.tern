@@ -1,0 +1,7 @@
+// §7.3 elaboration-time if: one branch is elaborated
+module Adder<W: uint, Fast: bool = false> {
+    in a: uint<W>
+    in b: uint<W>
+    out y: uint<W + 1>
+    if Fast { /* carry-lookahead */ y = a + b } else { /* ripple */ y = a + b } // one branch is elaborated
+}

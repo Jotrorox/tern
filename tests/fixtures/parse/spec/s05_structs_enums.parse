@@ -1,0 +1,46 @@
+(file
+  (struct@1:1 Pixel
+    (field r u8)
+    (field g u8)
+    (field b u8))
+  (enum@2:1 Op
+    (variant Nop)
+    (variant Add)
+    (variant Sub)
+    (variant Load))
+  (enum@3:1 Cmd
+    (variant Write { (field addr u16) (field data u32) })
+    (variant Read { (field addr u16) })
+    (variant Idle))
+  (enum@9:1 Hot #[encoding(onehot)]
+    (variant A)
+    (variant B)
+    (variant C))
+  (enum@12:1 Phase #[encoding(gray)]
+    (variant P0)
+    (variant P1)
+    (variant P2)
+    (variant P3))
+  (module@15:1 Types
+    (in@16:5 grad u16)
+    (in@17:5 payload u32)
+    (in@18:5 c Cmd)
+    (out@19:5 grey uint<10>)
+    (out@20:5 a u16)
+    (let@22:5 p = (struct Pixel (r 255) (g 0) (b (slice grad 7 0))))
+    (let@23:5 g = (/ (paren (+ (+ (. p r) (. p g)) (. p b))) 3))
+    (=@24:5 grey g)
+    (let@25:5 w = (struct Cmd::Write (addr 0x10) (data payload)))
+    (=@26:5 a (match c
+      (arm (| (.Write addr ..) (.Read addr)) => addr)
+      (arm .Idle => 0)))
+    (let@29:5 x : bit<8> = all0)
+    (let@30:5 y : sint<9> = (as x sint<9>))
+    (let@31:5 z = (as x bool))
+    (let@32:5 b = (call bits p))
+    (let@33:5 q = (call Pixel::from_bits b))
+    (var@34:5 arr : [u8; 16])
+    (reg@35:5 rx : uint<8> = 0 @ clk_b)
+    (let@36:5 ck : clock<falling> = all0)
+    (let@37:5 rs : reset<async, low> = all0))
+  (comments 5))

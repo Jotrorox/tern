@@ -1,0 +1,17 @@
+(file
+  (module@2:1 Top
+    (in@3:5 clk clock)
+    (in@4:5 rst reset)
+    (in@5:5 clk_io clock)
+    (in@6:5 rst_io reset)
+    (in@7:5 s Stream<u8>)
+    (in@8:5 push Stream<u8>)
+    (out@9:5 fifo_full bool)
+    (let@10:5 rx_fifo = (call Fifo<u8, 64> push: (. uart rx)))
+    (let@11:5 tx_fifo = (call Fifo<u8, Depth: 64> clk: clk_io rst: rst_io push: (. dma out)))
+    (=@12:5 (. cpu rx) (. rx_fifo pop))
+    (=@13:5 fifo_full (== (. rx_fifo count) 64))
+    (let@14:5 (struct-pat Fifo pop count) = (call Fifo<u8> push: s))
+    (let@15:5 shorthand = (call Fifo<u8> push))
+    (let@16:5 other = (call Fifo<u8> push: s @ io)))
+  (comments 2))

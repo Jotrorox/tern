@@ -1,0 +1,18 @@
+(file
+  (module@2:1 Counter
+    (in@3:5 clk clock)
+    (in@4:5 clk_io clock)
+    (in@5:5 load bool)
+    (in@6:5 en bool)
+    (in@7:5 din u8)
+    (in@8:5 next_data u32)
+    (reg@9:5 count : u8 = 0)
+    (reg@10:5 data : u32)
+    (reg@11:5 tx_q : u8 = 0 @ clk_io)
+    (on@12:5 clk (block
+      (expr@13:9 (if load (block
+        (=@13:19 count din)) else (if en (block
+        (=@13:46 count (+% count 1))))))
+      (=@14:9 data next_data)))
+    (reg@16:5 in_reset : bool = true))
+  (comments 5))

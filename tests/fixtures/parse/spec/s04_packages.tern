@@ -1,0 +1,26 @@
+package uart::rx
+
+use std::stream::Stream
+use std::fifo::{Fifo, FifoFwft}
+use std::math::*
+use std::{io::UartRx, fifo::AsyncFifo, stream::Gearbox, crc::Crc32}
+pub use std::prelude::{clog2, count_ones}
+pub use std::fifo::AsyncFifo
+
+pub module A {}
+module B {}
+extern module C("c.sv") {}
+pub bundle D<T: type> { x: T }
+struct E { a: u8 }
+pub enum F { G, H }
+const I: uint = 1
+pub const fn j(n: uint) -> uint { n }
+fn k(x: u8) -> u8 { x }
+pub type L = uint<8>
+regmap M { 0x00 r: rw u8 }
+test "n" {}
+property o { always true }
+assert property p { always true }
+assume property q { always true }
+cover property r { true }
+sequence s { true ##1 true }

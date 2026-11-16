@@ -1,0 +1,22 @@
+(file
+  (test@2:1 "alu ops"
+    (block
+      (let@3:5 dut = (sim (call Alu<32>)))
+      (for@4:5 (tuple-pat op a b want) (array (tuple .Add 1 2 3) (tuple .Sub 5 7 0xFFFF_FFFE) (tuple .And 0xF0 0x3C 0x30)) (block
+        (=@6:9 (. dut op) op)
+        (=@6:22 (. dut a) a)
+        (=@6:33 (. dut b) b)
+        (expr@7:9 (call (. dut settle)))
+        (expect@8:9 (== (. dut y) want))))))
+  (test@12:1 "random adds"
+    (block
+      (let@13:5 dut = (sim (call Alu<32>)))
+      (for@14:5 _ (.. 0 10_000) (block
+        (let@15:9 a = (call rand<u32>))
+        (let@16:9 b = (call rand<u32>) where (<= b 0x1000))
+        (=@17:9 (. dut op) .Add)
+        (=@17:24 (. dut a) a)
+        (=@17:35 (. dut b) b)
+        (expr@18:9 (call (. dut settle)))
+        (expect@19:9 (== (. dut y) (as (paren (+ a b)) u32)))))))
+  (comments 2))

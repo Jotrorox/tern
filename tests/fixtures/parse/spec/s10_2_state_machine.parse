@@ -1,0 +1,15 @@
+(file
+  (module@2:1 Fsm
+    (in@3:5 clk clock)
+    (in@4:5 event Event)
+    (out@5:5 busy bool)
+    (reg@6:5 state : State = .Idle)
+    (on@7:5 clk (block
+      (=@8:9 state (match (tuple state event)
+        (arm (tuple-pat .Idle .Start) => .Run)
+        (arm (tuple-pat .Run .Done) => .Finish)
+        (arm (tuple-pat .Run .Abort) => .Idle)
+        (arm (tuple-pat .Finish _) => .Idle)
+        (arm (tuple-pat s _) => s)))))
+    (=@16:5 busy (in state (array .Run .Finish))))
+  (comments 3))

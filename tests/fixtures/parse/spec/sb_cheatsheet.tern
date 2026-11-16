@@ -1,0 +1,38 @@
+// Appendix B: the Tern column of the SystemVerilog cheat sheet
+module M<W: uint = 8> {
+    in clk: clock
+    in a: u8
+    in b: u8
+    in c: bool
+    in x: u8
+    out y: u8
+    let w: u8 = a
+    var v: u8
+    reg r: u8 = 0
+    let and_ab = a & b
+    comb { v = a }
+    on clk { r = a }
+    y = match x { 0 => a, _ => b }
+    let sel = if c { a } else { b }
+    let cat = a ++ b
+    let part = x[6:3]
+    let lg = clog2(W)
+    let zeros: u8 = all0
+    let ones: u8 = all1
+    let ff = 0xFFu8
+    let wrap = a +% b
+    let wide = a + b
+    let sx = x as sint<9>
+    let sw = widen_signed(x)
+    for i in 0..W { }
+    if cfg::debug { }
+    let m = Sub(a)
+    let my = m.y
+    mem ram: [u8; 256]
+    property p { always a == 0 |=> b == 0 }
+}
+
+enum T { A, B }
+struct S { f: u8 }
+
+test "..." { }

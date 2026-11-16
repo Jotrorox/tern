@@ -1,0 +1,17 @@
+// §10.2 state machines
+module Fsm {
+    in clk: clock
+    in event: Event
+    out busy: bool
+    reg state: State = .Idle
+    on clk {
+        state = match (state, event) {
+            (.Idle, .Start) => .Run,
+            (.Run, .Done) => .Finish,
+            (.Run, .Abort) => .Idle,
+            (.Finish, _) => .Idle,
+            (s, _) => s, // stay
+        }
+    }
+    busy = state in [.Run, .Finish] // set membership
+}

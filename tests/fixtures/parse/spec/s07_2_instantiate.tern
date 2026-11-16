@@ -1,0 +1,17 @@
+// §7.2 instantiating
+module Top {
+    in clk: clock
+    in rst: reset
+    in clk_io: clock
+    in rst_io: reset
+    in s: Stream<u8>
+    in push: Stream<u8>
+    out fifo_full: bool
+    let rx_fifo = Fifo<u8, 64>(push: uart.rx) // clk, rst inherited from the parent's default domain
+    let tx_fifo = Fifo<u8, Depth: 64>(clk: clk_io, rst: rst_io, push: dma.out)
+    cpu.rx = rx_fifo.pop
+    fifo_full = rx_fifo.count == 64
+    let Fifo { pop, count } = Fifo<u8>(push: s)
+    let shorthand = Fifo<u8>(push)
+    let other = Fifo<u8>(push: s) @ io
+}

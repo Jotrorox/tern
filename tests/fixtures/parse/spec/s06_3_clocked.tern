@@ -1,0 +1,17 @@
+// §6.3 clocked blocks, §6.4 reset model
+module Counter {
+    in clk: clock
+    in clk_io: clock
+    in load: bool
+    in en: bool
+    in din: u8
+    in next_data: u32
+    reg count: u8 = 0 // reset value 0, default domain
+    reg data: u32 // no reset: must be written before read (checked)
+    reg tx_q: u8 = 0 @ clk_io // explicit domain
+    on clk {
+        if load { count = din } else if en { count = count +% 1 }
+        data = next_data // unconditional: a register with no enable
+    }
+    reg in_reset: bool = true
+}

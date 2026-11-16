@@ -1,0 +1,10 @@
+(file
+  (module@2:1 Fifo (generics (Depth uint))
+    (in@3:5 clk clock)
+    (in@4:5 push Stream<u8>)
+    (out@5:5 count uint<8>)
+    (on@6:5 clk (block
+      (assert@7:9 (not (paren (and (call (. push fire)) (== count Depth)))) "push into full fifo")))
+    (comb@9:5 (block
+      (expect@10:9 (<= count Depth)))))
+  (comments 1))

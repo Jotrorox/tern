@@ -1,0 +1,13 @@
+(file
+  (use@2:1 std::{io::UartRx, fifo::AsyncFifo, stream::Gearbox, crc::Crc32})
+  (module@4:1 Soc
+    (in@5:5 io_clk clock)
+    (in@6:5 sys_clk clock)
+    (in@7:5 rxd bool)
+    (domain@8:5 io io_clk)
+    (domain@9:5 sys sys_clk)
+    (let@10:5 rx = (call UartRx<ClkHz: 100_000_000, Baud: 3_000_000> rxd @ io))
+    (let@11:5 words = (call Gearbox<u8, u32> in: (. rx out) @ io))
+    (let@12:5 xfifo = (call AsyncFifo<u32, 512> push: (. words out) src: (. io clock) dst: (. sys clock)))
+    (let@13:5 crc = (call Crc32 in: (. xfifo pop) @ sys)))
+  (comments 1))

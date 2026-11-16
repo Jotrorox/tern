@@ -1,0 +1,14 @@
+// §12.3 composition in practice
+use std::{io::UartRx, fifo::AsyncFifo, stream::Gearbox, crc::Crc32}
+
+module Soc {
+    in io_clk: clock
+    in sys_clk: clock
+    in rxd: bool
+    domain io = (io_clk)
+    domain sys = (sys_clk)
+    let rx = UartRx<ClkHz: 100_000_000, Baud: 3_000_000>(rxd) @ io
+    let words = Gearbox<u8, u32>(in: rx.out) @ io
+    let xfifo = AsyncFifo<u32, 512>(push: words.out, src: io.clock, dst: sys.clock)
+    let crc = Crc32( in: xfifo.pop) @ sys
+}

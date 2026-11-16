@@ -1,0 +1,17 @@
+// §10.1 memories
+module Mems {
+    in clk: clock
+    in we: bool
+    in wr_addr: uint<10>
+    in wr_data: u32
+    in rd_addr: uint<10>
+    in idx: uint<6>
+    mem buf: [u32; 1024] // inferred: block RAM if the target has it
+    #[ram(distributed)] mem lut: [u8; 64] = include_hex("sine.hex")
+    let rd = buf.read(rd_addr) // synchronous read port: value appears next cycle
+    on clk {
+        if we { buf[wr_addr] = wr_data } // write port; byte enables: buf.write(addr, data, mask)
+    }
+    let async_rd = lut[idx] // combinational read: distributed/LUT RAM only
+    let old = buf.read(rd_addr, rdw: .OldData)
+}

@@ -1,0 +1,10 @@
+// §7.1 declaring a module
+pub module Fifo<T: type, Depth: uint = 16>
+where Depth.is_pow2()
+{
+    in clk: clock
+    in rst: reset
+    in push: Stream<T>
+    out pop: Stream<T>
+    out count: uint<clog2(Depth) + 1>
+}

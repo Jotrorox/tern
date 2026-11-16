@@ -1,0 +1,24 @@
+// §11.1 unit tests
+test "fifo preserves order" {
+    let dut = sim Fifo<u8, 4>() // harness owns clk/rst of the default domain
+    dut.reset() // asserts reset for 2 cycles, then releases
+    for v in [1, 2, 3, 4] {
+        dut.push = Stream { valid: true, data: v }
+        dut.step() // one clock edge; combinational logic settles after it
+    }
+    dut.push.valid = false
+    expect dut.count == 4
+    dut.pop.ready = true
+    for v in [1, 2, 3, 4] {
+        expect dut.pop.valid and dut.pop.data == v
+        dut.step()
+    }
+    expect !dut.pop.valid
+    dut.step_until(dut.pop.valid, max: 1000)
+    dut.sys.step()
+    dut.pix.step()
+    dut.run(ns: 500)
+    log("count is {}", dut.count)
+    dut.dump("waves.vcd")
+    assert dut.count == 0, "drained"
+}

@@ -1,0 +1,12 @@
+(file
+  (module@2:1 Top
+    (in@3:5 sys_clk clock)
+    (in@4:5 sys_rst reset<async, low>)
+    (in@5:5 pix_clk clock)
+    (domain@6:5 sys sys_clk sys_rst)
+    (domain@7:5 pix pix_clk)
+    (let@8:5 dma = (call Dma bus: (. cpu bus) @ sys))
+    (let@9:5 video = (call Scanout fb: (. dma fb) @ pix))
+    (let@10:5 s = (call Sync2 src: (. sys clock) dst: (. pix clock) d: flag))
+    (let@11:5 cfg = (call unsafe_cross mode)))
+  (comments 3))

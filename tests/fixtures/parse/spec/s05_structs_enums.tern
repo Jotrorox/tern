@@ -1,0 +1,38 @@
+struct Pixel { r: u8, g: u8, b: u8 } // 24 bits, r is the MSB byte
+enum Op { Nop, Add, Sub, Load } // 2 bits, binary encoded
+enum Cmd { // enum with payload: a tagged union
+    Write { addr: u16, data: u32 },
+    Read { addr: u16 },
+    Idle,
+}
+
+#[encoding(onehot)]
+enum Hot { A, B, C }
+
+#[encoding(gray)]
+enum Phase { P0, P1, P2, P3 }
+
+module Types {
+    in grad: u16
+    in payload: u32
+    in c: Cmd
+    out grey: uint<10>
+    out a: u16
+
+    let p = Pixel { r: 255, g: 0, b: grad[7:0] }
+    let g = (p.r + p.g + p.b) / 3 // uint<10> / const -> uint<10>
+    grey = g
+    let w = Cmd::Write { addr: 0x10, data: payload }
+    a = match c { .Write { addr, .. } | .Read { addr } => addr, .Idle => 0 }
+
+    // §5.1 built-in types and §5.3 conversions
+    let x: bit<8> = all0
+    let y: sint<9> = x as sint<9>
+    let z = x as bool
+    let b = bits(p)
+    let q = Pixel::from_bits(b)
+    var arr: [u8; 16]
+    reg rx: uint<8> = 0 @ clk_b
+    let ck: clock<falling> = all0
+    let rs: reset<async, low> = all0
+}

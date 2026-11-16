@@ -1,0 +1,18 @@
+// §9.2 const fn
+const fn clog2(n: uint) -> uint {
+    var r = 0
+    while (1 << r) < n { r = r + 1 }
+    r
+}
+
+const fn crc_table(poly: uint<32>) -> [uint<32>; 256] {
+    var t: [uint<32>; 256]
+    for i in 0..256 {
+        var c = i as uint<32>
+        for _ in 0..8 { c = if c[0] { (c >> 1) ^ poly } else { c >> 1 } }
+        t[i] = c
+    }
+    t
+}
+
+const Crc32Table: [uint<32>; 256] = crc_table(0xEDB88320) // computed once, becomes a ROM

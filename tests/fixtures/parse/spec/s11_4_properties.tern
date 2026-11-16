@@ -1,0 +1,24 @@
+// §11.4 properties
+module Fifo<Depth: uint> {
+    in rst: reset
+    in push: Stream<u8>
+    out pop: Stream<u8>
+    out count: uint<8>
+
+    property valid_holds_until_ready {
+        always (push.valid and !push.ready) |=> push.valid and stable(push.data)
+    }
+    property eventually_drains {
+        always (count > 0 and pop.ready) |-> eventually[..Depth] count == 0
+    }
+    assume property no_push_during_reset { always rst |-> !push.valid }
+    cover property wraps_around { count == Depth ##[1:$] count == 0 }
+
+    // the rest of the operator list
+    property never_both { never push.fire() and pop.fire() }
+    property edges { always rose(push.valid) |-> !fell(pop.valid) or past(count, 2) == 0 }
+    property held { always push.valid until push.ready }
+    property unbounded { always push.valid |-> eventually push.ready }
+    sequence handshake { push.valid ##1 push.ready ##[2:4] pop.valid }
+    assert property uses_sequence { always handshake |=> count > 0 }
+}

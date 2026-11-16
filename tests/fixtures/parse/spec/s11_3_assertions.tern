@@ -1,0 +1,12 @@
+// §11.3 assertions inside the design
+module Fifo<Depth: uint> {
+    in clk: clock
+    in push: Stream<u8>
+    out count: uint<8>
+    on clk {
+        assert !(push.fire() and count == Depth), "push into full fifo"
+    }
+    comb {
+        expect count <= Depth
+    }
+}

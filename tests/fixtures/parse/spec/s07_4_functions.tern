@@ -1,0 +1,5 @@
+// §7.4 functions
+fn parity(x: bit<N>) -> bool { ^x } // N inferred from the argument
+fn saturate(x: sint<W>, lo: sint<W>, hi: sint<W>) -> sint<W> {
+    if x < lo { lo } else if x > hi { hi } else { x }
+}

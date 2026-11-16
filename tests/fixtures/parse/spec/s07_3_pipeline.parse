@@ -1,0 +1,14 @@
+(file
+  (module@2:1 Pipeline (generics (T type) (Stages uint))
+    (in@3:5 clk clock)
+    (in@4:5 d T)
+    (out@5:5 q T)
+    (var@6:5 stage : [T; (+ Stages 1)])
+    (=@7:5 (index stage 0) d)
+    (for@8:5 i (.. 0 Stages) (block
+      (reg@9:9 r : T @ clk)
+      (on@10:9 clk (block
+        (=@10:18 r (index stage i))))
+      (=@11:9 (index stage (+ i 1)) r)))
+    (=@13:5 q (index stage Stages)))
+  (comments 2))

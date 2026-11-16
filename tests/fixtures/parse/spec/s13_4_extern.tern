@@ -1,0 +1,14 @@
+// §13.4 importing SystemVerilog
+extern module pll_wrapper("ip/pll_wrapper.sv") {
+    in refclk: clock
+    in rst: reset<async, high>
+    out outclk: clock
+    out locked: bool
+}
+
+extern module legacy_dma("rtl/dma.sv") <AW: uint = 32> {
+    in clk: clock
+    in rst: reset<sync, low>
+    #[sv_name("s_axi_lite")]
+    in s_axi: Axi4Lite<AW, 32> // maps to s_axi_awvalid etc. by convention; override with #[sv_name]
+}

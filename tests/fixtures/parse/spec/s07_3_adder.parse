@@ -1,0 +1,9 @@
+(file
+  (module@2:1 Adder (generics (W uint) (Fast bool = false))
+    (in@3:5 a uint<W>)
+    (in@4:5 b uint<W>)
+    (out@5:5 y uint<(+ W 1)>)
+    (expr@6:5 (if Fast (block
+      (=@6:37 y (+ a b))) else (block
+      (=@6:69 y (+ a b))))))
+  (comments 4))

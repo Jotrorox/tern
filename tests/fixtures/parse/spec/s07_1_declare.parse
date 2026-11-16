@@ -1,0 +1,8 @@
+(file
+  (module@2:1 Fifo pub (generics (T type) (Depth uint = 16)) (where (call (. Depth is_pow2)))
+    (in@5:5 clk clock)
+    (in@6:5 rst reset)
+    (in@7:5 push Stream<T>)
+    (out@8:5 pop Stream<T>)
+    (out@9:5 count uint<(+ (call clog2 Depth) 1)>))
+  (comments 1))

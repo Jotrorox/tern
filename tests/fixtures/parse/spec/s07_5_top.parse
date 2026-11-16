@@ -1,0 +1,6 @@
+(file
+  (module@2:1 Board #[top]
+    (in@4:5 #[clock(hz: 100_000_000)] clk100 clock)
+    (in@5:5 #[clock(hz: 25_000_000)] pix_clk clock)
+    (in@7:5 pad tri<bool>))
+  (comments 1))

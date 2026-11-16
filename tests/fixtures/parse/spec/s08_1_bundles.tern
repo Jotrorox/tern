@@ -1,0 +1,28 @@
+// §8.1 bundles
+pub bundle Valid<T: type> {
+    valid: bool
+    data: T
+}
+
+pub bundle Stream<T: type> {
+    valid: bool
+    data: T
+    flip ready: bool // flows against the bundle's direction
+    fn fire() -> bool { self.valid and self.ready }
+}
+
+pub bundle Axi4Lite<AW: uint = 32, DW: uint = 32> {
+    aw: Stream<uint<AW>>
+    w: Stream< struct { data: uint<DW>, strb: bit<DW/8> }>
+    flip b: Stream<bit<2>>
+    ar: Stream<uint<AW>>
+    flip r: Stream<struct { data: uint<DW>, resp: bit<2> }>
+}
+
+module Use {
+    in tx: Stream<u8>
+    out rx: Stream<u8>
+    cpu.rx = fifo.pop
+    tx.ready = true
+    rx = Stream { valid: true, data: x }
+}

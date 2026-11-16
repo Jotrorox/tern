@@ -1,0 +1,12 @@
+// §8.2 clock domains, §8.3 crossing domains
+module Top {
+    in sys_clk: clock
+    in sys_rst: reset<async, low>
+    in pix_clk: clock
+    domain sys = (sys_clk, sys_rst) // named domains when a module has several clocks
+    domain pix = (pix_clk) // no reset
+    let dma = Dma(bus: cpu.bus) @ sys
+    let video = Scanout(fb: dma.fb) @ pix
+    let s = Sync2(src: sys.clock, dst: pix.clock, d: flag)
+    let cfg = unsafe_cross(mode)
+}

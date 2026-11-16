@@ -1,0 +1,11 @@
+(file
+  (extern@2:1 pll_wrapper "ip/pll_wrapper.sv"
+    (in@3:5 refclk clock)
+    (in@4:5 rst reset<async, high>)
+    (out@5:5 outclk clock)
+    (out@6:5 locked bool))
+  (extern@9:1 legacy_dma "rtl/dma.sv" (generics (AW uint = 32))
+    (in@10:5 clk clock)
+    (in@11:5 rst reset<sync, low>)
+    (in@12:5 #[sv_name("s_axi_lite")] s_axi Axi4Lite<AW, 32>))
+  (comments 2))

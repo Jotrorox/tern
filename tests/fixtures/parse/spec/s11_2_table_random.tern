@@ -1,0 +1,21 @@
+// §11.2 table-driven and randomized stimulus
+test "alu ops" {
+    let dut = sim Alu<32>()
+    for (op, a, b, want) in [(.Add, 1, 2, 3), (.Sub, 5, 7, 0xFFFF_FFFE), (.And, 0xF0,
+        0x3C, 0x30)] {
+        dut.op = op; dut.a = a; dut.b = b
+        dut.settle()
+        expect dut.y == want
+    }
+}
+
+test "random adds" {
+    let dut = sim Alu<32>()
+    for _ in 0..10_000 {
+        let a = rand<u32>()
+        let b = rand<u32>() where b <= 0x1000 // rejection constraint
+        dut.op = .Add; dut.a = a; dut.b = b
+        dut.settle()
+        expect dut.y == (a + b) as u32
+    }
+}

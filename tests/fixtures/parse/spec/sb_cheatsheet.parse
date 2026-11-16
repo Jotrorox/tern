@@ -1,0 +1,46 @@
+(file
+  (module@2:1 M (generics (W uint = 8))
+    (in@3:5 clk clock)
+    (in@4:5 a u8)
+    (in@5:5 b u8)
+    (in@6:5 c bool)
+    (in@7:5 x u8)
+    (out@8:5 y u8)
+    (let@9:5 w : u8 = a)
+    (var@10:5 v : u8)
+    (reg@11:5 r : u8 = 0)
+    (let@12:5 and_ab = (& a b))
+    (comb@13:5 (block
+      (=@13:12 v a)))
+    (on@14:5 clk (block
+      (=@14:14 r a)))
+    (=@15:5 y (match x
+      (arm 0 => a)
+      (arm _ => b)))
+    (let@16:5 sel = (if c (block
+      (tail a)) else (block
+      (tail b))))
+    (let@17:5 cat = (++ a b))
+    (let@18:5 part = (slice x 6 3))
+    (let@19:5 lg = (call clog2 W))
+    (let@20:5 zeros : u8 = all0)
+    (let@21:5 ones : u8 = all1)
+    (let@22:5 ff = (int 0xFF u 8))
+    (let@23:5 wrap = (+% a b))
+    (let@24:5 wide = (+ a b))
+    (let@25:5 sx = (as x sint<9>))
+    (let@26:5 sw = (call widen_signed x))
+    (for@27:5 i (.. 0 W) (block))
+    (expr@28:5 (if cfg::debug (block)))
+    (let@29:5 m = (call Sub a))
+    (let@30:5 my = (. m y))
+    (mem@31:5 ram : [u8; 256])
+    (property@32:5 p (always (|=> (== a 0) (== b 0)))))
+  (enum@35:1 T
+    (variant A)
+    (variant B))
+  (struct@36:1 S
+    (field f u8))
+  (test@38:1 "..."
+    (block))
+  (comments 1))

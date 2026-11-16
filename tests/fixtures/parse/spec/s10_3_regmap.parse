@@ -1,0 +1,11 @@
+(file
+  (regmap@2:1 Ctrl
+    (reg@3:5 0x00 ctrl rw (enable bool @ 0) (mode Mode @ 1 2))
+    (reg@4:5 0x04 status ro (busy bool @ 0) (err bool @ 1))
+    (reg@5:5 0x08 count rw u32)
+    (reg@6:5 0x10 fifo wo u8 -> Stream<u8>))
+  (module@9:1 UsesRegs
+    (let@10:5 regs = (call std::bus::RegisterFile<Ctrl> bus: (. cpu axi_lite)))
+    (let@11:5 engine = (call Engine enable: (. (. regs ctrl) enable) mode: (. (. regs ctrl) mode) in: (. regs fifo)))
+    (=@12:5 (. regs status) (struct Ctrl::Status (busy (. engine busy)) (err (. engine err)))))
+  (comments 2))

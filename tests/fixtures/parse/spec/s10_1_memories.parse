@@ -1,0 +1,17 @@
+(file
+  (module@2:1 Mems
+    (in@3:5 clk clock)
+    (in@4:5 we bool)
+    (in@5:5 wr_addr uint<10>)
+    (in@6:5 wr_data u32)
+    (in@7:5 rd_addr uint<10>)
+    (in@8:5 idx uint<6>)
+    (mem@9:5 buf : [u32; 1024])
+    (mem@10:5 #[ram(distributed)] lut : [u8; 64] = (call include_hex "sine.hex"))
+    (let@11:5 rd = (call (. buf read) rd_addr))
+    (on@12:5 clk (block
+      (tail (if we (block
+        (=@13:17 (index buf wr_addr) wr_data))))))
+    (let@15:5 async_rd = (index lut idx))
+    (let@16:5 old = (call (. buf read) rd_addr rdw: .OldData)))
+  (comments 5))

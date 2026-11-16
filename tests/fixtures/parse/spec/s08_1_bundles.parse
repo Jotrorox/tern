@@ -1,0 +1,24 @@
+(file
+  (bundle@2:1 Valid pub (generics (T type))
+    (field valid bool)
+    (field data T))
+  (bundle@7:1 Stream pub (generics (T type))
+    (field valid bool)
+    (field data T)
+    (flip ready bool)
+    (fn@11:5 fire (params) -> bool
+      (block
+        (tail (and (. self valid) (. self ready))))))
+  (bundle@14:1 Axi4Lite pub (generics (AW uint = 32) (DW uint = 32))
+    (field aw Stream<uint<AW>>)
+    (field w Stream<(type (struct-type (field data uint<DW>) (field strb bit<(/ DW 8)>)))>)
+    (flip b Stream<bit<2>>)
+    (field ar Stream<uint<AW>>)
+    (flip r Stream<(type (struct-type (field data uint<DW>) (field resp bit<2>)))>))
+  (module@22:1 Use
+    (in@23:5 tx Stream<u8>)
+    (out@24:5 rx Stream<u8>)
+    (=@25:5 (. cpu rx) (. fifo pop))
+    (=@26:5 (. tx ready) true)
+    (=@27:5 rx (struct Stream (valid true) (data x))))
+  (comments 2))
