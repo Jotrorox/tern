@@ -1,0 +1,615 @@
+package std::bus
+
+// Multi-master interconnect.
+//
+// Axi4Crossbar and Axi4Interconnect work at the AXI4-Lite level: each master
+// port is reduced to a stream of single requests by an Axi4LiteSlave
+// front-end, each slave port is driven by an Axi4LiteMaster back-end, and the
+// fabric in between routes RegReq/RegRsp. Every master has at most one
+// transaction outstanding, which makes response ordering and routing trivially
+// correct. Use Axi4ToAxi4Lite in front of a master port to attach a full AXI4
+// master.
+//
+// The address map is given as two const arrays: slave j owns the byte range
+// [Bases[j], Bases[j] + Sizes[j]). Regions must be non-empty and must not
+// overlap (checked at elaboration). Slaves see the full, untranslated address.
+// An access that hits no region is answered by the fabric with DECERR and
+// never reaches a slave.
+
+/// AXI4-Lite crossbar: `Masters` master ports, `Slaves` slave ports, a const
+/// address map and round-robin arbitration per slave.
+///
+/// Different masters talking to different slaves proceed concurrently; masters
+/// competing for one slave are served round-robin, one transaction each.
+/// Simplification (documented): AXI4-Lite level, one outstanding transaction
+/// per master port and per slave port.
+pub module Axi4Crossbar<Masters: uint, Slaves: uint, Bases: [uint; Slaves], Sizes: [uint; Slaves], AW: uint = 32, DW: uint = 32>
+where Masters >= 1, Slaves >= 1, DW == 32 or DW == 64
+{
+    /// Clock.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// Master-facing ports: connect master i to `s[i]`.
+    in s: [Axi4Lite<AW, DW>; Masters]
+    /// Slave-facing ports: slave j, owning [Bases[j], Bases[j] + Sizes[j]), on `m[j]`.
+    out m: [Axi4Lite<AW, DW>; Slaves]
+
+    /// Minimum cycles from the AW+W (or AR) handshake on `s[i]` to the
+    /// AW/W (or AR) valid on the slave port.
+    pub const LATENCY: uint = 2
+
+    const MW: uint = if Masters > 1 { clog2(Masters) } else { 1 }
+
+    for j in 0..Slaves {
+        static_assert(Sizes[j] > 0, "Axi4Crossbar: empty address region")
+        static_assert(Bases[j] + Sizes[j] <= (1 << AW), "Axi4Crossbar: address region outside the address space")
+        for k in 0..j {
+            static_assert(Bases[j] >= Bases[k] + Sizes[k] or Bases[k] >= Bases[j] + Sizes[j], "Axi4Crossbar: overlapping address regions")
+        }
+    }
+
+    // Per-master request/response signals, gathered so the per-slave logic can
+    // look at every master.
+    var req_valid: [bool; Masters]
+    var req_data: [RegReq<AW, DW>; Masters]
+    var req_ready: [bool; Masters]
+    var rsp_valid: [bool; Masters]
+    var rsp_data: [RegRsp<DW>; Masters]
+    var hit: [[bool; Slaves]; Masters]
+    var mapped: [bool; Masters]
+    // Per-slave grant (which master was accepted this cycle) and response.
+    var gnt: [[bool; Masters]; Slaves]
+    var srsp_valid: [bool; Slaves]
+    var srsp_data: [RegRsp<DW>; Slaves]
+    var srsp_owner: [uint<MW>; Slaves]
+
+    for i in 0..Masters {
+        let front = Axi4LiteSlave<AW, DW>(s: s[i])
+        req_valid[i] = front.req.valid
+        req_data[i] = front.req.data
+        front.req.ready = req_ready[i]
+        front.rsp = Valid { valid: rsp_valid[i], data: rsp_data[i] }
+        for j in 0..Slaves {
+            hit[i][j] = front.req.valid and front.req.data.addr >= Bases[j] and front.req.data.addr <= Bases[j] + Sizes[j] - 1
+        }
+    }
+
+    comb {
+        for i in 0..Masters {
+            mapped[i] = false
+            for j in 0..Slaves {
+                if hit[i][j] { mapped[i] = true }
+            }
+        }
+    }
+
+    for j in 0..Slaves {
+        let back = Axi4LiteMaster<AW, DW>()
+        m[j] = back.m
+
+        reg last: uint<MW> = 0
+        reg owner: uint<MW> = 0
+        var pick: uint<MW> = 0
+        var any: bool = false
+        var pick_data: RegReq<AW, DW> = all0
+
+        // Round robin: the lowest requesting index above `last`, otherwise the
+        // lowest requesting index. Loops run high-to-low so the last write,
+        // i.e. the lowest index, wins.
+        comb {
+            for t in 0..Masters {
+                let i = Masters - 1 - t
+                if hit[i][j] { pick = i; any = true; pick_data = req_data[i] }
+            }
+            for t in 0..Masters {
+                let i = Masters - 1 - t
+                if hit[i][j] and i > last { pick = i; pick_data = req_data[i] }
+            }
+        }
+
+        back.req.valid = any
+        back.req.data = pick_data
+        let fire = any and back.req.ready
+        for i in 0..Masters {
+            gnt[j][i] = fire and pick == i
+        }
+        srsp_valid[j] = back.rsp.valid
+        srsp_data[j] = back.rsp.data
+        srsp_owner[j] = owner
+
+        on clk {
+            if fire { owner = pick; last = pick }
+        }
+
+        property owner_held_while_busy { always (!back.req.ready and !back.rsp.valid) |=> stable(owner) }
+    }
+
+    for i in 0..Masters {
+        reg err_pend: bool = false
+        var ready: bool = false
+        var rv: bool = false
+        var rd: RegRsp<DW> = all0
+        comb {
+            ready = req_valid[i] and !mapped[i]
+            rv = err_pend
+            rd = RegRsp { rdata: 0, resp: RESP_DECERR }
+            for j in 0..Slaves {
+                if gnt[j][i] { ready = true }
+                if srsp_valid[j] and srsp_owner[j] == i { rv = true; rd = srsp_data[j] }
+            }
+        }
+        req_ready[i] = ready
+        rsp_valid[i] = rv
+        rsp_data[i] = rd
+        on clk {
+            err_pend = req_valid[i] and !mapped[i]
+        }
+
+        property decerr_for_unmapped {
+            always (req_valid[i] and !mapped[i]) |=> rsp_valid[i] and rsp_data[i].resp == RESP_DECERR
+        }
+    }
+}
+
+/// Address map used by the interconnect tests: two 4 KiB slaves at 0x0000 and 0x1000.
+const TestBases: [uint; 2] = [0x0000, 0x1000]
+/// Sizes matching TestBases.
+const TestSizes: [uint; 2] = [0x1000, 0x1000]
+
+test "Axi4Crossbar routes a write by address and returns the response" {
+    let dut = sim Axi4Crossbar<2, 2, TestBases, TestSizes>()
+    dut.reset()
+    for j in 0..2 {
+        dut.m[j].aw.ready = true
+        dut.m[j].w.ready = true
+        dut.m[j].b.valid = false
+        dut.m[j].ar.ready = true
+        dut.m[j].r.valid = false
+    }
+    for i in 0..2 {
+        dut.s[i].aw.valid = false
+        dut.s[i].w.valid = false
+        dut.s[i].ar.valid = false
+        dut.s[i].b.ready = true
+        dut.s[i].r.ready = true
+    }
+    dut.s[0].aw = Stream { valid: true, data: 0x1004 }
+    dut.s[0].w.valid = true
+    dut.s[0].w.data.data = 0x77
+    dut.s[0].w.data.strb = 0b1111
+    dut.step()
+    dut.s[0].aw.valid = false
+    dut.s[0].w.valid = false
+    dut.step_until(dut.m[1].aw.valid, max: 20)
+    expect dut.m[1].aw.data == 0x1004 and dut.m[1].w.data.data == 0x77
+    expect !dut.m[0].aw.valid
+    dut.step()
+    dut.m[1].b = Stream { valid: true, data: RESP_OKAY }
+    dut.step()
+    dut.m[1].b.valid = false
+    dut.step_until(dut.s[0].b.valid, max: 20)
+    expect dut.s[0].b.data == RESP_OKAY
+    expect !dut.s[1].b.valid
+}
+
+test "Axi4Crossbar answers unmapped addresses with DECERR" {
+    let dut = sim Axi4Crossbar<2, 2, TestBases, TestSizes>()
+    dut.reset()
+    for j in 0..2 {
+        dut.m[j].aw.ready = true
+        dut.m[j].w.ready = true
+        dut.m[j].b.valid = false
+        dut.m[j].ar.ready = true
+        dut.m[j].r.valid = false
+    }
+    for i in 0..2 {
+        dut.s[i].aw.valid = false
+        dut.s[i].w.valid = false
+        dut.s[i].ar.valid = false
+        dut.s[i].b.ready = true
+        dut.s[i].r.ready = false              // hold R so it can be inspected
+    }
+    dut.s[1].ar = Stream { valid: true, data: 0x3000 }
+    dut.step()
+    dut.s[1].ar.valid = false
+    for _ in 0..8 {
+        expect !dut.m[0].ar.valid and !dut.m[1].ar.valid   // never reaches a slave
+        dut.step()
+    }
+    expect dut.s[1].r.valid and dut.s[1].r.data.resp == RESP_DECERR
+    expect !dut.s[0].r.valid
+}
+
+test "Axi4Crossbar serves two masters competing for one slave in turn" {
+    let dut = sim Axi4Crossbar<2, 2, TestBases, TestSizes>()
+    dut.reset()
+    for j in 0..2 {
+        dut.m[j].aw.ready = true
+        dut.m[j].w.ready = true
+        dut.m[j].b.valid = false
+        dut.m[j].ar.ready = true
+        dut.m[j].r.valid = false
+    }
+    for i in 0..2 {
+        dut.s[i].aw.valid = false
+        dut.s[i].w.valid = false
+        dut.s[i].b.ready = true
+        dut.s[i].r.ready = true
+    }
+    dut.s[0].ar = Stream { valid: true, data: 0x0010 }
+    dut.s[1].ar = Stream { valid: true, data: 0x0020 }
+    dut.step()
+    dut.s[0].ar.valid = false
+    dut.s[1].ar.valid = false
+    // slave 0 answers every read with its address as data, the cycle after AR
+    var served = [false, false]
+    var pend = false
+    var pdata = 0
+    for _ in 0..40 {
+        dut.m[0].r.valid = pend
+        dut.m[0].r.data.data = pdata
+        dut.m[0].r.data.resp = RESP_OKAY
+        dut.settle()
+        let ar = dut.m[0].ar.valid
+        let a = dut.m[0].ar.data
+        dut.step()
+        pend = ar
+        pdata = a
+        for i in 0..2 {
+            if dut.s[i].r.valid {
+                expect dut.s[i].r.data.data == if i == 0 { 0x10 } else { 0x20 }
+                served[i] = true
+            }
+        }
+    }
+    expect served[0] and served[1]
+}
+
+/// AXI4-Lite shared-bus interconnect: `Masters` master ports and `Slaves`
+/// slave ports with a const address map, but a single transaction in flight
+/// for the whole fabric.
+///
+/// Masters are arbitrated round-robin; the winner's request goes to the slave
+/// owning its address (or is answered with DECERR when unmapped), and the next
+/// request is granted once the response has been returned. This is the
+/// low-area alternative to Axi4Crossbar with the same ports and address map.
+pub module Axi4Interconnect<Masters: uint, Slaves: uint, Bases: [uint; Slaves], Sizes: [uint; Slaves], AW: uint = 32, DW: uint = 32>
+where Masters >= 1, Slaves >= 1, DW == 32 or DW == 64
+{
+    /// Clock.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// Master-facing ports: connect master i to `s[i]`.
+    in s: [Axi4Lite<AW, DW>; Masters]
+    /// Slave-facing ports: slave j, owning [Bases[j], Bases[j] + Sizes[j]), on `m[j]`.
+    out m: [Axi4Lite<AW, DW>; Slaves]
+
+    /// Minimum cycles from the AW+W (or AR) handshake on `s[i]` to the
+    /// AW/W (or AR) valid on the slave port.
+    pub const LATENCY: uint = 2
+
+    const MW: uint = if Masters > 1 { clog2(Masters) } else { 1 }
+
+    for j in 0..Slaves {
+        static_assert(Sizes[j] > 0, "Axi4Interconnect: empty address region")
+        static_assert(Bases[j] + Sizes[j] <= (1 << AW), "Axi4Interconnect: address region outside the address space")
+        for k in 0..j {
+            static_assert(Bases[j] >= Bases[k] + Sizes[k] or Bases[k] >= Bases[j] + Sizes[j], "Axi4Interconnect: overlapping address regions")
+        }
+    }
+
+    var req_valid: [bool; Masters]
+    var req_data: [RegReq<AW, DW>; Masters]
+    var req_ready: [bool; Masters]
+    var rsp_valid: [bool; Masters]
+    var rsp_data: [RegRsp<DW>; Masters]
+
+    for i in 0..Masters {
+        let front = Axi4LiteSlave<AW, DW>(s: s[i])
+        req_valid[i] = front.req.valid
+        req_data[i] = front.req.data
+        front.req.ready = req_ready[i]
+        front.rsp = Valid { valid: rsp_valid[i], data: rsp_data[i] }
+    }
+
+    reg busy: bool = false
+    reg owner: uint<MW> = 0
+    reg err_pend: bool = false
+
+    // Round-robin pick among requesting masters (see Axi4Crossbar).
+    var pick: uint<MW> = 0
+    var any: bool = false
+    var sel: RegReq<AW, DW> = all0
+    comb {
+        for t in 0..Masters {
+            let i = Masters - 1 - t
+            if req_valid[i] { pick = i; any = true; sel = req_data[i] }
+        }
+        for t in 0..Masters {
+            let i = Masters - 1 - t
+            if req_valid[i] and i > owner { pick = i; sel = req_data[i] }
+        }
+    }
+
+    var hit: [bool; Slaves]
+    for j in 0..Slaves {
+        hit[j] = sel.addr >= Bases[j] and sel.addr <= Bases[j] + Sizes[j] - 1
+    }
+
+    var back_ready: [bool; Slaves]
+    var srsp_valid: [bool; Slaves]
+    var srsp_data: [RegRsp<DW>; Slaves]
+    for j in 0..Slaves {
+        let back = Axi4LiteMaster<AW, DW>()
+        m[j] = back.m
+        back.req.valid = any and !busy and hit[j]
+        back.req.data = sel
+        back_ready[j] = back.req.ready
+        srsp_valid[j] = back.rsp.valid
+        srsp_data[j] = back.rsp.data
+    }
+
+    var mapped: bool = false
+    var target_ready: bool = true
+    var rv: bool = false
+    var rd: RegRsp<DW> = all0
+    comb {
+        for j in 0..Slaves {
+            if hit[j] { mapped = true; target_ready = back_ready[j] }
+        }
+        rv = err_pend
+        rd = RegRsp { rdata: 0, resp: RESP_DECERR }
+        for j in 0..Slaves {
+            if srsp_valid[j] { rv = true; rd = srsp_data[j] }
+        }
+    }
+
+    let grant = any and !busy and target_ready
+
+    for i in 0..Masters {
+        req_ready[i] = grant and pick == i
+        rsp_valid[i] = busy and rv and owner == i
+        rsp_data[i] = rd
+    }
+
+    on clk {
+        if grant {
+            busy = true
+            owner = pick
+            err_pend = !mapped
+        }
+        if busy and rv {
+            busy = false
+            err_pend = false
+        }
+    }
+
+    property single_transaction { always grant |=> busy }
+    property unmapped_decerr { always (grant and !mapped) |=> rv and rd.resp == RESP_DECERR }
+}
+
+test "Axi4Interconnect routes reads by address and serialises masters" {
+    let dut = sim Axi4Interconnect<2, 2, TestBases, TestSizes>()
+    dut.reset()
+    for j in 0..2 {
+        dut.m[j].aw.ready = true
+        dut.m[j].w.ready = true
+        dut.m[j].b.valid = false
+        dut.m[j].ar.ready = true
+        dut.m[j].r.valid = false
+    }
+    for i in 0..2 {
+        dut.s[i].aw.valid = false
+        dut.s[i].w.valid = false
+        dut.s[i].b.ready = true
+        dut.s[i].r.ready = true
+    }
+    dut.s[0].ar = Stream { valid: true, data: 0x0008 }
+    dut.s[1].ar = Stream { valid: true, data: 0x1008 }
+    dut.step()
+    dut.s[0].ar.valid = false
+    dut.s[1].ar.valid = false
+    // each slave answers a read with its address as data, the cycle after AR
+    var served = [false, false]
+    var pend = [false, false]
+    var pdata = [0, 0]
+    for _ in 0..40 {
+        for j in 0..2 {
+            dut.m[j].r.valid = pend[j]
+            dut.m[j].r.data.data = pdata[j]
+            dut.m[j].r.data.resp = RESP_OKAY
+        }
+        dut.settle()
+        expect !(dut.m[0].ar.valid and dut.m[1].ar.valid)   // one transaction at a time
+        let ar0 = dut.m[0].ar.valid
+        let ar1 = dut.m[1].ar.valid
+        let a0 = dut.m[0].ar.data
+        let a1 = dut.m[1].ar.data
+        dut.step()
+        pend = [ar0, ar1]
+        pdata = [a0, a1]
+        for i in 0..2 {
+            if dut.s[i].r.valid {
+                expect dut.s[i].r.data.data == if i == 0 { 0x0008 } else { 0x1008 }
+                served[i] = true
+            }
+        }
+    }
+    expect served[0] and served[1]
+}
+
+test "Axi4Interconnect answers unmapped writes with DECERR" {
+    let dut = sim Axi4Interconnect<2, 2, TestBases, TestSizes>()
+    dut.reset()
+    for j in 0..2 {
+        dut.m[j].aw.ready = true
+        dut.m[j].w.ready = true
+        dut.m[j].b.valid = false
+        dut.m[j].ar.ready = true
+        dut.m[j].r.valid = false
+    }
+    for i in 0..2 {
+        dut.s[i].aw.valid = false
+        dut.s[i].w.valid = false
+        dut.s[i].ar.valid = false
+        dut.s[i].b.ready = true
+        dut.s[i].r.ready = true
+    }
+    dut.s[0].aw = Stream { valid: true, data: 0x8000 }
+    dut.s[0].w.valid = true
+    dut.s[0].w.data.data = 1
+    dut.s[0].w.data.strb = 0b1111
+    dut.step()
+    dut.s[0].aw.valid = false
+    dut.s[0].w.valid = false
+    dut.step_until(dut.s[0].b.valid, max: 20)
+    expect dut.s[0].b.data == RESP_DECERR
+    expect !dut.m[0].aw.valid and !dut.m[1].aw.valid
+}
+
+/// Wishbone arbiter: N masters share one Wishbone slave port.
+///
+/// Round-robin among masters asserting `cyc`; the winner owns the bus for as
+/// long as it holds `cyc` (so block and read-modify-write cycles are atomic).
+/// The grant is combinational in the first cycle, so the arbiter adds no
+/// latency. Masters that are not granted see `stall` high and never see
+/// `ack`/`err`.
+pub module WishboneArbiter<N: uint, AW: uint = 32, DW: uint = 32>
+where N >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// Master-facing ports: connect master i to `s[i]`.
+    in s: [Wishbone<AW, DW>; N]
+    /// Slave-facing port.
+    out m: Wishbone<AW, DW>
+
+    /// Cycles added by the arbiter.
+    pub const LATENCY: uint = 0
+
+    const MW: uint = if N > 1 { clog2(N) } else { 1 }
+
+    reg locked: bool = false
+    reg owner: uint<MW> = 0
+
+    var pick: uint<MW> = 0
+    var any: bool = false
+    var owner_cyc: bool = false
+    comb {
+        for t in 0..N {
+            let i = N - 1 - t
+            if s[i].cyc { pick = i; any = true }
+            if owner == i { owner_cyc = s[i].cyc }
+        }
+        for t in 0..N {
+            let i = N - 1 - t
+            if s[i].cyc and i > owner { pick = i }
+        }
+    }
+
+    let cur = if locked { owner } else { pick }
+    let active = locked or any
+
+    var gnt: [bool; N]
+    for i in 0..N {
+        gnt[i] = active and cur == i
+        s[i].ack = gnt[i] and m.ack
+        s[i].err = gnt[i] and m.err
+        s[i].stall = !gnt[i] or m.stall
+        s[i].dat_r = m.dat_r
+    }
+
+    comb {
+        m.cyc = false
+        m.stb = false
+        m.we = false
+        m.adr = 0
+        m.dat_w = 0
+        m.sel = all0
+        for i in 0..N {
+            if gnt[i] {
+                m.cyc = s[i].cyc
+                m.stb = s[i].stb
+                m.we = s[i].we
+                m.adr = s[i].adr
+                m.dat_w = s[i].dat_w
+                m.sel = s[i].sel
+            }
+        }
+    }
+
+    on clk {
+        if !locked and any {
+            locked = true
+            owner = pick
+        } else if locked and !owner_cyc {
+            locked = false
+        }
+    }
+
+    property hold_grant_while_cyc { always (locked and owner_cyc) |=> locked and stable(owner) }
+    property idle_bus_when_ungranted { always !active |-> !m.cyc }
+}
+
+test "WishboneArbiter grants round-robin and holds the grant while cyc" {
+    let dut = sim WishboneArbiter<2, 32, 32>()
+    dut.reset()
+    dut.m.ack = false
+    dut.m.err = false
+    dut.m.stall = false
+    dut.m.dat_r = 0x5A
+    for i in 0..2 {
+        dut.s[i].cyc = true
+        dut.s[i].stb = true
+        dut.s[i].we = false
+        dut.s[i].dat_w = 0
+        dut.s[i].sel = 0b1111
+    }
+    dut.s[0].adr = 0x100
+    dut.s[1].adr = 0x200
+    dut.settle()
+    // after reset owner = 0, so master 1 is next in round-robin order
+    expect dut.m.cyc and dut.m.adr == 0x200
+    expect dut.s[0].stall and !dut.s[1].stall
+    dut.step(3)
+    expect dut.m.adr == 0x200                 // held while master 1 keeps cyc
+    dut.m.ack = true
+    dut.settle()
+    expect dut.s[1].ack and !dut.s[0].ack and dut.s[1].dat_r == 0x5A
+    dut.step()
+    dut.m.ack = false
+    dut.s[1].cyc = false
+    dut.s[1].stb = false
+    dut.step()                                // release
+    dut.settle()
+    expect dut.m.cyc and dut.m.adr == 0x100
+    expect !dut.s[0].stall
+}
+
+test "WishboneArbiter leaves the bus idle when nobody requests" {
+    let dut = sim WishboneArbiter<3, 32, 32>()
+    dut.reset()
+    dut.m.ack = false
+    dut.m.err = false
+    dut.m.stall = false
+    dut.m.dat_r = 0
+    for i in 0..3 {
+        dut.s[i].cyc = false
+        dut.s[i].stb = false
+        dut.s[i].we = false
+        dut.s[i].adr = 0
+        dut.s[i].dat_w = 0
+        dut.s[i].sel = 0
+    }
+    dut.step(2)
+    expect !dut.m.cyc and !dut.m.stb
+    dut.s[2].cyc = true
+    dut.s[2].stb = true
+    dut.s[2].adr = 0x300
+    dut.settle()
+    expect dut.m.cyc and dut.m.adr == 0x300   // no added latency
+}

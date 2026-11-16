@@ -1,0 +1,381 @@
+package std::bus
+
+// std::bus — on-chip bus bundles, register files, bridges, interconnect and DMA.
+//
+// This file holds the bundle definitions and the protocol constants shared by
+// every other file of the package:
+//
+//   bus.tern           bundles (Axi4, Axi4Lite, Axi4Stream, Apb, Ahb, Wishbone,
+//                      TileLinkUL), response/burst codes, axi_next_addr
+//   lite.tern          RegReq/RegRsp, Axi4LiteSlave (front-end), Axi4LiteMaster
+//                      (back-end) — the building blocks of everything below
+//   regfile.tern       RegBus, Axi4LiteRegPort, ApbRegPort, WishboneRegPort,
+//                      RegisterFile<Map, Bus>
+//   bridges.tern       Axi4LiteToApb, Axi4ToAxi4Lite, ApbBridge<N>,
+//                      WishboneToAxi4Lite
+//   interconnect.tern  Axi4Crossbar, Axi4Interconnect, WishboneArbiter<N>
+//   dma.tern           AxiDma
+//
+// Direction convention: a bus port is declared from the point of view of the
+// component. A component that *answers* requests (a slave / subordinate) has
+// `in s: Axi4Lite<..>`; a component that *issues* requests (a master / manager)
+// has `out m: Axi4Lite<..>`. Requests flow in the bundle's direction, responses
+// are `flip` fields.
+
+// ---------------------------------------------------------------------------
+// AXI response and burst codes
+// ---------------------------------------------------------------------------
+
+/// AXI response OKAY: normal access success.
+pub const RESP_OKAY: bit<2> = 0b00
+/// AXI response EXOKAY: exclusive access success (AXI4 only; never produced by std).
+pub const RESP_EXOKAY: bit<2> = 0b01
+/// AXI response SLVERR: the slave was reached but reported an error.
+pub const RESP_SLVERR: bit<2> = 0b10
+/// AXI response DECERR: no slave is mapped at the address (produced by interconnects).
+pub const RESP_DECERR: bit<2> = 0b11
+
+/// AXI4 burst type FIXED: every beat of the burst uses the same address.
+pub const BURST_FIXED: bit<2> = 0b00
+/// AXI4 burst type INCR: the address increments by the beat size.
+pub const BURST_INCR: bit<2> = 0b01
+/// AXI4 burst type WRAP: like INCR, but wraps at the burst-size-aligned boundary.
+pub const BURST_WRAP: bit<2> = 0b10
+
+// ---------------------------------------------------------------------------
+// AXI4
+// ---------------------------------------------------------------------------
+
+/// AXI4 address-channel payload (AW and AR).
+///
+/// AxLOCK, AxCACHE, AxQOS, AxREGION and AxUSER are not carried; the emitted
+/// SystemVerilog ties them to their defaults (normal access, non-cacheable
+/// bufferable, QoS 0) when a std bundle is connected to an external AXI port.
+pub struct Axi4Addr<AW: uint, IDW: uint> {
+    /// Transaction ID.
+    id: uint<IDW>,
+    /// Byte address of the first beat.
+    addr: uint<AW>,
+    /// Burst length minus one (AxLEN): 0 means one beat, 255 means 256 beats.
+    len: uint<8>,
+    /// Bytes per beat as a power of two (AxSIZE): 2 means 4 bytes.
+    size: uint<3>,
+    /// Burst type: BURST_FIXED, BURST_INCR or BURST_WRAP.
+    burst: bit<2>,
+    /// Protection type (AxPROT): privileged, non-secure, instruction.
+    prot: bit<3>,
+}
+
+/// AXI4 write-data beat.
+pub struct Axi4W<DW: uint> {
+    /// Write data.
+    data: uint<DW>,
+    /// Byte strobes; bit i qualifies data byte i.
+    strb: bit<DW/8>,
+    /// Last beat of the burst.
+    last: bool,
+}
+
+/// AXI4 write response.
+pub struct Axi4B<IDW: uint> {
+    /// ID of the write transaction this response belongs to.
+    id: uint<IDW>,
+    /// Response code (RESP_*).
+    resp: bit<2>,
+}
+
+/// AXI4 read-data beat.
+pub struct Axi4R<DW: uint, IDW: uint> {
+    /// ID of the read transaction this beat belongs to.
+    id: uint<IDW>,
+    /// Read data.
+    data: uint<DW>,
+    /// Response code (RESP_*) for this beat.
+    resp: bit<2>,
+    /// Last beat of the burst.
+    last: bool,
+}
+
+/// Full AXI4 memory-mapped interface (manager view when used as `out`).
+///
+/// Five independent channels, each a `Stream` with the standard AXI rule that
+/// valid must not wait for ready and that valid and data are held until the
+/// handshake.
+pub bundle Axi4<AW: uint = 32, DW: uint = 32, IDW: uint = 4> {
+    /// Write address channel.
+    aw: Stream<Axi4Addr<AW, IDW>>
+    /// Write data channel.
+    w: Stream<Axi4W<DW>>
+    /// Write response channel (flows back to the manager).
+    flip b: Stream<Axi4B<IDW>>
+    /// Read address channel.
+    ar: Stream<Axi4Addr<AW, IDW>>
+    /// Read data channel (flows back to the manager).
+    flip r: Stream<Axi4R<DW, IDW>>
+}
+
+/// Address of the beat following `addr` in an AXI4 burst with the given AxLEN,
+/// AxSIZE and AxBURST (FIXED keeps the address, INCR adds the beat size, WRAP
+/// adds the beat size and wraps at the (len + 1) * 2^size byte boundary).
+pub fn axi_next_addr<AW: uint>(addr: uint<AW>, len: uint<8>, size: uint<3>, burst: bit<2>) -> uint<AW> {
+    let incr: uint<8> = match size {
+        0 => 1,
+        1 => 2,
+        2 => 4,
+        3 => 8,
+        4 => 16,
+        5 => 32,
+        6 => 64,
+        _ => 128,
+    }
+    let inc = (addr +% incr) as uint<AW>
+    let mask = (((len + 1) * incr) -% 1) as uint<AW>
+    if burst == BURST_FIXED {
+        addr
+    } else if burst == BURST_WRAP {
+        (addr & ~mask) | (inc & mask)
+    } else {
+        inc
+    }
+}
+
+test "axi_next_addr: FIXED, INCR and WRAP bursts" {
+    expect axi_next_addr(0x100u32, 3, 2, BURST_FIXED) == 0x100
+    expect axi_next_addr(0x100u32, 3, 2, BURST_INCR) == 0x104
+    expect axi_next_addr(0x101u32, 0, 0, BURST_INCR) == 0x102
+    // 4 beats x 4 bytes wrap at a 16-byte boundary: 0x38 -> 0x3C -> 0x30
+    expect axi_next_addr(0x38u32, 3, 2, BURST_WRAP) == 0x3C
+    expect axi_next_addr(0x3Cu32, 3, 2, BURST_WRAP) == 0x30
+}
+
+// ---------------------------------------------------------------------------
+// AXI4-Lite and AXI4-Stream
+// ---------------------------------------------------------------------------
+
+/// AXI4-Lite interface (spec §8.1): single-beat reads and writes, no IDs, no
+/// bursts. AxPROT is not carried. `b` and `r` carry RESP_* codes.
+pub bundle Axi4Lite<AW: uint = 32, DW: uint = 32> {
+    /// Write address channel.
+    aw: Stream<uint<AW>>
+    /// Write data channel: data plus byte strobes.
+    w: Stream<struct { data: uint<DW>, strb: bit<DW/8> }>
+    /// Write response channel.
+    flip b: Stream<bit<2>>
+    /// Read address channel.
+    ar: Stream<uint<AW>>
+    /// Read data channel: data plus response code.
+    flip r: Stream<struct { data: uint<DW>, resp: bit<2> }>
+}
+
+/// AXI4-Stream interface: a `Stream` with byte qualifiers, a packet boundary
+/// and a user sideband. TID/TDEST/TSTRB are not carried.
+pub bundle Axi4Stream<DW: uint = 32, UW: uint = 1> {
+    /// TVALID: a beat is offered.
+    valid: bool
+    /// TDATA.
+    data: uint<DW>
+    /// TKEEP: bit i set means data byte i is part of the stream.
+    keep: bit<DW/8>
+    /// TLAST: last beat of a packet.
+    last: bool
+    /// TUSER sideband.
+    user: bit<UW>
+    /// TREADY: the consumer accepts the beat.
+    flip ready: bool
+
+    /// True in a cycle where a beat is transferred.
+    fn fire() -> bool { self.valid and self.ready }
+    /// True in a cycle where the last beat of a packet is transferred.
+    fn fire_last() -> bool { self.valid and self.ready and self.last }
+}
+
+// ---------------------------------------------------------------------------
+// APB
+// ---------------------------------------------------------------------------
+
+/// AMBA APB4 interface (requester view when used as `out`).
+///
+/// One transfer is a setup cycle (`psel` and not `penable`) followed by one or
+/// more access cycles (`psel` and `penable`) that end when `pready` is high.
+/// For a multi-slave APB segment, one `Apb` per slave carries its own `psel`
+/// (see ApbBridge).
+pub bundle Apb<AW: uint = 32, DW: uint = 32> {
+    /// PSEL: this slave is selected.
+    psel: bool
+    /// PENABLE: second and later cycles of a transfer.
+    penable: bool
+    /// PWRITE: write transfer (false: read).
+    pwrite: bool
+    /// PADDR: byte address.
+    paddr: uint<AW>
+    /// PWDATA: write data.
+    pwdata: uint<DW>
+    /// PSTRB: write byte strobes (all zero for reads).
+    pstrb: bit<DW/8>
+    /// PPROT: protection type.
+    pprot: bit<3>
+    /// PREADY: the slave completes the access cycle.
+    flip pready: bool
+    /// PRDATA: read data, valid in the completing access cycle.
+    flip prdata: uint<DW>
+    /// PSLVERR: the transfer failed, valid in the completing access cycle.
+    flip pslverr: bool
+
+    /// True in the setup cycle of a transfer.
+    fn setup() -> bool { self.psel and !self.penable }
+    /// True in every access cycle of a transfer.
+    fn access() -> bool { self.psel and self.penable }
+    /// True in the cycle a transfer completes.
+    fn fire() -> bool { self.psel and self.penable and self.pready }
+}
+
+// ---------------------------------------------------------------------------
+// AHB-Lite
+// ---------------------------------------------------------------------------
+
+/// AHB HTRANS IDLE: no transfer.
+pub const HTRANS_IDLE: bit<2> = 0b00
+/// AHB HTRANS BUSY: the master inserts an idle beat inside a burst.
+pub const HTRANS_BUSY: bit<2> = 0b01
+/// AHB HTRANS NONSEQ: first (or single) transfer of a burst.
+pub const HTRANS_NONSEQ: bit<2> = 0b10
+/// AHB HTRANS SEQ: remaining transfers of a burst.
+pub const HTRANS_SEQ: bit<2> = 0b11
+
+/// AMBA AHB-Lite interface, master view (single master, pipelined address and
+/// data phases).
+///
+/// `hready` is the bus-level HREADY seen by the master. In a multi-slave
+/// system the address decoder generates each slave's HSEL and multiplexes
+/// HREADYOUT/HRDATA/HRESP back into this bundle; std does not include an AHB
+/// decoder. `hwdata` belongs to the data phase, one cycle after its address.
+pub bundle Ahb<AW: uint = 32, DW: uint = 32> {
+    /// HADDR: address of the address phase.
+    haddr: uint<AW>
+    /// HTRANS: transfer type (HTRANS_*).
+    htrans: bit<2>
+    /// HWRITE: write transfer.
+    hwrite: bool
+    /// HSIZE: bytes per transfer as a power of two.
+    hsize: bit<3>
+    /// HBURST: burst type.
+    hburst: bit<3>
+    /// HPROT: protection control.
+    hprot: bit<4>
+    /// HMASTLOCK: locked sequence.
+    hmastlock: bool
+    /// HWDATA: write data of the data phase.
+    hwdata: uint<DW>
+    /// HRDATA: read data of the data phase.
+    flip hrdata: uint<DW>
+    /// HREADY: the current data phase completes in this cycle.
+    flip hready: bool
+    /// HRESP: error response (two-cycle error per the AHB-Lite protocol).
+    flip hresp: bool
+
+    /// True in a cycle where a new address phase is accepted.
+    fn addr_fire() -> bool { self.htrans[1] and self.hready }
+}
+
+// ---------------------------------------------------------------------------
+// Wishbone
+// ---------------------------------------------------------------------------
+
+/// Wishbone B4 interface with pipelined-mode `stall` (master view as `out`).
+///
+/// A request is accepted in a cycle with `cyc and stb and !stall`; it is
+/// answered by one cycle of `ack` (or `err`) later. Classic-mode slaves that
+/// have no stall output are connected with `stall = !ack` per the B4
+/// compatibility rule; every std Wishbone slave works with both classic and
+/// pipelined masters.
+pub bundle Wishbone<AW: uint = 32, DW: uint = 32> {
+    /// CYC_O: a bus cycle is in progress (held for the whole cycle).
+    cyc: bool
+    /// STB_O: a request is presented.
+    stb: bool
+    /// WE_O: write request.
+    we: bool
+    /// ADR_O: address. std uses byte addresses.
+    adr: uint<AW>
+    /// DAT_O of the master: write data.
+    dat_w: uint<DW>
+    /// SEL_O: byte selects.
+    sel: bit<DW/8>
+    /// ACK_I: the request completed.
+    flip ack: bool
+    /// ERR_I: the request failed.
+    flip err: bool
+    /// STALL_I: the slave cannot accept a request in this cycle.
+    flip stall: bool
+    /// DAT_I of the master: read data, valid with `ack`.
+    flip dat_r: uint<DW>
+
+    /// True in a cycle where a request is accepted by the slave.
+    fn fire() -> bool { self.cyc and self.stb and !self.stall }
+    /// True in a cycle where a request is answered.
+    fn done() -> bool { self.cyc and (self.ack or self.err) }
+}
+
+// ---------------------------------------------------------------------------
+// TileLink
+// ---------------------------------------------------------------------------
+
+/// TileLink A opcode PutFullData.
+pub const TL_PUT_FULL_DATA: bit<3> = 0
+/// TileLink A opcode PutPartialData.
+pub const TL_PUT_PARTIAL_DATA: bit<3> = 1
+/// TileLink A opcode Get.
+pub const TL_GET: bit<3> = 4
+/// TileLink D opcode AccessAck (answer to a Put).
+pub const TL_ACCESS_ACK: bit<3> = 0
+/// TileLink D opcode AccessAckData (answer to a Get).
+pub const TL_ACCESS_ACK_DATA: bit<3> = 1
+
+/// TileLink channel A beat (requests).
+pub struct TileLinkA<AW: uint, DW: uint, SizeW: uint, SourceW: uint> {
+    /// Operation: TL_PUT_FULL_DATA, TL_PUT_PARTIAL_DATA or TL_GET.
+    opcode: bit<3>,
+    /// Reserved for TL-UL; zero.
+    param: bit<3>,
+    /// log2 of the transfer size in bytes.
+    size: uint<SizeW>,
+    /// Requester tag, echoed on D.
+    source: uint<SourceW>,
+    /// Byte address.
+    address: uint<AW>,
+    /// Byte lanes.
+    mask: bit<DW/8>,
+    /// Write data.
+    data: uint<DW>,
+    /// Data is corrupt.
+    corrupt: bool,
+}
+
+/// TileLink channel D beat (responses).
+pub struct TileLinkD<DW: uint, SizeW: uint, SourceW: uint, SinkW: uint> {
+    /// TL_ACCESS_ACK or TL_ACCESS_ACK_DATA.
+    opcode: bit<3>,
+    /// Reserved for TL-UL; zero.
+    param: bit<2>,
+    /// log2 of the transfer size in bytes.
+    size: uint<SizeW>,
+    /// Tag of the request this answers.
+    source: uint<SourceW>,
+    /// Responder tag (unused in TL-UL).
+    sink: uint<SinkW>,
+    /// The access was refused.
+    denied: bool,
+    /// Read data.
+    data: uint<DW>,
+    /// Data is corrupt.
+    corrupt: bool,
+}
+
+/// TileLink Uncached Lightweight (TL-UL) interface, manager-to-client view as
+/// `out`: requests on channel A, responses on channel D.
+pub bundle TileLinkUL<AW: uint = 32, DW: uint = 32, SizeW: uint = 2, SourceW: uint = 4, SinkW: uint = 1> {
+    /// Channel A: Get / PutFullData / PutPartialData requests.
+    a: Stream<TileLinkA<AW, DW, SizeW, SourceW>>
+    /// Channel D: AccessAck / AccessAckData responses.
+    flip d: Stream<TileLinkD<DW, SizeW, SourceW, SinkW>>
+}

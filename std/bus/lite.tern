@@ -1,0 +1,372 @@
+package std::bus
+
+// Single-access building blocks: every bridge, the register-file front-ends
+// and the interconnects reduce a bus to a stream of RegReq requests answered by
+// RegRsp responses, one outstanding at a time.
+
+/// One single-beat access as produced by the bus front-ends.
+pub struct RegReq<AW: uint, DW: uint> {
+    /// Byte address.
+    addr: uint<AW>,
+    /// Write data (don't care for reads).
+    wdata: uint<DW>,
+    /// Write byte strobes (zero for reads).
+    strb: bit<DW/8>,
+    /// Write access (false: read).
+    write: bool,
+}
+
+/// The answer to one RegReq.
+pub struct RegRsp<DW: uint> {
+    /// Read data (zero for writes).
+    rdata: uint<DW>,
+    /// Response code: RESP_OKAY, RESP_SLVERR or RESP_DECERR.
+    resp: bit<2>,
+}
+
+/// AXI4-Lite slave front-end: accepts AW, W and AR on `s` and turns them into
+/// a stream of single requests, with one request outstanding at a time.
+///
+/// AW and W are accepted independently (in either order or together) into
+/// one-entry holding registers; a write request is issued once both are
+/// present. When a read and a write are both ready they alternate. The
+/// response to the request on `req` may arrive on `rsp` in the same cycle as the
+/// `req` handshake or in any later cycle; it is returned on B (writes) or R
+/// (reads) and held until accepted. Throughput: one access every three cycles at
+/// best.
+pub module Axi4LiteSlave<AW: uint = 32, DW: uint = 32>
+where DW == 32 or DW == 64
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; drops every held request and response.
+    in rst: reset
+    /// AXI4-Lite slave port: connect the requesting master here.
+    in s: Axi4Lite<AW, DW>
+    /// Requests, one per AXI transaction, held stable until accepted.
+    out req: Stream<RegReq<AW, DW>>
+    /// Response to the most recently accepted request; ignored when no request
+    /// is outstanding.
+    in rsp: Valid<RegRsp<DW>>
+
+    /// Cycles from the AW+W (or AR) handshake to `req.valid`.
+    pub const LATENCY: uint = 2
+
+    reg aw_full: bool = false
+    reg aw_addr: uint<AW> = 0
+    reg w_full: bool = false
+    reg w_data: uint<DW> = 0
+    reg w_strb: bit<DW/8> = all0
+    reg ar_full: bool = false
+    reg ar_addr: uint<AW> = 0
+
+    reg req_valid: bool = false
+    reg req_q: RegReq<AW, DW> = all0
+    reg busy: bool = false
+    reg prefer_read: bool = false
+
+    reg b_valid: bool = false
+    reg b_resp: bit<2> = RESP_OKAY
+    reg r_valid: bool = false
+    reg r_data: uint<DW> = 0
+    reg r_resp: bit<2> = RESP_OKAY
+
+    let can_write = aw_full and w_full and !b_valid
+    let can_read = ar_full and !r_valid
+    let idle = !req_valid and !busy
+    let do_read = idle and can_read and (!can_write or prefer_read)
+    let do_write = idle and can_write and !do_read
+    let waiting = busy or req.fire()
+
+    s.aw.ready = !aw_full
+    s.w.ready = !w_full
+    s.ar.ready = !ar_full
+    s.b.valid = b_valid
+    s.b.data = b_resp
+    s.r.valid = r_valid
+    s.r.data.data = r_data
+    s.r.data.resp = r_resp
+    req.valid = req_valid
+    req.data = req_q
+
+    on clk {
+        if s.aw.fire() { aw_full = true; aw_addr = s.aw.data }
+        if s.w.fire() { w_full = true; w_data = s.w.data.data; w_strb = s.w.data.strb }
+        if s.ar.fire() { ar_full = true; ar_addr = s.ar.data }
+        if idle and can_read and can_write { prefer_read = !prefer_read }
+        if do_write {
+            req_valid = true
+            req_q = RegReq { addr: aw_addr, wdata: w_data, strb: w_strb, write: true }
+            aw_full = false
+            w_full = false
+        }
+        if do_read {
+            req_valid = true
+            req_q = RegReq { addr: ar_addr, wdata: 0, strb: all0, write: false }
+            ar_full = false
+        }
+        if req.fire() { req_valid = false; busy = true }
+        if waiting and rsp.valid {
+            busy = false
+            if req_q.write {
+                b_valid = true
+                b_resp = rsp.data.resp
+            } else {
+                r_valid = true
+                r_data = rsp.data.rdata
+                r_resp = rsp.data.resp
+            }
+        }
+        if s.b.fire() { b_valid = false }
+        if s.r.fire() { r_valid = false }
+    }
+
+    property b_held { always (s.b.valid and !s.b.ready) |=> s.b.valid and stable(s.b.data) }
+    property r_held { always (s.r.valid and !s.r.ready) |=> s.r.valid and stable(s.r.data) }
+    property req_held { always (req.valid and !req.ready) |=> req.valid and stable(req.data) }
+    property one_outstanding { never req.valid and busy }
+}
+
+test "Axi4LiteSlave turns an AXI write into one write request and a B response" {
+    let dut = sim Axi4LiteSlave<32, 32>()
+    dut.reset()
+    dut.req.ready = false
+    dut.rsp.valid = false
+    dut.s.b.ready = true
+    dut.s.r.ready = true
+    dut.s.ar.valid = false
+    dut.s.aw = Stream { valid: true, data: 0x40 }
+    dut.s.w.valid = true
+    dut.s.w.data.data = 0xCAFE_F00D
+    dut.s.w.data.strb = 0b0011
+    expect dut.s.aw.ready and dut.s.w.ready
+    dut.step()
+    dut.s.aw.valid = false
+    dut.s.w.valid = false
+    dut.step_until(dut.req.valid, max: 10)
+    expect dut.req.data.write and dut.req.data.addr == 0x40
+    expect dut.req.data.wdata == 0xCAFE_F00D and dut.req.data.strb == 0b0011
+    dut.step(3)
+    expect dut.req.valid                      // held until accepted
+    dut.req.ready = true
+    dut.rsp.valid = true
+    dut.rsp.data.rdata = 0
+    dut.rsp.data.resp = RESP_SLVERR
+    dut.step()
+    dut.req.ready = false
+    dut.rsp.valid = false
+    expect !dut.req.valid
+    expect dut.s.b.valid and dut.s.b.data == RESP_SLVERR
+    dut.step()
+    expect !dut.s.b.valid
+}
+
+test "Axi4LiteSlave accepts W before AW" {
+    let dut = sim Axi4LiteSlave<32, 32>()
+    dut.reset()
+    dut.req.ready = true
+    dut.rsp.valid = false
+    dut.s.b.ready = true
+    dut.s.r.ready = true
+    dut.s.ar.valid = false
+    dut.s.aw.valid = false
+    dut.s.w.valid = true
+    dut.s.w.data.data = 7
+    dut.s.w.data.strb = 0b1111
+    dut.step()
+    dut.s.w.valid = false
+    dut.step(2)
+    expect !dut.req.valid                     // no AW yet
+    dut.s.aw = Stream { valid: true, data: 0x8 }
+    dut.step()
+    dut.s.aw.valid = false
+    dut.step_until(dut.req.valid, max: 10)
+    expect dut.req.data.addr == 0x8 and dut.req.data.wdata == 7
+}
+
+test "Axi4LiteSlave returns read data on R" {
+    let dut = sim Axi4LiteSlave<32, 32>()
+    dut.reset()
+    dut.req.ready = true
+    dut.rsp.valid = false
+    dut.s.b.ready = true
+    dut.s.r.ready = false
+    dut.s.aw.valid = false
+    dut.s.w.valid = false
+    dut.s.ar = Stream { valid: true, data: 0x10 }
+    dut.step()
+    dut.s.ar.valid = false
+    dut.step_until(dut.req.valid, max: 10)
+    expect !dut.req.data.write and dut.req.data.addr == 0x10
+    dut.rsp.valid = true                      // same-cycle response
+    dut.rsp.data.rdata = 0x1234_5678
+    dut.rsp.data.resp = RESP_OKAY
+    dut.step()
+    dut.rsp.valid = false
+    expect dut.s.r.valid and dut.s.r.data.data == 0x1234_5678 and dut.s.r.data.resp == RESP_OKAY
+    dut.step(2)
+    expect dut.s.r.valid                      // held while rready is low
+    dut.s.r.ready = true
+    dut.step()
+    expect !dut.s.r.valid
+}
+
+test "Axi4LiteSlave serves a read and a write that arrive together" {
+    let dut = sim Axi4LiteSlave<32, 32>()
+    dut.reset()
+    dut.req.ready = true
+    dut.s.b.ready = true
+    dut.s.r.ready = true
+    dut.s.aw = Stream { valid: true, data: 0x4 }
+    dut.s.w.valid = true
+    dut.s.w.data.data = 1
+    dut.s.w.data.strb = 0b1111
+    dut.s.ar = Stream { valid: true, data: 0xC }
+    dut.step()
+    dut.s.aw.valid = false
+    dut.s.w.valid = false
+    dut.s.ar.valid = false
+    var writes = 0
+    var reads = 0
+    for _ in 0..12 {
+        dut.rsp.valid = dut.req.valid
+        dut.rsp.data.rdata = 0
+        dut.rsp.data.resp = RESP_OKAY
+        if dut.req.valid and dut.req.data.write { writes = writes + 1 }
+        if dut.req.valid and !dut.req.data.write { reads = reads + 1 }
+        dut.step()
+    }
+    expect writes == 1 and reads == 1
+}
+
+/// AXI4-Lite master back-end: issues each request from `req` as one AXI4-Lite
+/// transaction on `m` and reports its outcome on `rsp`.
+///
+/// One transaction is outstanding at a time; `req.ready` is high exactly when
+/// the back-end is idle, so a request offered to an idle back-end is accepted
+/// in the same cycle. For writes AW and W are presented together and
+/// independently held until each handshakes. `rsp` is valid for one cycle,
+/// the cycle after the B or R handshake.
+pub module Axi4LiteMaster<AW: uint = 32, DW: uint = 32>
+where DW == 32 or DW == 64
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; abandons any transaction in flight (only safe with the slave also in reset).
+    in rst: reset
+    /// Requests to issue.
+    in req: Stream<RegReq<AW, DW>>
+    /// Completion of each request: read data and response code.
+    out rsp: Valid<RegRsp<DW>>
+    /// AXI4-Lite master port.
+    out m: Axi4Lite<AW, DW>
+
+    /// Cycles from the B/R handshake to `rsp.valid`.
+    pub const LATENCY: uint = 1
+
+    reg busy: bool = false
+    reg is_write: bool = false
+    reg aw_pend: bool = false
+    reg w_pend: bool = false
+    reg ar_pend: bool = false
+    reg addr: uint<AW> = 0
+    reg wdata: uint<DW> = 0
+    reg strb: bit<DW/8> = all0
+    reg rsp_valid: bool = false
+    reg rsp_data: RegRsp<DW> = all0
+
+    req.ready = !busy
+    m.aw.valid = aw_pend
+    m.aw.data = addr
+    m.w.valid = w_pend
+    m.w.data.data = wdata
+    m.w.data.strb = strb
+    m.b.ready = busy and is_write
+    m.ar.valid = ar_pend
+    m.ar.data = addr
+    m.r.ready = busy and !is_write
+    rsp = Valid { valid: rsp_valid, data: rsp_data }
+
+    on clk {
+        rsp_valid = false
+        if req.fire() {
+            busy = true
+            is_write = req.data.write
+            addr = req.data.addr
+            wdata = req.data.wdata
+            strb = req.data.strb
+            aw_pend = req.data.write
+            w_pend = req.data.write
+            ar_pend = !req.data.write
+        }
+        if m.aw.fire() { aw_pend = false }
+        if m.w.fire() { w_pend = false }
+        if m.ar.fire() { ar_pend = false }
+        if m.b.fire() {
+            busy = false
+            rsp_valid = true
+            rsp_data = RegRsp { rdata: 0, resp: m.b.data }
+        }
+        if m.r.fire() {
+            busy = false
+            rsp_valid = true
+            rsp_data = RegRsp { rdata: m.r.data.data, resp: m.r.data.resp }
+        }
+    }
+
+    property aw_held { always (m.aw.valid and !m.aw.ready) |=> m.aw.valid and stable(m.aw.data) }
+    property w_held { always (m.w.valid and !m.w.ready) |=> m.w.valid and stable(m.w.data) }
+    property ar_held { always (m.ar.valid and !m.ar.ready) |=> m.ar.valid and stable(m.ar.data) }
+    property read_xor_write { never m.ar.valid and (m.aw.valid or m.w.valid) }
+}
+
+test "Axi4LiteMaster issues a write and reports its response" {
+    let dut = sim Axi4LiteMaster<32, 32>()
+    dut.reset()
+    dut.m.aw.ready = false
+    dut.m.w.ready = true
+    dut.m.b.valid = false
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.req = Stream { valid: true, data: RegReq { addr: 0x20, wdata: 0xAB, strb: 0b0001, write: true } }
+    expect dut.req.ready
+    dut.step()
+    dut.req.valid = false
+    expect !dut.req.ready
+    expect dut.m.aw.valid and dut.m.aw.data == 0x20
+    expect dut.m.w.valid and dut.m.w.data.data == 0xAB and dut.m.w.data.strb == 0b0001
+    expect !dut.m.ar.valid
+    dut.step()                                // W accepted, AW still waiting
+    expect dut.m.aw.valid and !dut.m.w.valid
+    dut.m.aw.ready = true
+    dut.step()
+    expect !dut.m.aw.valid
+    dut.m.b = Stream { valid: true, data: RESP_OKAY }
+    dut.step()
+    dut.m.b.valid = false
+    expect dut.rsp.valid and dut.rsp.data.resp == RESP_OKAY
+    expect dut.req.ready
+    dut.step()
+    expect !dut.rsp.valid
+}
+
+test "Axi4LiteMaster issues a read and returns the data" {
+    let dut = sim Axi4LiteMaster<32, 32>()
+    dut.reset()
+    dut.m.aw.ready = true
+    dut.m.w.ready = true
+    dut.m.b.valid = false
+    dut.m.ar.ready = true
+    dut.m.r.valid = false
+    dut.req = Stream { valid: true, data: RegReq { addr: 0x44, wdata: 0, strb: 0, write: false } }
+    dut.step()
+    dut.req.valid = false
+    expect dut.m.ar.valid and dut.m.ar.data == 0x44 and !dut.m.aw.valid
+    dut.step()
+    dut.m.r.valid = true
+    dut.m.r.data.data = 0x5555_AAAA
+    dut.m.r.data.resp = RESP_OKAY
+    dut.step()
+    dut.m.r.valid = false
+    expect dut.rsp.valid and dut.rsp.data.rdata == 0x5555_AAAA
+}
