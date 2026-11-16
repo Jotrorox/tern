@@ -1,0 +1,40 @@
+// §6.1: leaving an `out` port, a `var` or a register undriven is an error
+module NoOutput {
+    in a: u8
+    out y: u8
+    out z: u8
+    z = a
+}
+
+module NoVar {
+    in a: u8
+    out y: u8
+    var v: u8
+    y = v +% a
+}
+
+module NoReg {
+    in clk: clock
+    in a: u8
+    out y: u8
+    reg r: u8
+    on clk { }
+    y = r ^ a
+}
+
+// only some bits of the output are driven
+module PartialOut {
+    in a: bit<4>
+    out y: bit<8>
+    y[3:0] = a
+}
+
+// only some elements of an array var are assigned
+module PartialArray {
+    in a: u8
+    out y: u8
+    var arr: [u8; 3]
+    arr[0] = a
+    arr[2] = a
+    y = arr[0] ^ arr[1] ^ arr[2]
+}

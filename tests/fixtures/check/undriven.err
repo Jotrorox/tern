@@ -1,0 +1,5 @@
+undriven.tern:4:9: error: output `y` is never driven
+undriven.tern:12:9: error: var `v` is never assigned
+undriven.tern:20:9: error: register `r` is never assigned
+undriven.tern:28:9: error: bits [7:4] of output `y` are never driven
+undriven.tern:36:9: error: bits [15:8] of var `arr` are never assigned

@@ -14,6 +14,8 @@
  *     foo.test    tern test --diag-format=short foo.tern           (stdout)
  *     foo.fmt     tern fmt --stdout foo.tern                       (stdout)
  *     foo.ir      tern ir --diag-format=short foo.tern             (stdout: elaborated IR)
+ *     foo.unused  tern check --unused --diag-format=short foo.tern (stderr)
+ *     foo.cdc     tern check --cdc-report --diag-format=short foo.tern (stdout: CDC report)
  *
  * Output and expectation are compared after normalization (CRLF -> LF,
  * trailing whitespace and trailing blank lines removed). A fixture whose
@@ -50,6 +52,8 @@ static const RunKind run_kinds[] = {
     {".test", {"test", "--diag-format=short", NULL, NULL}, 0},
     {".fmt", {"fmt", "--stdout", NULL, NULL}, 0},
     {".ir", {"ir", "--diag-format=short", NULL, NULL}, 0},
+    {".unused", {"check", "--unused", "--diag-format=short", NULL}, 1},
+    {".cdc", {"check", "--cdc-report", "--diag-format=short", NULL}, 0},
 };
 
 typedef struct RunJob {

@@ -1,0 +1,7 @@
+cdc_errors.tern:17:18: error: sys-domain signal `a` used in pix-domain logic; cross with std::cdc
+cdc_errors.tern:32:24: error: pix-domain signal `line` used in sys-domain logic; cross with std::cdc
+cdc_errors.tern:47:9: error: sys-domain signal `t` used in pix-domain logic; cross with std::cdc
+cdc_errors.tern:59:54: error: pix-domain signal `p` used in sys-domain logic; cross with std::cdc
+cdc_errors.tern:76:12: error: sys-domain signal `en` used in pix-domain logic; cross with std::cdc
+cdc_errors.tern:99:5: error: pix-domain signal `x.b` used in sys-domain logic; cross with std::cdc
+cdc_errors.tern:110:5: warning: reset `rs.rst_out` of domain `pix` comes from domain `sys_clk`

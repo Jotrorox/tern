@@ -1,0 +1,4 @@
+multiple_drivers.tern:9:12: error: multiple drivers for `y`: driven by a `comb` block and a continuous assignment
+multiple_drivers.tern:20:18: error: multiple drivers for `v`: driven by two `comb` blocks
+multiple_drivers.tern:32:14: error: multiple drivers for `r`: driven by two `on` blocks
+multiple_drivers.tern:42:5: error: multiple drivers for bits [3:2] of `v`: driven by two continuous assignments

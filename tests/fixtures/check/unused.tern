@@ -1,0 +1,47 @@
+// §7.2, §13.2: `tern check --unused` reports unread inputs, wires, vars,
+// registers, memories and instance outputs (warnings)
+
+module Counter {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out count: u8
+    out wrapped: bool
+    reg c: u8 = 0
+    on clk {
+        if en { c = c +% 1 }
+    }
+    count = c
+    wrapped = c == 255
+}
+
+module Top {
+    in clk: clock
+    in rst: reset
+    in a: u8
+    in b: u8                      // never read
+    in _spare: u8                 // `_` prefix: exempt
+    out y: u8
+    let doubled = a +% a          // never read
+    var tmp: u8                   // assigned, never read
+    comb { tmp = a ^ 1 }
+    reg hist: u8 = 0              // only feeds itself
+    on clk { hist = hist +% 1 }
+    #[keep]
+    reg kept: u8 = 0              // #[keep]: exempt
+    on clk { kept = a }
+    mem log: [u8; 4]              // written, never read
+    on clk { log.write(0, a) }
+    let cnt = Counter(en: true)   // `wrapped` is never read
+    let _quiet = Counter(en: false)
+    y = cnt.count +% _quiet.count
+}
+
+// a test port is driven and read by tests
+module Probe {
+    in a: u8
+    out y: u8
+    #[test_port]
+    var probe: u8
+    y = a
+}

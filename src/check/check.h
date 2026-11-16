@@ -8,6 +8,24 @@
  * with IrSignal.loc / IrStmt.loc spans; warnings become errors under
  * --strict (diag_set_strict, already applied by the command).
  *
+ * The individual checks (src/check/):
+ *   drivers.c  multiple drivers (two processes, a process and an assign,
+ *              an instance output and anything else; bit-accurate), signals
+ *              never driven (outputs, wires, vars, registers);
+ *   assign.c   the no-latch proof of comb blocks (every bit of every
+ *              signal a comb block drives is assigned on every path, with
+ *              the failing path in the message), reads of a signal in the
+ *              comb block that drives it before it is assigned, and
+ *              combinational loops through assigns, comb blocks and
+ *              instances (using each module's port dependency summary);
+ *   cdc.c      clock-domain crossings: domains are inferred for wires and
+ *              vars through their drivers; reading another domain's
+ *              signal outside a std::cdc primitive, or mixing domains, is
+ *              an error; resets taken from another domain warn; the CDC
+ *              report lists every primitive instance and unsafe_cross;
+ *   unused.c   (--unused) unread inputs, wires, vars, registers, memories
+ *              and instance outputs.
+ *
  * What the elaborator guarantees about the IR (src/elab/elab.c):
  *   - IrSignal.domain is set for registers, ports (their `@ dom` or the
  *     module's default domain) and instance-output wires; wires and vars
@@ -27,11 +45,27 @@
 typedef struct CheckOptions {
     int strict;        /* --strict */
     int unused;        /* --unused: report unused signals and outputs */
-    int cdc_report;    /* print the list of clock-domain crossings */
+    int cdc_report;    /* print the CDC report even when there are no crossings */
+    int no_report;     /* never print the CDC report (crossings are still
+                          recorded in IrDesign.crossings) */
+    FILE *report_out;  /* where the CDC report goes (NULL: stdout) */
+    /* --unused warnings are only reported for signals declared in files for
+       which this returns nonzero (NULL: every file), so library modules
+       instantiated by the user stay quiet */
+    int (*is_user_file)(uint32_t file, void *user);
+    void *user;
 } CheckOptions;
 
-/* Runs every check over all modules of the design. Returns the number of
- * errors reported. */
+/* Runs every check over all modules of the design and records the
+ * clock-domain crossings in d->crossings (one entry per instance of a
+ * std::cdc primitive and per `unsafe_cross`, along every instance path
+ * from the roots of the design). `tern check` prints them as the CDC
+ * report (spec §8.3) when there is at least one crossing or when
+ * opt->cdc_report is set. Returns the number of errors reported. opt may
+ * be NULL (defaults). */
 int check_design(IrDesign *d, const CheckOptions *opt);
+
+/* Prints the CDC report of d->crossings (as check_design does). */
+void check_print_cdc_report(const IrDesign *d, FILE *out);
 
 #endif /* TERN_CHECK_H */

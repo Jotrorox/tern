@@ -1,0 +1,5 @@
+comb_loops.tern:8:5: error: combinational loop: v -> v
+comb_loops.tern:18:5: error: combinational loop: p -> q -> p
+comb_loops.tern:30:17: error: combinational loop: x -> z -> x
+comb_loops.tern:46:17: error: combinational loop: i.a -> i.y -> x -> i.a
+comb_loops.tern:63:17: error: combinational loop: b.a -> b.y -> x -> b.a

@@ -1,0 +1,53 @@
+// match forms lowered to case statements and if chains: every arm assigns,
+// so no latch is reported (the last arm of an exhaustive match is the else)
+enum Cmd { Nop, Load { v: u8 }, Add { a: uint<4>, b: uint<4> } }
+enum E3 { A, B, C }
+
+module M {
+    in x: u8
+    in c: Cmd
+    in e: E3
+    in t: bool
+    out y: u8
+    out z: u8
+    out w: u8
+    out v: u8
+    out u: u8
+    comb {
+        match x {
+            0 => y = 1,
+            1..=5 => y = 2,
+            n => y = n,
+        }
+    }
+    comb {
+        match c {
+            .Nop => z = 0,
+            .Load { v } => z = v,
+            .Add { a, b } => z = (a as u8) +% (b as u8),
+        }
+    }
+    comb {
+        match (e, t) {
+            (.A, true) => w = 1,
+            (.A, false) => w = 2,
+            (_, true) => w = 3,
+            (.B, _) => w = 4,
+            (.C, false) => w = 5,
+        }
+    }
+    comb {
+        match e {
+            .A | .B => v = 1,
+            _ => v = 2,
+        }
+    }
+    comb {
+        match x[1:0] {
+            0 => u = 0,
+            1 => u = 1,
+            2 => u = 2,
+            3 => u = 3,
+        }
+    }
+}

@@ -1,0 +1,44 @@
+// §6.1: each signal has exactly one driver block ("multiple drivers")
+
+// a comb block and a continuous assignment
+module CombAndAssign {
+    in a: u8
+    in b: u8
+    out y: u8
+    y = a
+    comb { y = b }
+}
+
+// two comb blocks drive the same var
+module TwoCombs {
+    in a: u8
+    in sel: bool
+    out y: u8
+    var v: u8
+    comb { v = a }
+    comb {
+        if sel { v = 0 } else { v = 1 }
+    }
+    y = v
+}
+
+// a register assigned in two `on` blocks
+module TwoOnBlocks {
+    in clk: clock
+    in a: u8
+    out y: u8
+    reg r: u8 = 0
+    on clk { r = a }
+    on clk { r = r +% 1 }
+    y = r
+}
+
+// overlapping element assignments of an array var
+module OverlapBits {
+    in a: u8
+    out y: u8
+    var v: bit<8>
+    v[3:0] = a[3:0]
+    v[7:2] = a[7:2]
+    y = v as u8
+}

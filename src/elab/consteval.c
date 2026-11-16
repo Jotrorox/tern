@@ -4728,6 +4728,13 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
                 }
                 if (arms[a].cond.kind == VAL_ERROR)
                     continue;
+                if (a == n - 1) {
+                    /* the match is exhaustive: the last arm needs no test
+                       (as in the value form; the no-latch proof relies on it) */
+                    tail = body;
+                    have = 1;
+                    continue;
+                }
                 if (!have && body.n == 0)
                     continue;
                 tail = ir_block1(el->design->arena,
@@ -5539,6 +5546,15 @@ static Value ce_eval_binary(Elab *el, Expr *e, Env *env)
     return el_binary(el, op, a, b, e->span, lhs, rhs);
 }
 
+/* a copy of a location-less IR leaf (a signal read, shared by every read
+   of the signal) carrying the span of this read, for the checks */
+static IrExpr *ce_located(Elab *el, IrExpr *x, Span at)
+{
+    IrExpr *c = (IrExpr *)arena_memdup(el->design ? el->design->arena : &el->arena, x, sizeof *x);
+    c->loc = at;
+    return c;
+}
+
 Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
 {
     Sema *S = el->S;
@@ -5563,6 +5579,8 @@ Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
             el_error(el, e->span, "variant `%s` needs its fields: `%s { .. }`", el_text(e), el_text(e));
             return val_error();
         }
+        if (v.kind == VAL_HW && v.u.e && !v.u.e->loc.file)
+            v.u.e = ce_located(el, v.u.e, e->span);
         return v;
     }
     case EXPR_VARIANT:
@@ -5571,7 +5589,10 @@ Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
         return ce_struct_literal(el, e, env, expect);
     case EXPR_FIELD: {
         Value base = elab_eval(el, e->u.field.base, env, NULL);
-        return el_field(el, base, e->u.field.name.name, e->u.field.name.span);
+        Value v = el_field(el, base, e->u.field.name.name, e->u.field.name.span);
+        if (v.kind == VAL_HW && v.u.e && !v.u.e->loc.file)
+            v.u.e = ce_located(el, v.u.e, e->span);
+        return v;
     }
     case EXPR_INDEX: {
         Value base = elab_eval(el, e->u.index.base, env, NULL);

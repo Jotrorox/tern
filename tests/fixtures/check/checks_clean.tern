@@ -1,0 +1,131 @@
+// designs the driver, no-latch and loop checks must accept
+
+enum Op { Nop, Add, Sub, And }
+
+struct Flags {
+    carry: bool,
+    zero: bool,
+}
+
+// the §6.2 example: every arm assigns `alu_out`, `flags` has a default
+module Alu {
+    in op: Op
+    in a: u32
+    in b: u32
+    out y: u32
+    out fl: Flags
+    var alu_out: u32
+    var flags: Flags = Flags { carry: false, zero: false }
+    comb {
+        match op {
+            .Add => { alu_out = (a + b) as u32; flags.carry = (a + b)[32] },
+            .Sub => alu_out = a -% b,
+            .And => alu_out = a & b,
+            .Nop => alu_out = 0,
+        }
+        flags.zero = alu_out == 0
+    }
+    y = alu_out
+    fl = flags
+}
+
+// a ripple-carry chain inside one comb block (bit-accurate, no false loop)
+module Ripple<W: uint = 4> {
+    in a: uint<W>
+    in b: uint<W>
+    out s: uint<W + 1>
+    var c: bit<W + 1>
+    var r: bit<W>
+    comb {
+        c[0] = false
+        for i in 0..W {
+            r[i] = a[i] ^ b[i] ^ c[i]
+            c[i + 1] = (a[i] and b[i]) or (c[i] and (a[i] ^ b[i]))
+        }
+    }
+    s = (c[W] as uint<1>) ++ r
+}
+
+// the same chain across continuous assignments of array elements
+module Chain {
+    in x: [bool; 4]
+    out y: bool
+    var acc: [bool; 5]
+    acc[0] = true
+    for i in 0..4 {
+        acc[i + 1] = acc[i] and x[i]
+    }
+    y = acc[4]
+}
+
+// one comb block computing independent values through an assignment
+module Split {
+    in a: u8
+    out y: u8
+    var p: u8
+    var q: u8
+    let mid = p +% 1
+    comb {
+        p = a
+        q = mid ^ a
+    }
+    y = q
+}
+
+// feedback through a register inside an instance is not a loop
+module Counter {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out count: u8
+    reg c: u8 = 0
+    on clk {
+        if en { c = c +% 1 }
+    }
+    count = c
+}
+
+module Feedback {
+    in clk: clock
+    in rst: reset
+    out y: u8
+    var go: bool
+    let cnt = Counter(en: go)
+    go = cnt.count != 255
+    y = cnt.count
+}
+
+// a register keeps its value when not assigned (an enable, not a latch);
+// a later assignment overrides an earlier one
+module Enables {
+    in clk: clock
+    in load: bool
+    in d: u8
+    out q: u8
+    reg r: u8 = 0
+    on clk {
+        r = r +% 1
+        if load { r = d }
+    }
+    q = r
+}
+
+// an assignment before the branches acts as a default
+module LocalDefault {
+    in sel: uint<2>
+    in a: u8
+    out y: u8
+    comb {
+        y = 0
+        if sel == 1 { y = a } else if sel == 2 { y = ~a }
+    }
+}
+
+// signals driven by tests only
+module Ports {
+    in a: u8
+    out y: u8
+    #[test_port]
+    var inject: u8
+    y = a ^ inject
+}
