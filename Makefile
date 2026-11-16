@@ -35,6 +35,7 @@ HDRS = \
 	src/base/diag.h src/base/args.h \
 	src/os/os.h \
 	src/ir/ir.h \
+	src/sim/sim.h src/sim/sim_impl.h \
 	src/cmds.h src/std_embed.h
 
 BASE_SRCS = \
@@ -44,7 +45,11 @@ BASE_SRCS = \
 
 OS_SRCS = src/os/os_posix.c src/os/os_win32.c src/os/os_common.c
 
-SRCS = $(OS_SRCS) $(BASE_SRCS) \
+IR_SRCS = src/ir/ir_build.c src/ir/ir_json.c
+
+SIM_SRCS = src/sim/bitvec.c src/sim/netlist.c src/sim/eval.c src/sim/vcd.c
+
+SRCS = $(OS_SRCS) $(BASE_SRCS) $(IR_SRCS) $(SIM_SRCS) \
 	src/std_embed.c src/cmd_stubs.c src/main.c
 
 OBJS = \
@@ -52,6 +57,8 @@ OBJS = \
 	$(OBJ)/base_common.o $(OBJ)/base_arena.o $(OBJ)/base_str.o \
 	$(OBJ)/base_map.o $(OBJ)/base_bignum.o $(OBJ)/base_json.o \
 	$(OBJ)/base_utf8.o $(OBJ)/base_diag.o $(OBJ)/base_args.o \
+	$(OBJ)/ir_build.o $(OBJ)/ir_json.o \
+	$(OBJ)/sim_bitvec.o $(OBJ)/sim_netlist.o $(OBJ)/sim_eval.o $(OBJ)/sim_vcd.o \
 	$(OBJ)/std_embed.o $(OBJ)/cmd_stubs.o $(OBJ)/main.o
 
 all: $(BIN)
@@ -91,6 +98,20 @@ $(OBJ)/base_diag.o: src/base/diag.c $(HDRS) $(OBJ)/.dir
 $(OBJ)/base_args.o: src/base/args.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/base/args.c -o $@
 
+$(OBJ)/ir_build.o: src/ir/ir_build.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/ir/ir_build.c -o $@
+$(OBJ)/ir_json.o: src/ir/ir_json.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/ir/ir_json.c -o $@
+
+$(OBJ)/sim_bitvec.o: src/sim/bitvec.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/bitvec.c -o $@
+$(OBJ)/sim_netlist.o: src/sim/netlist.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/netlist.c -o $@
+$(OBJ)/sim_eval.o: src/sim/eval.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/eval.c -o $@
+$(OBJ)/sim_vcd.o: src/sim/vcd.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/vcd.c -o $@
+
 $(OBJ)/std_embed.o: src/std_embed.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/std_embed.c -o $@
 $(OBJ)/cmd_stubs.o: src/cmd_stubs.c $(HDRS) $(OBJ)/.dir
@@ -122,8 +143,12 @@ tests/run: tests/run.c $(TEST_DEPS)
 build/test_base: tests/unit/test_base.c $(TEST_DEPS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_base.c $(LDLIBS)
 
-test: $(BIN) tests/run build/test_base
+build/test_sim: tests/unit/test_sim.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_sim.c $(LDLIBS)
+
+test: $(BIN) tests/run build/test_base build/test_sim
 	./build/test_base
+	./build/test_sim
 	./tests/run --tern ./$(BIN)
 
 # ---------------------------------------------------------------- other ---
@@ -137,6 +162,7 @@ check-warnings:
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/unity-$$s src/unity.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/run-$$s tests/run.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/test_base-$$s tests/unit/test_base.c || exit 1; \
+	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/test_sim-$$s tests/unit/test_sim.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/embed-$$s tools/embed.c || exit 1; \
 	done
 	@echo "check-warnings: OK (c99 and c11, -Werror)"

@@ -26,6 +26,14 @@
 #include "base/diag.c"
 #include "base/args.c"
 
+#include "ir/ir_build.c"
+#include "ir/ir_json.c"
+
+#include "sim/bitvec.c"
+#include "sim/netlist.c"
+#include "sim/eval.c"
+#include "sim/vcd.c"
+
 #include "std_embed.c"
 #include "cmd_stubs.c"
 #include "main.c"
