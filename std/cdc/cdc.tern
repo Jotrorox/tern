@@ -264,7 +264,7 @@ pub module HandshakeSync<T: type> {
     /// Destination-clock cycles from the request toggle to `out.valid`.
     pub const LATENCY: uint = 3
 
-    // ---- source side ----
+    // ---- registers of both sides ----
     reg req: bool = false @ src_d
     reg hold: T @ src_d
     #[async_reg]
@@ -272,6 +272,15 @@ pub module HandshakeSync<T: type> {
     #[async_reg]
     reg ack_s2: bool = false @ src_d
 
+    #[async_reg]
+    reg req_s1: bool = false @ dst_d
+    #[async_reg]
+    reg req_s2: bool = false @ dst_d
+    reg ack: bool = false @ dst_d
+    reg ovalid: bool = false @ dst_d
+    reg odata: T @ dst_d
+
+    // ---- source side ----
     in.ready = req == ack_s2
 
     on src_d {
@@ -284,14 +293,6 @@ pub module HandshakeSync<T: type> {
     }
 
     // ---- destination side ----
-    #[async_reg]
-    reg req_s1: bool = false @ dst_d
-    #[async_reg]
-    reg req_s2: bool = false @ dst_d
-    reg ack: bool = false @ dst_d
-    reg ovalid: bool = false @ dst_d
-    reg odata: T @ dst_d
-
     let incoming = req_s2 != ack
 
     out.valid = ovalid

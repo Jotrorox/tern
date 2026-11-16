@@ -62,7 +62,7 @@ where Depth.is_pow2(), Depth >= 2
     #[ram(distributed)]
     mem buf: [T; Depth]
 
-    // ---- write domain ----
+    // ---- pointer registers of both domains ----
     reg wbin: uint<PW> = 0 @ src_d
     reg wgray: bit<PW> = all0 @ src_d
     #[async_reg]
@@ -70,6 +70,14 @@ where Depth.is_pow2(), Depth >= 2
     #[async_reg]
     reg wq2_rgray: bit<PW> = all0 @ src_d
 
+    reg rbin: uint<PW> = 0 @ dst_d
+    reg rgray: bit<PW> = all0 @ dst_d
+    #[async_reg]
+    reg rq1_wgray: bit<PW> = all0 @ dst_d
+    #[async_reg]
+    reg rq2_wgray: bit<PW> = all0 @ dst_d
+
+    // ---- write domain ----
     let wused = wbin -% ungray(wq2_rgray)
     push.ready = wused != Depth
     wr_count = wused
@@ -86,13 +94,6 @@ where Depth.is_pow2(), Depth >= 2
     }
 
     // ---- read domain ----
-    reg rbin: uint<PW> = 0 @ dst_d
-    reg rgray: bit<PW> = all0 @ dst_d
-    #[async_reg]
-    reg rq1_wgray: bit<PW> = all0 @ dst_d
-    #[async_reg]
-    reg rq2_wgray: bit<PW> = all0 @ dst_d
-
     let rused = ungray(rq2_wgray) -% rbin
     pop.valid = rused != 0
     pop.data = buf[rbin as Addr]
