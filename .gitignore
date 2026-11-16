@@ -13,3 +13,4 @@
 *.vcd
 .DS_Store
 /fuzz/out/
+.claude/
