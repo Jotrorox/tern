@@ -1,0 +1,196 @@
+package std::target::intel
+
+use std::target::period_ps
+
+// Intel (Altera) primitives and megafunctions from altera_mf / the Quartus
+// primitive library, with Tern wrappers.
+//
+// String parameters of the megafunctions (intended_device_family,
+// operation_mode, ...) stay at their library defaults because Tern has no
+// string values. Quartus normally takes the family from the project; if a
+// tool version insists on a matching intended_device_family, generate the IP
+// with the vendor tool and import it with `extern module` instead.
+
+// ---------------------------------------------------------------------------
+// Raw primitives / megafunctions (vendor library: altera_mf, primitives)
+// ---------------------------------------------------------------------------
+
+/// PLL megafunction (Cyclone IV / MAX 10 class). Output n runs at
+/// inclk0 * clkn_multiply_by / clkn_divide_by.
+pub extern module altpll("") <
+    inclk0_input_frequency: uint = 10_000,
+    clk0_multiply_by: uint = 1,
+    clk0_divide_by: uint = 1,
+    clk1_multiply_by: uint = 1,
+    clk1_divide_by: uint = 1,
+    clk2_multiply_by: uint = 1,
+    clk2_divide_by: uint = 1,
+    clk3_multiply_by: uint = 1,
+    clk3_divide_by: uint = 1,
+    width_clock: uint = 6
+> {
+    /// Reference clocks; inclk[0] is used.
+    in inclk: [clock; 2]
+    /// Asynchronous reset, active high.
+    in areset: reset<async, high>
+    /// Output clocks.
+    out clk: [clock; width_clock]
+    /// Lock indicator (asynchronous).
+    out locked: bool
+}
+
+/// Bidirectional I/O buffer primitive (Cyclone V and later, MAX 10).
+pub extern module ALT_IOBUF("") {
+    /// Value to drive.
+    in i: bool
+    /// Output enable, active high.
+    in oe: bool
+    /// Value read from the pad.
+    out o: bool
+    /// The pad (a #[top] tri port).
+    in io: tri<bool>
+}
+
+/// DDR input megafunction: `dataout_h` is sampled on the rising edge of
+/// `inclock`, `dataout_l` on the falling edge; both are presented in the
+/// rising-edge domain.
+pub extern module altddio_in("") <width: uint = 1> {
+    /// DDR data from the pads.
+    in datain: bit<width>
+    /// Capture clock.
+    in inclock: clock
+    /// Rising-edge samples.
+    out dataout_h: bit<width>
+    /// Falling-edge samples.
+    out dataout_l: bit<width>
+}
+
+/// DDR output megafunction: `datain_h` is driven while `outclock` is high,
+/// `datain_l` while it is low.
+pub extern module altddio_out("") <width: uint = 1> {
+    /// Data for the high half of the cycle.
+    in datain_h: bit<width>
+    /// Data for the low half of the cycle.
+    in datain_l: bit<width>
+    /// Output clock.
+    in outclock: clock
+    /// DDR data to the pads.
+    out dataout: bit<width>
+}
+
+// ---------------------------------------------------------------------------
+// Wrappers
+// ---------------------------------------------------------------------------
+
+/// Clock synthesiser on an altpll: up to four outputs from one input.
+///
+/// * Output n runs at ClkInHz * Mult / (Div * OutnDiv) (published as
+///   `CLKn_HZ`); the megafunction picks its own internal VCO settings.
+/// * Same generics and ports as `std::target::xilinx::Pll` and
+///   `std::target::generic::Pll`, so a design can switch vendors by changing
+///   one `use`.
+/// * `locked` is asynchronous; synchronise it before use as a reset.
+pub module Pll<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 1
+{
+    /// Frequency of `clk0` in Hz.
+    pub const CLK0_HZ: uint = ClkInHz * Mult / (Div * Out0Div)
+    /// Frequency of `clk1` in Hz.
+    pub const CLK1_HZ: uint = ClkInHz * Mult / (Div * Out1Div)
+    /// Frequency of `clk2` in Hz.
+    pub const CLK2_HZ: uint = ClkInHz * Mult / (Div * Out2Div)
+    /// Frequency of `clk3` in Hz.
+    pub const CLK3_HZ: uint = ClkInHz * Mult / (Div * Out3Div)
+    static_assert(CLK0_HZ <= 472_500_000 and CLK1_HZ <= 472_500_000 and CLK2_HZ <= 472_500_000 and CLK3_HZ <= 472_500_000,
+                  "Pll: output above the PLL output limit")
+
+    /// Reference clock at `ClkInHz`.
+    in clk_in: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Output clock 0.
+    out clk0: clock
+    /// Output clock 1.
+    out clk1: clock
+    /// Output clock 2.
+    out clk2: clock
+    /// Output clock 3.
+    out clk3: clock
+    /// All outputs are stable (asynchronous).
+    out locked: bool
+
+    let pll = altpll<
+        inclk0_input_frequency: period_ps(ClkInHz),
+        clk0_multiply_by: Mult, clk0_divide_by: Div * Out0Div,
+        clk1_multiply_by: Mult, clk1_divide_by: Div * Out1Div,
+        clk2_multiply_by: Mult, clk2_divide_by: Div * Out2Div,
+        clk3_multiply_by: Mult, clk3_divide_by: Div * Out3Div
+    >(inclk: [clk_in, clk_in], areset: rst)
+    clk0 = pll.clk[0]
+    clk1 = pll.clk[1]
+    clk2 = pll.clk[2]
+    clk3 = pll.clk[3]
+    locked = pll.locked
+}
+
+/// Bidirectional pad (ALT_IOBUF): drives `o` while `oe` is high and always
+/// reads the pad on `i`. Instantiate it in the #[top] module with the top's
+/// `tri<bool>` port.
+pub module AltIobuf {
+    /// Value to drive.
+    in o: bool
+    /// Output enable.
+    in oe: bool
+    /// Value on the pad.
+    out i: bool
+    /// The pad (a #[top] tri port).
+    in pad: tri<bool>
+
+    i = ALT_IOBUF(i: o, oe: oe, io: pad).o
+}
+
+/// DDR input capture of `W` pins (altddio_in): `q_rise` is the sample of the
+/// rising edge, `q_fall` the sample of a falling edge, both in the rising-edge
+/// domain, paired as the megafunction pairs them (see the ALTDDIO user guide).
+pub module DdioIn<W: uint = 1>
+where W >= 1
+{
+    /// Capture clock.
+    in clk: clock
+    /// DDR data from the pads.
+    in d: bit<W>
+    /// Rising-edge samples.
+    out q_rise: bit<W>
+    /// Falling-edge samples.
+    out q_fall: bit<W>
+
+    let ddio = altddio_in<width: W>(datain: d, inclock: clk)
+    q_rise = ddio.dataout_h
+    q_fall = ddio.dataout_l
+}
+
+/// DDR output of `W` pins (altddio_out): `d_rise` is driven while `clk` is
+/// high, `d_fall` while it is low. Forward a clock with `d_rise: all1,
+/// d_fall: all0`.
+pub module DdioOut<W: uint = 1>
+where W >= 1
+{
+    /// Output clock.
+    in clk: clock
+    /// Data for the high half of the cycle.
+    in d_rise: bit<W>
+    /// Data for the low half of the cycle.
+    in d_fall: bit<W>
+    /// DDR data to the pads.
+    out q: bit<W>
+
+    q = altddio_out<width: W>(datain_h: d_rise, datain_l: d_fall, outclock: clk).dataout
+}
+
+test "intel Pll publishes its output frequencies" {
+    // 50 MHz in: 100, 25, 125, 50 MHz out
+    expect Pll<50_000_000, 10, 1, 5, 20, 4, 10>::CLK0_HZ == 100_000_000
+    expect Pll<50_000_000, 10, 1, 5, 20, 4, 10>::CLK1_HZ == 25_000_000
+    expect Pll<50_000_000, 10, 1, 5, 20, 4, 10>::CLK2_HZ == 125_000_000
+    expect Pll<50_000_000, 10, 1, 5, 20, 4, 10>::CLK3_HZ == 50_000_000
+}

@@ -1,0 +1,528 @@
+package std::target::generic
+
+// Behavioural fallbacks for std::target, written in plain Tern so that designs
+// using vendor wrappers run on the built-in simulator (and synthesize for any
+// target as far as that is meaningful). Each module has the same name,
+// generics and ports as its vendor counterpart, except the pad buffers, whose
+// `tri` pad is split into `pad_o` / `pad_oe` / `pad_i` because only a #[top]
+// module may have a tri port.
+//
+// What is not modelled, because the built-in simulator is cycle-based with
+// one time step per clock edge of a domain:
+// * Frequency synthesis: PLL outputs are the input clock passed through; give
+//   bench clocks their real frequencies with #[clock(hz)] or
+//   std::sim::ClockModel when a test needs several clock rates.
+// * Half-cycle timing: DDR primitives sample once per cycle and report the
+//   same sample for both edges (DDR outputs drive the rising-edge value).
+// * Delays: Idelay passes data through.
+
+/// Cycles of the input clock a fallback PLL takes to report `locked`.
+pub const PLL_LOCK_CYCLES: uint = 16
+
+/// Fallback for the PLL wrappers (`xilinx::Pll`, `xilinx::Mmcm`, `intel::Pll`):
+/// every output is `clk_in` passed through; `locked` rises PLL_LOCK_CYCLES
+/// cycles after reset is released. The frequency constants are computed as
+/// the vendor wrapper computes them.
+pub module Pll<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 1
+{
+    /// Nominal VCO frequency in Hz.
+    pub const VCO_HZ: uint = ClkInHz * Mult / Div
+    /// Nominal frequency of `clk0` in Hz (not simulated).
+    pub const CLK0_HZ: uint = VCO_HZ / Out0Div
+    /// Nominal frequency of `clk1` in Hz (not simulated).
+    pub const CLK1_HZ: uint = VCO_HZ / Out1Div
+    /// Nominal frequency of `clk2` in Hz (not simulated).
+    pub const CLK2_HZ: uint = VCO_HZ / Out2Div
+    /// Nominal frequency of `clk3` in Hz (not simulated).
+    pub const CLK3_HZ: uint = VCO_HZ / Out3Div
+    /// Cycles from reset release to `locked`.
+    pub const LATENCY: uint = PLL_LOCK_CYCLES
+
+    /// Reference clock.
+    in clk_in: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Output clock 0 (= clk_in).
+    out clk0: clock
+    /// Output clock 1 (= clk_in).
+    out clk1: clock
+    /// Output clock 2 (= clk_in).
+    out clk2: clock
+    /// Output clock 3 (= clk_in).
+    out clk3: clock
+    /// High once the lock delay has elapsed after reset.
+    out locked: bool
+
+    reg count: uint<clog2(PLL_LOCK_CYCLES + 1)> = 0
+    let done = count == PLL_LOCK_CYCLES
+    on clk_in {
+        if !done { count = count +% 1 }
+    }
+
+    clk0 = clk_in
+    clk1 = clk_in
+    clk2 = clk_in
+    clk3 = clk_in
+    locked = done
+
+    /// Once locked, the fallback stays locked until reset.
+    property stays_locked { always locked |=> locked }
+}
+
+/// Fallback for `xilinx::Mmcm`: identical to [Pll].
+pub module Mmcm<ClkInHz: uint, Mult: uint, Div: uint = 1, Out0Div: uint = 1, Out1Div: uint = 1, Out2Div: uint = 1, Out3Div: uint = 1>
+where Mult >= 1, Div >= 1, Out0Div >= 1, Out1Div >= 1, Out2Div >= 1, Out3Div >= 1
+{
+    /// Nominal VCO frequency in Hz.
+    pub const VCO_HZ: uint = ClkInHz * Mult / Div
+    /// Nominal frequency of `clk0` in Hz (not simulated).
+    pub const CLK0_HZ: uint = VCO_HZ / Out0Div
+    /// Nominal frequency of `clk1` in Hz (not simulated).
+    pub const CLK1_HZ: uint = VCO_HZ / Out1Div
+    /// Nominal frequency of `clk2` in Hz (not simulated).
+    pub const CLK2_HZ: uint = VCO_HZ / Out2Div
+    /// Nominal frequency of `clk3` in Hz (not simulated).
+    pub const CLK3_HZ: uint = VCO_HZ / Out3Div
+    /// Cycles from reset release to `locked`.
+    pub const LATENCY: uint = PLL_LOCK_CYCLES
+
+    /// Reference clock.
+    in clk_in: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Output clock 0 (= clk_in).
+    out clk0: clock
+    /// Output clock 1 (= clk_in).
+    out clk1: clock
+    /// Output clock 2 (= clk_in).
+    out clk2: clock
+    /// Output clock 3 (= clk_in).
+    out clk3: clock
+    /// High once the lock delay has elapsed after reset.
+    out locked: bool
+
+    let pll = Pll<ClkInHz, Mult, Div, Out0Div, Out1Div, Out2Div, Out3Div>(clk_in: clk_in, rst: rst)
+    clk0 = pll.clk0
+    clk1 = pll.clk1
+    clk2 = pll.clk2
+    clk3 = pll.clk3
+    locked = pll.locked
+
+    /// Once locked, the fallback stays locked until reset.
+    property stays_locked { always locked |=> locked }
+}
+
+/// Fallback for `lattice::SbPll`: `clk` = `clk_in`, `locked` after
+/// PLL_LOCK_CYCLES; reset active low as on the primitive.
+pub module SbPll<ClkInHz: uint, Divr: uint, Divf: uint, Divq: uint>
+where Divr <= 15, Divf <= 127, Divq >= 1, Divq <= 6
+{
+    /// Nominal VCO frequency in Hz.
+    pub const VCO_HZ: uint = ClkInHz * (Divf + 1) / (Divr + 1)
+    /// Nominal output frequency in Hz (not simulated).
+    pub const CLK_HZ: uint = VCO_HZ / (1 << Divq)
+    /// Cycles from reset release to `locked`.
+    pub const LATENCY: uint = PLL_LOCK_CYCLES
+
+    /// Reference clock.
+    in clk_in: clock
+    /// Asynchronous reset, active low.
+    in rst: reset<async, low>
+    /// Output clock (= clk_in).
+    out clk: clock
+    /// High once the lock delay has elapsed after reset.
+    out locked: bool
+
+    reg count: uint<clog2(PLL_LOCK_CYCLES + 1)> = 0
+    let done = count == PLL_LOCK_CYCLES
+    on clk_in {
+        if !done { count = count +% 1 }
+    }
+    clk = clk_in
+    locked = done
+
+    /// Once locked, the fallback stays locked until reset.
+    property stays_locked { always locked |=> locked }
+}
+
+/// Fallback for `lattice::EcpPll`: `clk` = `clk_in`, `locked` after
+/// PLL_LOCK_CYCLES.
+pub module EcpPll<ClkInHz: uint, ClkiDiv: uint, ClkfbDiv: uint, ClkopDiv: uint>
+where ClkiDiv >= 1, ClkfbDiv >= 1, ClkopDiv >= 1
+{
+    /// Nominal output frequency in Hz (not simulated).
+    pub const CLK_HZ: uint = ClkInHz * ClkfbDiv / ClkiDiv
+    /// Nominal VCO frequency in Hz.
+    pub const VCO_HZ: uint = CLK_HZ * ClkopDiv
+    /// Cycles from reset release to `locked`.
+    pub const LATENCY: uint = PLL_LOCK_CYCLES
+
+    /// Reference clock.
+    in clk_in: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Output clock (= clk_in).
+    out clk: clock
+    /// High once the lock delay has elapsed after reset.
+    out locked: bool
+
+    reg count: uint<clog2(PLL_LOCK_CYCLES + 1)> = 0
+    let done = count == PLL_LOCK_CYCLES
+    on clk_in {
+        if !done { count = count +% 1 }
+    }
+    clk = clk_in
+    locked = done
+
+    /// Once locked, the fallback stays locked until reset.
+    property stays_locked { always locked |=> locked }
+}
+
+/// Fallback for `xilinx::Bufg`: a wire.
+pub module Bufg {
+    /// Clock to buffer.
+    in clk_in: clock
+    /// The same clock.
+    out clk_out: clock
+
+    clk_out = clk_in
+}
+
+/// Fallback for `xilinx::Iddr`: samples `d` once per rising edge and reports
+/// that sample on both outputs, with the vendor wrapper's latency.
+pub module Iddr {
+    /// Cycles from the sample to the outputs (as `xilinx::Iddr`).
+    pub const LATENCY: uint = 1
+
+    /// Capture clock.
+    in clk: clock
+    /// Reset.
+    in rst: reset
+    /// Input data.
+    in d: bool
+    /// Sample of the rising edge.
+    out q_rise: bool
+    /// Same sample (no half-cycle resolution).
+    out q_fall: bool
+
+    reg s0: bool = false
+    reg s1: bool = false
+    on clk {
+        s0 = d
+        s1 = s0
+    }
+    q_rise = s1
+    q_fall = s1
+
+    /// Both outputs carry the same sample.
+    property same_sample { always q_rise == q_fall }
+}
+
+/// Fallback for `xilinx::Oddr`: drives `d_rise` registered on the rising
+/// edge (the low half of the cycle is not modelled).
+pub module Oddr {
+    /// Clock.
+    in clk: clock
+    /// Value for the high half of the cycle.
+    in d_rise: bool
+    /// Value for the low half of the cycle (ignored by the fallback).
+    in d_fall: bool
+    /// Output.
+    out q: bool
+
+    reg q_r: bool = false
+    on clk { q_r = d_rise }
+    q = q_r
+
+    /// The output is the previous cycle's `d_rise`.
+    property follows_d_rise { always true |=> q == past(d_rise, 1) }
+}
+
+/// Fallback for the pad buffers (`xilinx::Iobuf`, `lattice::SbIo`,
+/// `lattice::EcpIo`, `intel::AltIobuf`), with the pad split into signals a
+/// test bench can drive: the buffer drives `pad_o` with `pad_oe`, and `i`
+/// reads `pad_o` while driving, otherwise `pad_i`.
+pub module Iobuf {
+    /// Value to drive.
+    in o: bool
+    /// Output enable.
+    in oe: bool
+    /// Value on the pad.
+    out i: bool
+    /// Value driven onto the pad.
+    out pad_o: bool
+    /// The pad is driven.
+    out pad_oe: bool
+    /// Value an external device drives onto the pad when it is released.
+    in pad_i: bool
+
+    pad_o = o
+    pad_oe = oe
+    i = if oe { o } else { pad_i }
+}
+
+/// Fallback for `lattice::SbIo`: see [Iobuf].
+pub module SbIo<PullUp: bool = false> {
+    /// Value to drive.
+    in o: bool
+    /// Output enable.
+    in oe: bool
+    /// Value on the pad.
+    out i: bool
+    /// Value driven onto the pad.
+    out pad_o: bool
+    /// The pad is driven.
+    out pad_oe: bool
+    /// Value an external device drives onto the pad when it is released.
+    in pad_i: bool
+
+    pad_o = o
+    pad_oe = oe
+    i = if oe { o } else { pad_i }
+}
+
+/// Fallback for `lattice::EcpIo`: see [Iobuf].
+pub module EcpIo {
+    /// Value to drive.
+    in o: bool
+    /// Output enable.
+    in oe: bool
+    /// Value on the pad.
+    out i: bool
+    /// Value driven onto the pad.
+    out pad_o: bool
+    /// The pad is driven.
+    out pad_oe: bool
+    /// Value an external device drives onto the pad when it is released.
+    in pad_i: bool
+
+    pad_o = o
+    pad_oe = oe
+    i = if oe { o } else { pad_i }
+}
+
+/// Fallback for `intel::AltIobuf`: see [Iobuf].
+pub module AltIobuf {
+    /// Value to drive.
+    in o: bool
+    /// Output enable.
+    in oe: bool
+    /// Value on the pad.
+    out i: bool
+    /// Value driven onto the pad.
+    out pad_o: bool
+    /// The pad is driven.
+    out pad_oe: bool
+    /// Value an external device drives onto the pad when it is released.
+    in pad_i: bool
+
+    pad_o = o
+    pad_oe = oe
+    i = if oe { o } else { pad_i }
+}
+
+/// Fallback for `intel::DdioIn`: one sample per rising edge, reported on both
+/// outputs.
+pub module DdioIn<W: uint = 1>
+where W >= 1
+{
+    /// Capture clock.
+    in clk: clock
+    /// Input data.
+    in d: bit<W>
+    /// Sample of the rising edge.
+    out q_rise: bit<W>
+    /// Same sample (no half-cycle resolution).
+    out q_fall: bit<W>
+
+    reg s: bit<W> = all0
+    on clk { s = d }
+    q_rise = s
+    q_fall = s
+
+    /// Both outputs carry the same sample.
+    property same_sample { always q_rise == q_fall }
+}
+
+/// Fallback for `intel::DdioOut`: drives `d_rise` registered on the rising
+/// edge.
+pub module DdioOut<W: uint = 1>
+where W >= 1
+{
+    /// Output clock.
+    in clk: clock
+    /// Value for the high half of the cycle.
+    in d_rise: bit<W>
+    /// Value for the low half of the cycle (ignored by the fallback).
+    in d_fall: bit<W>
+    /// Output.
+    out q: bit<W>
+
+    reg q_r: bit<W> = all0
+    on clk { q_r = d_rise }
+    q = q_r
+
+    /// The output is the previous cycle's `d_rise`.
+    property follows_d_rise { always true |=> q == past(d_rise, 1) }
+}
+
+/// Fallback for `xilinx::Idelay`: no delay.
+pub module Idelay<Taps: uint = 0, RefMHz: uint = 200>
+where Taps <= 31
+{
+    /// Any clock.
+    in clk: clock
+    /// Input data.
+    in d: bool
+    /// The same data.
+    out q: bool
+
+    q = d
+}
+
+/// Fallback for `xilinx::IdelayCtrl`: ready a few cycles after reset.
+pub module IdelayCtrl {
+    /// Reference clock.
+    in ref_clk: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Calibrated.
+    out ready: bool
+
+    reg count: uint<3> = 0
+    on ref_clk {
+        if count != 7 { count = count +% 1 }
+    }
+    ready = count == 7
+
+    /// Once ready, stays ready until reset.
+    property stays_ready { always ready |=> ready }
+}
+
+/// Fallback for `xilinx::Startup`: `eos` rises a few cycles after reset;
+/// `cfg_mclk` is `clk` passed through.
+pub module Startup {
+    /// Start-up user clock.
+    in clk: clock
+    /// Value for the CCLK pin (ignored).
+    in cclk_o: bool
+    /// Drive the CCLK pin (ignored).
+    in cclk_oe: bool
+    /// End of start-up.
+    out eos: bool
+    /// Stand-in for the configuration oscillator (= clk).
+    out cfg_mclk: clock
+
+    reg in_startup: uint<2> = 0
+    on clk {
+        if in_startup != 3 { in_startup = in_startup +% 1 }
+    }
+    eos = in_startup == 3
+    cfg_mclk = clk
+
+    /// End of start-up is permanent.
+    property eos_sticky { always eos |=> eos }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+test "generic Pll locks after PLL_LOCK_CYCLES and keeps its constants" {
+    let dut = sim Pll<100_000_000, 10, 1, 5>()
+    dut.reset()
+    dut.step(PLL_LOCK_CYCLES - 1)
+    expect !dut.locked
+    dut.step()
+    expect dut.locked
+    dut.step(100)
+    expect dut.locked
+    expect Pll<100_000_000, 10, 1, 5>::CLK0_HZ == 200_000_000
+}
+
+test "generic Mmcm, SbPll and EcpPll lock like Pll" {
+    let a = sim Mmcm<100_000_000, 10, 1, 5>()
+    a.reset()
+    a.step(PLL_LOCK_CYCLES)
+    expect a.locked
+    let b = sim SbPll<12_000_000, 0, 63, 4>()
+    b.reset()
+    b.step(PLL_LOCK_CYCLES)
+    expect b.locked
+    expect SbPll<12_000_000, 0, 63, 4>::CLK_HZ == 48_000_000
+    let c = sim EcpPll<25_000_000, 1, 5, 5>()
+    c.reset()
+    c.step(PLL_LOCK_CYCLES)
+    expect c.locked
+}
+
+test "generic Iddr reports each sample on both outputs after one cycle" {
+    let dut = sim Iddr()
+    dut.d = false
+    dut.reset()
+    for v in [true, false, true, true, false] {
+        dut.d = v
+        dut.step(2)
+        expect dut.q_rise == v and dut.q_fall == v
+    }
+}
+
+test "generic Oddr and DdioOut drive the rising-edge value" {
+    let o = sim Oddr()
+    o.d_fall = false
+    o.d_rise = true
+    o.step()
+    expect o.q
+    o.d_rise = false
+    o.step()
+    expect !o.q
+    let d = sim DdioOut<4>()
+    d.d_fall = 0
+    d.d_rise = 0b1010
+    d.step()
+    expect d.q == 0b1010
+}
+
+test "generic DdioIn samples once per cycle" {
+    let dut = sim DdioIn<2>()
+    dut.d = 0b10
+    dut.step()
+    expect dut.q_rise == 0b10 and dut.q_fall == 0b10
+}
+
+test "generic Iobuf reads back its own drive or the external value" {
+    let dut = sim Iobuf()
+    dut.o = true
+    dut.oe = true
+    dut.pad_i = false
+    dut.settle()
+    expect dut.i and dut.pad_oe and dut.pad_o
+    dut.oe = false
+    dut.settle()
+    expect !dut.i and !dut.pad_oe
+    dut.pad_i = true
+    dut.settle()
+    expect dut.i
+}
+
+test "generic Idelay passes data through" {
+    let dut = sim Idelay<Taps: 10>()
+    dut.d = true
+    dut.settle()
+    expect dut.q
+}
+
+test "generic IdelayCtrl and Startup become ready after reset" {
+    let a = sim IdelayCtrl()
+    a.reset()
+    a.step(7)
+    expect a.ready
+    let b = sim Startup()
+    b.cclk_o = false
+    b.cclk_oe = false
+    b.reset()
+    expect !b.eos
+    b.step(3)
+    expect b.eos
+}

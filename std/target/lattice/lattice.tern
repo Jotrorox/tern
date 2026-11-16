@@ -1,0 +1,269 @@
+package std::target::lattice
+
+// Lattice iCE40 (SB_* cells, iCE40 Technology Library) and ECP5 (EHXPLLL, BB;
+// FPGA-TN-02032) primitives and Tern wrappers. Limits follow the datasheets
+// and the icepll/ecppll tools.
+
+// ---------------------------------------------------------------------------
+// Raw primitives (vendor library: sb_ice40.v / ecp5 cells_sim.v)
+// ---------------------------------------------------------------------------
+
+/// iCE40 PLL, core variant (FEEDBACK_PATH = "SIMPLE" and PLLOUT_SELECT =
+/// "GENCLK", the library defaults).
+pub extern module SB_PLL40_CORE("") <
+    DIVR: bit<4> = 0,
+    DIVF: bit<7> = 0,
+    DIVQ: bit<3> = 0,
+    FILTER_RANGE: bit<3> = 0
+> {
+    /// Reference clock.
+    in REFERENCECLK: clock
+    /// Reset, active low.
+    in RESETB: reset<async, low>
+    /// Bypass the PLL (output = reference).
+    in BYPASS: bool
+    /// External feedback (unused in SIMPLE mode).
+    in EXTFEEDBACK: bool
+    /// Dynamic delay (unused with fixed delay).
+    in DYNAMICDELAY: bit<8>
+    /// Hold the output value in low-power mode.
+    in LATCHINPUTVALUE: bool
+    /// Test serial data in (unused).
+    in SDI: bool
+    /// Test serial clock (unused).
+    in SCLK: bool
+    /// Output to fabric routing.
+    out PLLOUTCORE: clock
+    /// Output to the global clock network.
+    out PLLOUTGLOBAL: clock
+    /// Lock indicator (asynchronous).
+    out LOCK: bool
+}
+
+/// iCE40 programmable I/O cell.
+pub extern module SB_IO("") <
+    PIN_TYPE: bit<6> = 0,
+    PULLUP: bit<1> = 0
+> {
+    /// The pad (a #[top] tri port).
+    in PACKAGE_PIN: tri<bool>
+    /// Output enable.
+    in OUTPUT_ENABLE: bool
+    /// Value to drive.
+    in D_OUT_0: bool
+    /// Value read from the pad.
+    out D_IN_0: bool
+}
+
+/// ECP5 PLL. Only CLKOP is used: the other outputs are disabled by the
+/// library defaults (their *_ENABLE parameters are strings). FEEDBK_PATH
+/// defaults to "CLKOP".
+pub extern module EHXPLLL("") <
+    CLKI_DIV: uint = 1,
+    CLKFB_DIV: uint = 1,
+    CLKOP_DIV: uint = 8,
+    CLKOP_CPHASE: uint = 0,
+    CLKOP_FPHASE: uint = 0
+> {
+    /// Reference clock.
+    in CLKI: clock
+    /// Feedback clock.
+    in CLKFB: clock
+    /// Asynchronous reset, active high.
+    in RST: reset<async, high>
+    /// Standby.
+    in STDBY: bool
+    /// Dynamic phase select bit 0 (unused).
+    in PHASESEL0: bool
+    /// Dynamic phase select bit 1 (unused).
+    in PHASESEL1: bool
+    /// Dynamic phase direction (unused).
+    in PHASEDIR: bool
+    /// Dynamic phase step (unused).
+    in PHASESTEP: bool
+    /// Dynamic phase load (unused).
+    in PHASELOADREG: bool
+    /// Wake-up synchronisation (unused).
+    in PLLWAKESYNC: bool
+    /// Enable CLKOP.
+    in ENCLKOP: bool
+    /// Primary output.
+    out CLKOP: clock
+    /// Lock indicator (asynchronous).
+    out LOCK: bool
+}
+
+/// ECP5 bidirectional buffer.
+pub extern module BB("") {
+    /// Value to drive.
+    in I: bool
+    /// Tri-state control, high = high impedance.
+    in T: bool
+    /// Value read from the pad.
+    out O: bool
+    /// The pad (a #[top] tri port).
+    in B: tri<bool>
+}
+
+// ---------------------------------------------------------------------------
+// iCE40 wrappers
+// ---------------------------------------------------------------------------
+
+/// The iCE40 PLL loop-filter setting for a phase-detector frequency, as
+/// chosen by icepll.
+pub const fn ice40_filter_range(pfd_hz: uint) -> uint {
+    if pfd_hz < 17_000_000 { 1 }
+    else if pfd_hz < 26_000_000 { 2 }
+    else if pfd_hz < 44_000_000 { 3 }
+    else if pfd_hz < 66_000_000 { 4 }
+    else if pfd_hz < 101_000_000 { 5 }
+    else { 6 }
+}
+
+/// iCE40 PLL (SB_PLL40_CORE, simple feedback): one output at
+/// ClkInHz * (Divf + 1) / ((Divr + 1) * 2^Divq), on the global network.
+///
+/// * Settings as printed by `icepll -i <in MHz> -o <out MHz>`; the loop filter
+///   is derived automatically.
+/// * Checked: phase detector ClkInHz / (Divr + 1) in 10 .. 133 MHz, VCO in
+///   533 .. 1066 MHz, Divq in 1 .. 6, output in 16 .. 275 MHz.
+/// * `rst` is active low, like the primitive's RESETB.
+/// * `locked` is asynchronous; synchronise it before use as a reset.
+pub module SbPll<ClkInHz: uint, Divr: uint, Divf: uint, Divq: uint>
+where Divr <= 15, Divf <= 127, Divq >= 1, Divq <= 6
+{
+    /// Phase-detector frequency in Hz.
+    pub const PFD_HZ: uint = ClkInHz / (Divr + 1)
+    /// VCO frequency in Hz.
+    pub const VCO_HZ: uint = ClkInHz * (Divf + 1) / (Divr + 1)
+    /// Output frequency in Hz.
+    pub const CLK_HZ: uint = VCO_HZ / (1 << Divq)
+    static_assert(PFD_HZ >= 10_000_000 and PFD_HZ <= 133_000_000, "SbPll: phase detector must run at 10..133 MHz")
+    static_assert(VCO_HZ >= 533_000_000 and VCO_HZ <= 1_066_000_000, "SbPll: VCO must be 533..1066 MHz")
+    static_assert(CLK_HZ >= 16_000_000 and CLK_HZ <= 275_000_000, "SbPll: output must be 16..275 MHz")
+
+    /// Reference clock at `ClkInHz`.
+    in clk_in: clock
+    /// Asynchronous reset, active low (the primitive's RESETB polarity).
+    in rst: reset<async, low>
+    /// Output clock (global network).
+    out clk: clock
+    /// The output is stable (asynchronous).
+    out locked: bool
+
+    let pll = SB_PLL40_CORE<
+        DIVR: Divr,
+        DIVF: Divf,
+        DIVQ: Divq,
+        FILTER_RANGE: ice40_filter_range(PFD_HZ)
+    >(
+        REFERENCECLK: clk_in, RESETB: rst, BYPASS: false, EXTFEEDBACK: false,
+        DYNAMICDELAY: 0, LATCHINPUTVALUE: false, SDI: false, SCLK: false
+    )
+    clk = pll.PLLOUTGLOBAL
+    locked = pll.LOCK
+}
+
+/// iCE40 bidirectional pad (SB_IO with PIN_TYPE = tri-state output, plain
+/// input): drives `o` while `oe` is high and always reads the pad on `i`.
+/// `PullUp` enables the internal pull-up. Instantiate it in the #[top] module
+/// with the top's `tri<bool>` port.
+pub module SbIo<PullUp: bool = false> {
+    /// Value to drive.
+    in o: bool
+    /// Output enable.
+    in oe: bool
+    /// Value on the pad.
+    out i: bool
+    /// The pad (a #[top] tri port).
+    in pad: tri<bool>
+
+    // PIN_TYPE = PIN_OUTPUT_TRISTATE (0b1010xx) | PIN_INPUT (0bxxxx01)
+    i = SB_IO<PIN_TYPE: 0b101001, PULLUP: if PullUp { 1 } else { 0 }>(
+        PACKAGE_PIN: pad, OUTPUT_ENABLE: oe, D_OUT_0: o
+    ).D_IN_0
+}
+
+// ---------------------------------------------------------------------------
+// ECP5 wrappers
+// ---------------------------------------------------------------------------
+
+/// ECP5 PLL (EHXPLLL, feedback from CLKOP): one output at
+/// ClkInHz * ClkfbDiv / ClkiDiv.
+///
+/// * Settings as printed by `ecppll -i <in MHz> -o <out MHz>`.
+/// * Checked: phase detector ClkInHz / ClkiDiv in 3.125 .. 400 MHz, VCO =
+///   output * ClkopDiv in 400 .. 800 MHz.
+/// * `locked` is asynchronous; synchronise it before use as a reset.
+pub module EcpPll<ClkInHz: uint, ClkiDiv: uint, ClkfbDiv: uint, ClkopDiv: uint>
+where ClkiDiv >= 1, ClkiDiv <= 128, ClkfbDiv >= 1, ClkfbDiv <= 128, ClkopDiv >= 1, ClkopDiv <= 128
+{
+    /// Phase-detector frequency in Hz.
+    pub const PFD_HZ: uint = ClkInHz / ClkiDiv
+    /// Output frequency in Hz.
+    pub const CLK_HZ: uint = ClkInHz * ClkfbDiv / ClkiDiv
+    /// VCO frequency in Hz.
+    pub const VCO_HZ: uint = CLK_HZ * ClkopDiv
+    static_assert(PFD_HZ >= 3_125_000 and PFD_HZ <= 400_000_000, "EcpPll: phase detector must run at 3.125..400 MHz")
+    static_assert(VCO_HZ >= 400_000_000 and VCO_HZ <= 800_000_000, "EcpPll: VCO must be 400..800 MHz")
+
+    /// Reference clock at `ClkInHz`.
+    in clk_in: clock
+    /// Asynchronous reset, active high.
+    in rst: reset<async>
+    /// Output clock.
+    out clk: clock
+    /// The output is stable (asynchronous).
+    out locked: bool
+
+    let pll = EHXPLLL<
+        CLKI_DIV: ClkiDiv,
+        CLKFB_DIV: ClkfbDiv,
+        CLKOP_DIV: ClkopDiv,
+        CLKOP_CPHASE: ClkopDiv - 1,
+        CLKOP_FPHASE: 0
+    >(
+        CLKI: clk_in, RST: rst, STDBY: false, PHASESEL0: false, PHASESEL1: false,
+        PHASEDIR: false, PHASESTEP: false, PHASELOADREG: false, PLLWAKESYNC: false,
+        ENCLKOP: true
+    )
+    pll.CLKFB = pll.CLKOP
+    clk = pll.CLKOP
+    locked = pll.LOCK
+}
+
+/// ECP5 bidirectional pad (BB): drives `o` while `oe` is high and always
+/// reads the pad on `i`. Instantiate it in the #[top] module with the top's
+/// `tri<bool>` port.
+pub module EcpIo {
+    /// Value to drive.
+    in o: bool
+    /// Output enable.
+    in oe: bool
+    /// Value on the pad.
+    out i: bool
+    /// The pad (a #[top] tri port).
+    in pad: tri<bool>
+
+    i = BB(I: o, T: !oe, B: pad).O
+}
+
+test "ice40_filter_range follows icepll" {
+    expect ice40_filter_range(12_000_000) == 1
+    expect ice40_filter_range(25_000_000) == 2
+    expect ice40_filter_range(30_000_000) == 3
+    expect ice40_filter_range(100_000_000) == 5
+    expect ice40_filter_range(120_000_000) == 6
+}
+
+test "SbPll: 12 MHz to 48 MHz (icepll settings)" {
+    // icepll -i 12 -o 48: DIVR 0, DIVF 63, DIVQ 4
+    expect SbPll<12_000_000, 0, 63, 4>::VCO_HZ == 768_000_000
+    expect SbPll<12_000_000, 0, 63, 4>::CLK_HZ == 48_000_000
+}
+
+test "EcpPll: 25 MHz to 125 MHz (ecppll settings)" {
+    // ecppll -i 25 -o 125: CLKI_DIV 1, CLKFB_DIV 5, CLKOP_DIV 5
+    expect EcpPll<25_000_000, 1, 5, 5>::CLK_HZ == 125_000_000
+    expect EcpPll<25_000_000, 1, 5, 5>::VCO_HZ == 625_000_000
+}
