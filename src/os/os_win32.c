@@ -540,6 +540,47 @@ void os_set_binary_stdio(void)
     _setmode(_fileno(stdin), _O_BINARY);
 }
 
+long os_read_stdin(char *buf, size_t n)
+{
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD got = 0;
+    if (h == NULL || h == INVALID_HANDLE_VALUE)
+        return -1;
+    if (n > 0x40000000u)
+        n = 0x40000000u;
+    if (!ReadFile(h, buf, (DWORD)n, &got, NULL)) {
+        DWORD e = GetLastError();
+        if (e == ERROR_BROKEN_PIPE || e == ERROR_HANDLE_EOF)
+            return 0;
+        return -1;
+    }
+    return (long)got;
+}
+
+int os_stdin_wait(int timeout_ms)
+{
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD type;
+    ULONGLONG start = GetTickCount64();
+    if (h == NULL || h == INVALID_HANDLE_VALUE)
+        return -1;
+    type = GetFileType(h);
+    if (type == FILE_TYPE_CHAR)
+        return WaitForSingleObject(h, timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms) == WAIT_OBJECT_0 ? 1 : 0;
+    if (type != FILE_TYPE_PIPE)
+        return 1; /* files never block */
+    for (;;) {
+        DWORD avail = 0;
+        if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL))
+            return 1; /* broken pipe: the read reports the end of input */
+        if (avail > 0)
+            return 1;
+        if (timeout_ms >= 0 && GetTickCount64() - start >= (ULONGLONG)timeout_ms)
+            return 0;
+        Sleep(2);
+    }
+}
+
 /* ------------------------------------------------------------ processes --- */
 
 typedef struct OswBuf {

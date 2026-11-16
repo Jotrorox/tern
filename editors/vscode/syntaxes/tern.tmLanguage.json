@@ -1,0 +1,135 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Tern",
+  "scopeName": "source.tern",
+  "fileTypes": ["tern"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#attributes" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.documentation.tern", "match": "///.*$" },
+        { "name": "comment.line.double-slash.tern", "match": "//.*$" },
+        { "include": "#block-comment" }
+      ]
+    },
+    "block-comment": {
+      "name": "comment.block.tern",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [{ "include": "#block-comment" }]
+    },
+    "attributes": {
+      "name": "meta.attribute.tern",
+      "begin": "#\\[",
+      "end": "\\]",
+      "beginCaptures": { "0": { "name": "punctuation.definition.attribute.tern" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.attribute.tern" } },
+      "patterns": [
+        { "match": "\\G\\s*([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "entity.name.function.attribute.tern" } } },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*:)", "name": "variable.parameter.attribute.tern" },
+        { "match": "[A-Za-z_][A-Za-z0-9_]*", "name": "constant.other.attribute.tern" }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.tern",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [{ "name": "constant.character.escape.tern", "match": "\\\\(?:[nrt0\\\\\"']|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f]+\\})" }]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "typed literals: 42u8, 0xFFu16, -3s12, 0xFFu<W>",
+          "match": "\\b((?:0x[0-9A-Fa-f_]+|0b[01_]+|0o[0-7_]+|[0-9][0-9_]*))([us])([0-9]+)?\\b",
+          "captures": {
+            "1": { "name": "constant.numeric.tern" },
+            "2": { "name": "storage.type.numeric.suffix.tern" },
+            "3": { "name": "constant.numeric.width.tern" }
+          }
+        },
+        { "name": "constant.numeric.hex.tern", "match": "\\b0x[0-9A-Fa-f_]+\\b" },
+        { "name": "constant.numeric.binary.tern", "match": "\\b0b[01_]+\\b" },
+        { "name": "constant.numeric.octal.tern", "match": "\\b0o[0-7_]+\\b" },
+        { "name": "constant.numeric.decimal.tern", "match": "\\b[0-9][0-9_]*\\b" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(module|extern\\s+module|bundle|struct|enum|regmap|type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "keyword.declaration.tern" }, "2": { "name": "entity.name.type.tern" } }
+        },
+        {
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "keyword.declaration.function.tern" }, "2": { "name": "entity.name.function.tern" } }
+        },
+        {
+          "match": "\\b(property|sequence)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "keyword.declaration.tern" }, "2": { "name": "entity.name.function.tern" } }
+        },
+        {
+          "match": "\\b(in|out)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=:)",
+          "captures": { "1": { "name": "storage.modifier.direction.tern" }, "2": { "name": "variable.other.port.tern" } }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.tern", "match": "\\b(if|else|match|for|while|return)\\b" },
+        { "name": "keyword.other.verification.tern", "match": "\\b(test|sim|expect|assert|assume|cover|static_assert|always|never|eventually|until)\\b" },
+        { "name": "storage.type.tern", "match": "\\b(let|var|reg|mem|const|domain|on|comb)\\b" },
+        { "name": "keyword.declaration.tern", "match": "\\b(package|use|pub|module|extern|bundle|struct|enum|fn|type|regmap|property|sequence|where)\\b" },
+        { "name": "storage.modifier.tern", "match": "\\b(in|out|flip)\\b" },
+        { "name": "keyword.operator.word.tern", "match": "\\b(as|and|or|not|xor)\\b" },
+        { "name": "invalid.illegal.reserved.tern", "match": "\\b(impl|trait|async|yield|generate|initial|wire|logic)\\b" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "support.type.builtin.tern", "match": "\\b(uint|sint|bit|bool|clock|reset|tri|string)\\b" },
+        { "name": "support.type.builtin.tern", "match": "\\b[us][0-9]+\\b" },
+        { "name": "entity.name.type.tern", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.boolean.tern", "match": "\\b(true|false)\\b" },
+        { "name": "constant.language.fill.tern", "match": "\\b(all0|all1)\\b" },
+        { "name": "constant.other.variant.tern", "match": "(?<![A-Za-z0-9_)\\]])\\.[A-Z][A-Za-z0-9_]*" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.temporal.tern", "match": "\\|->|\\|=>|##" },
+        { "name": "keyword.operator.arrow.tern", "match": "->|=>" },
+        { "name": "keyword.operator.arithmetic.tern", "match": "\\+%|-%|\\+\\+|<<|>>>|>>|[-+*/%]" },
+        { "name": "keyword.operator.comparison.tern", "match": "==|!=|<=|>=" },
+        { "name": "keyword.operator.logical.tern", "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.bitwise.tern", "match": "[&|^~]" },
+        { "name": "keyword.operator.range.tern", "match": "\\.\\.=?" },
+        { "name": "keyword.operator.assignment.tern", "match": "=" },
+        { "name": "punctuation.separator.path.tern", "match": "::" },
+        { "name": "keyword.operator.domain.tern", "match": "@" }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        { "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()", "captures": { "1": { "name": "entity.name.function.call.tern" } } },
+        { "name": "variable.other.tern", "match": "\\b[a-z_][A-Za-z0-9_]*\\b" }
+      ]
+    }
+  }
+}

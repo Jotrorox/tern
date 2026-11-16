@@ -406,6 +406,30 @@ void os_set_binary_stdio(void)
 {
 }
 
+long os_read_stdin(char *buf, size_t n)
+{
+    ssize_t r;
+    do {
+        r = read(0, buf, n);
+    } while (r < 0 && errno == EINTR);
+    return r < 0 ? -1 : (long)r;
+}
+
+int os_stdin_wait(int timeout_ms)
+{
+    struct pollfd pfd;
+    int r;
+    pfd.fd = 0;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    do {
+        r = poll(&pfd, 1, timeout_ms < 0 ? -1 : timeout_ms);
+    } while (r < 0 && errno == EINTR);
+    if (r < 0)
+        return -1;
+    return r > 0 ? 1 : 0;
+}
+
 /* ------------------------------------------------------------ processes --- */
 
 typedef struct OspBuf {

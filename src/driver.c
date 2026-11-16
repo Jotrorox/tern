@@ -41,9 +41,17 @@ static void drv_free_paths(DrvPaths *p)
 
 static AstFile *drv_parse(Driver *dr, const char *path, const char *text, size_t len)
 {
-    uint32_t id = src_add(path, text, len);
-    Arena *a = (Arena *)xcalloc(1, sizeof(Arena));
+    uint32_t id = src_find(path);
+    Arena *a;
     AstFile *f;
+    if (id) {
+        const SourceFile *sf = src_get(id);
+        if (sf->len != len || memcmp(sf->text, text, len) != 0)
+            src_update(id, text, len);
+    } else {
+        id = src_add(path, text, len);
+    }
+    a = (Arena *)xcalloc(1, sizeof(Arena));
     vec_push(dr->arenas, a);
     f = parse_file(a, id);
     if (f->nerrors)
@@ -56,12 +64,17 @@ static int drv_parse_file(Driver *dr, const char *path, int is_user, int is_std)
     char *text = NULL;
     size_t len = 0;
     AstFile *f;
-    if (os_read_file(path, &text, &len) != 0) {
-        fprintf(stderr, "tern %s: error: cannot read %s\n", dr->opt.cmd ? dr->opt.cmd : "check", path);
-        return 0;
+    const char *over = dr->opt.overlay ? dr->opt.overlay(dr->opt.overlay_user, path, &len) : NULL;
+    if (over) {
+        f = drv_parse(dr, path, over, len);
+    } else {
+        if (os_read_file(path, &text, &len) != 0) {
+            fprintf(stderr, "tern %s: error: cannot read %s\n", dr->opt.cmd ? dr->opt.cmd : "check", path);
+            return 0;
+        }
+        f = drv_parse(dr, path, text, len);
+        free(text);
     }
-    f = drv_parse(dr, path, text, len);
-    free(text);
     if (f->nerrors && is_user)
         dr->user_parse_errors = 1;
     sema_add_file(dr->S, f, is_user, is_std);
@@ -182,11 +195,16 @@ Driver *driver_open(const DriverOptions *opt)
     char *cwd;
     dr->opt = *opt;
     dr->S = sema_new();
-    cwd = os_getcwd();
-    r = pkg_project_open(cwd ? cwd : ".", &dr->prj);
+    cwd = opt->root ? NULL : os_getcwd();
+    r = pkg_project_open(opt->root ? opt->root : cwd ? cwd : ".", &dr->prj);
     free(cwd);
     dr->has_project = r == 1;
     for (i = 0; i < opt->npaths; i++) {
+        size_t olen;
+        if (opt->overlay && opt->overlay(opt->overlay_user, opt->paths[i], &olen)) {
+            vec_push(user, xstrdup(opt->paths[i]));
+            continue;
+        }
         if (!os_is_dir(opt->paths[i]) && !os_is_file(opt->paths[i])) {
             fprintf(stderr, "tern %s: error: no such file or directory: %s\n", opt->cmd ? opt->cmd : "check",
                     opt->paths[i]);

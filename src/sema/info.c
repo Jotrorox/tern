@@ -50,6 +50,8 @@ void sema_info_record(Sema *S, const SemInfo *info)
         r->name = info->name;
     if (!r->type)
         r->type = info->type;
+    if (!r->width)
+        r->width = info->width;
     if (!r->domain)
         r->domain = info->domain;
     if (!r->driver) {

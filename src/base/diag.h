@@ -102,6 +102,7 @@ void diag_path_truncate(size_t depth);    /* pop back to a saved depth */
 void diag_flush(void);                    /* emit the pending diagnostic, if any */
 
 void diag_set_sink(DiagSink sink, void *user);  /* NULL: print (default) */
+void diag_get_sink(DiagSink *sink, void **user);  /* current sink (to restore it) */
 void diag_set_format(DiagFormat fmt);
 DiagFormat diag_get_format(void);
 int diag_parse_format(const char *name, DiagFormat *out);  /* "human"/"short"/"json" */

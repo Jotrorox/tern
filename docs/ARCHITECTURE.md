@@ -53,12 +53,12 @@ spaces — the real syntax is ASCII).
 | `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
 | `src/backend/` | `verilator.c formal.c synth.c` | scripts for external tools |
 | `src/pkg/` | `toml.c manifest.c lock.c git.c cmd_pkg.c` (+ `pkg.h`) | tern.toml, tern.lock, semver, dependency resolution, git; `tern new/add/update/vendor/publish` (docs/packages.md, docs/registry.md) |
-| `src/lsp/` | `rpc.c lsp.c` | JSON-RPC language server over stdio |
+| `src/lsp/` | `rpc.c lsp.c lsp_nav.c` (+ `lsp.h`, private `lsp_impl.h`) | JSON-RPC language server over stdio (`tern lsp`, docs/editors.md) |
 | `src/tools/` | `fmt.c doc.c import.c remap.c` | formatter, HTML docs, `tern import` (SV → extern), `tern remap` (docs/migration.md) |
 | `src/` | `main.c cmds.h cmd_stubs.c cmd_parse.c cmd_check.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, stubs for unimplemented commands, `tern parse` and the interim parse-only `tern check`, shared front-end driver, embedded std |
 | `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>/`) |
 | `tools/` | `embed.c` | embeds `std/**/*.tern` into `src/std_embed.c` (committed) |
-| `tests/` | `run.c`, `unit/test_{base,sim,pkg,tools,fmt}.c`, `fixtures/**`, `fuzz/fuzz_parser.c` | golden-file test runner, unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
+| `tests/` | `run.c`, `unit/test_{base,sim,pkg,tools,fmt,emit,lsp}.c`, `fixtures/**`, `lsp/*.session`, `fuzz/fuzz_parser.c` | golden-file test runner, unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
 
 ## Pipeline
 
@@ -162,7 +162,7 @@ The headers are the reference (each starts with a usage comment); summary:
   calls it after every command). Also: `diag_error_count`/`diag_warning_count`,
   `diag_set_strict` (`--strict`: warnings become errors),
   `diag_set_format(DIAG_FMT_HUMAN | DIAG_FMT_SHORT | DIAG_FMT_JSON)`,
-  `diag_set_color`, `diag_set_output(FILE*)`, `diag_set_sink(fn,user)` so the
+  `diag_set_color`, `diag_set_output(FILE*)`, `diag_set_sink(fn,user)` / `diag_get_sink` (save and restore) so the
   LSP can collect `Diagnostic`s instead of printing them,
   `diag_path_depth`/`diag_path_truncate` (unwinding), and
   `diag_render(d,fmt,color,sb)` / `diag_render_json(d,jw)`. Human format:
@@ -189,7 +189,9 @@ The headers are the reference (each starts with a usage comment); summary:
   relative (paths are UTF-8 and use `/`), executable path, env vars
   (`os_getenv`: use it instead of `getenv` so Windows sees UTF-8 and
   `os_setenv` changes), `os_find_program` (PATH, PATHEXT), monotonic clock,
-  `os_isatty`/`os_color_enabled`, `os_cpu_count`, and processes:
+  `os_isatty`/`os_color_enabled`, `os_cpu_count`, `os_set_binary_stdio`,
+  `os_read_stdin`/`os_stdin_wait` (unbuffered stdin with a timeout, for the
+  LSP), and processes:
   `os_spawn(argv, &OsSpawnOpts{cwd, stdin_data/stdin_len, stdin_null,
   capture_stdout, capture_stderr, merge_stderr}, &err)`, `os_proc_wait`,
   `os_proc_wait_any(procs, n, timeout_ms)` (pumps all captured output while
@@ -263,6 +265,40 @@ size_t sim_coverage(SimModel*, const SimCovPoint **out);
 int  sim_vcd_open(SimModel*, const char *path); void sim_vcd_close(SimModel*);
 ```
 
+## Language server (`src/lsp/`, spec §13.2)
+
+`tern lsp` (docs/editors.md for clients and features) is three files:
+`rpc.c` (Content-Length framing over an `LspIo` byte stream: stdin/stdout via
+`os_read_stdin`/`os_stdin_wait` in binary mode, or memory in the tests),
+`lsp.c` (lifecycle, documents, analyses, diagnostics, formatting, dispatch)
+and `lsp_nav.c` (definition, hover, references, symbols, completion,
+`tern/instanceTree`). `lsp_run(io, opts)` is the entry point.
+
+* Documents are overlays: `DriverOptions.overlay` hands the driver the
+  editor buffer instead of the file on disk, `DriverOptions.root` says where
+  to look for tern.toml. Each open document belongs to an analysis group: the
+  project (files under its `src/` or `tests/`; `include_tests` is on) or the
+  file alone (`tern check file.tern`, in its project's context if any).
+* An analysis is exactly `tern check`: `driver_open` + `driver_elaborate_all`
+  + `check_design` (elaboration only without syntax errors), with
+  diagnostics captured through `diag_set_sink`. After a change the groups
+  that read the file are marked dirty and re-analysed once no input arrived
+  for `--debounce` ms (requests analyse at once). Each analysis owns its
+  `Driver` and IR arena and frees the previous one; the driver registers
+  each path once (`src_find` + `src_update`), so the source registry stays
+  bounded across edits (tested).
+* Diagnostics are published per file (including files that are not open,
+  and tern.toml), with an empty list for files that no longer have any.
+  Positions are UTF-16 code units, converted from byte offsets with the
+  `utf8_*` helpers.
+* Navigation uses the elaborator's `SemInfo` side table (`sema_info_at`,
+  which also records `x.field` / `inst.port` uses and hardware widths) and
+  falls back to the AST (`lsp_collect_decls`) plus `sema_lookup` for code
+  that was not elaborated, item names and `use` paths.
+* Never crash on input: malformed JSON or headers get JSON-RPC errors,
+  unknown documents get empty answers, and nothing but protocol messages is
+  written to stdout (`--log FILE` for tracing).
+
 ## Testing the compiler
 
 `make test` builds and runs `build/test_base` (unit tests for `src/base` and
@@ -272,7 +308,8 @@ skipped without git), `build/test_tools` (`tern import` goldens in
 `tests/fixtures/import/<stem>.expected.tern|.log`, `tern remap`),
 `build/test_fmt` (`tern fmt` is faithful and idempotent on every std file and
 fixture; `tern doc` text goldens in `tests/fixtures/doc/` and an HTML smoke
-test over std) and
+test over std), `build/test_lsp` (the language server in-process over a
+memory stream, plus the scripted sessions `tests/lsp/*.session`) and
 `tests/run` (the golden-file runner, `tests/run.c`); all are single
 translation units that `#include` the sources they need. The runner walks `tests/fixtures/`. Each fixture is a
 `.tern` file with sibling expectation files; for each expectation, `tern`
