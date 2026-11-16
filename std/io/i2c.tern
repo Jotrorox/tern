@@ -103,7 +103,11 @@ where SclHz > 0
     let last_step: uint<3> = if state == .Byte { 3 } else { 5 }
     let stretching = step == 2 and !scl_s
     let step_end = state != .Idle and tick == Q - 1 and !stretching
-    let cur_bit = if bitn == 8 { if is_read { !send_ack } else { true } } else { if is_read { true } else { sh[7] } }
+    let cur_bit = if bitn == 8 {
+        if is_read { !send_ack } else { true }
+    } else {
+        if is_read { true } else { sh[7] }
+    }
 
     in.ready = state == .Idle
     out.valid = out_valid
@@ -133,7 +137,10 @@ where SclHz > 0
                         if bitn == 8 {
                             state = .Idle
                             out_valid = true
-                            out_data = I2cResult { data: sh, ack: if is_read { send_ack } else { ack_rx } }
+                            out_data = I2cResult {
+                                data: sh,
+                                ack: if is_read { send_ack } else { ack_rx },
+                            }
                         } else {
                             bitn = bitn +% 1
                         }
@@ -482,8 +489,13 @@ test "I2C read with repeated START: register pointer write, then two bytes" {
     dut.reset()
     dut.hold_scl = false
     dut.tx = Stream { valid: true, data: 0x11 }
-    let cmds = [I2cCmd::Start, I2cCmd::Write { byte: 0x84 }, I2cCmd::Write { byte: 0x07 },
-                I2cCmd::Start, I2cCmd::Write { byte: 0x85 }]
+    let cmds = [
+        I2cCmd::Start,
+        I2cCmd::Write { byte: 0x84 },
+        I2cCmd::Write { byte: 0x07 },
+        I2cCmd::Start,
+        I2cCmd::Write { byte: 0x85 },
+    ]
     for c in cmds {
         dut.step_until(!dut.busy, max: 4000)
         dut.cmd = Stream { valid: true, data: c }

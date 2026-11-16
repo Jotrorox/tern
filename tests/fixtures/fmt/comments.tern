@@ -1,0 +1,46 @@
+// File header comment.
+// Second line.
+
+package demo::comments
+
+/// Doc comment on the module,
+/// two lines.
+#[top]
+/// More doc after the attribute.
+module Top {
+    /// Clock.
+    in clk: clock // trailing on a port
+    in rst: reset   // trailing, keeps its column
+
+    // own-line comment
+
+    // another one, after a blank line
+    reg count: u8 = 0 /* block */
+    /* block comment on its own line */
+    let x = f(a, // first argument
+        b)
+    let y = Pair {
+        a: 1, // a
+        // before b
+        b: 2,
+    }
+    on clk {
+        count = count +% 1 // tick
+        // last in block
+    }
+    let z = 1 + /* inline */ 2
+}
+// between items, no blank line before
+
+/// Doc on a struct field.
+struct S {
+    /// The field.
+    a: u8, // trailing
+}
+
+/*
+ * Multi-line block comment
+ * kept verbatim.
+ */
+fn f(a: u8, b: u8) -> u8 { a } // after the fn
+// end of file

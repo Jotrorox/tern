@@ -62,11 +62,15 @@ const T6: [uint<6>; 32] = [
     0b011011, 0b100011, 0b010011, 0b110010, 0b001011, 0b101010, 0b011010, 0b111010,
     0b110011, 0b100110, 0b010110, 0b110110, 0b001110, 0b101110, 0b011110, 0b101011,
 ]
+
 const K28_6: uint<6> = 0b001111
+
 // 3b/4b data codes for RD- (fghj, `f` in bit 3); y = 7 is the primary P7
 const T4D: [uint<4>; 8] = [0b1011, 0b1001, 0b0101, 0b1100, 0b1101, 0b1010, 0b0110, 0b1110]
+
 // alternate D.x.A7 / K.x.7 code for RD-
 const A7: uint<4> = 0b0111
+
 // 3b/4b control codes for RD-
 const T4K: [uint<4>; 8] = [0b1011, 0b0110, 0b1010, 0b1100, 0b1101, 0b0101, 0b1001, 0b0111]
 
@@ -84,7 +88,7 @@ pub const fn encode_8b10b(s: Symbol, rd: bool) -> Code10 {
 
     // 3b/4b
     let use_a7 = y == 7 and ((!rd6 and (x == 17 or x == 18 or x == 20)) or
-                             (rd6 and (x == 11 or x == 13 or x == 14)))
+        (rd6 and (x == 11 or x == 13 or x == 14)))
     let c4n = if s.k { T4K[y] } else if use_a7 { A7 } else { T4D[y] }
     let unbal4 = count_ones(bits(c4n)) != 2
     let comp4 = if s.k { rd6 } else { rd6 and (unbal4 or y == 3) }

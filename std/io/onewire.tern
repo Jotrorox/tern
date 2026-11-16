@@ -127,7 +127,10 @@ pub module OneWire<ClkHz: uint> {
                             state = .Idle
                             if reading {
                                 out_valid = true
-                                out_data = OneWireResult { data: if nbits == 1 { rx >> 7 } else { rx }, presence: false }
+                                out_data = OneWireResult {
+                                    data: if nbits == 1 { rx >> 7 } else { rx },
+                                    presence: false,
+                                }
                             }
                         } else {
                             bitn = bitn +% 1
@@ -197,7 +200,11 @@ test "OneWire reset detects a presence pulse" {
     for _ in 0..1200 {
         dut.settle()
         if dut.out.valid { got = true; presence = dut.out.data.presence }
-        if dut.dq_oe { low_us = low_us +% 1; since_release = 0 } else { since_release = since_release +% 1 }
+        if dut.dq_oe {
+            low_us = low_us +% 1; since_release = 0
+        } else {
+            since_release = since_release +% 1
+        }
         // the device answers 20 us after the release with a 120 us presence pulse
         let device_low = low_us >= 480 and since_release >= 20 and since_release < 140
         dut.dq_i = !dut.dq_oe and !device_low

@@ -58,7 +58,7 @@ spaces — the real syntax is ASCII).
 | `src/` | `main.c cmds.h cmd_stubs.c cmd_parse.c cmd_check.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, stubs for unimplemented commands, `tern parse` and the interim parse-only `tern check`, shared front-end driver, embedded std |
 | `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>/`) |
 | `tools/` | `embed.c` | embeds `std/**/*.tern` into `src/std_embed.c` (committed) |
-| `tests/` | `run.c`, `unit/test_{base,sim,pkg,tools}.c`, `fixtures/**`, `fuzz/fuzz_parser.c` | golden-file test runner, unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
+| `tests/` | `run.c`, `unit/test_{base,sim,pkg,tools,fmt}.c`, `fixtures/**`, `fuzz/fuzz_parser.c` | golden-file test runner, unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
 
 ## Pipeline
 
@@ -269,7 +269,10 @@ int  sim_vcd_open(SimModel*, const char *path); void sim_vcd_close(SimModel*);
 `src/os`, `tests/unit/test_base.c`), `build/test_pkg` (`src/pkg`, including an
 end-to-end run of the package commands against local bare git repositories,
 skipped without git), `build/test_tools` (`tern import` goldens in
-`tests/fixtures/import/<stem>.expected.tern|.log`, `tern remap`) and
+`tests/fixtures/import/<stem>.expected.tern|.log`, `tern remap`),
+`build/test_fmt` (`tern fmt` is faithful and idempotent on every std file and
+fixture; `tern doc` text goldens in `tests/fixtures/doc/` and an HTML smoke
+test over std) and
 `tests/run` (the golden-file runner, `tests/run.c`); all are single
 translation units that `#include` the sources they need. The runner walks `tests/fixtures/`. Each fixture is a
 `.tern` file with sibling expectation files; for each expectation, `tern`
@@ -285,6 +288,8 @@ directory and the bare file name as argument:
   `tern build --stdout --diag-format=short foo.tern` (stdout)
 * `foo.tern` + `foo.test` — expected `tern test` summary:
   `tern test --diag-format=short foo.tern` (stdout)
+* `foo.tern` + `foo.fmt` — expected canonical formatting (docs/style.md):
+  `tern fmt --stdout foo.tern` (stdout)
 
 So these commands must accept a single `.tern` file outside a project, and
 `build` must support `--stdout` (all emitted modules to stdout). Output and
@@ -294,7 +299,8 @@ crashed. A first line starting with `// skip` marks a fixture as skipped.
 Usage: `tests/run [-v] [-j N] [--tern path] [--no-std] [<filter>...]`.
 `UPDATE=1 make test` rewrites mismatching expectations.
 
-`make test` also runs `tern test --diag-format=short std` from the repository
+`make test` also checks that std is canonically formatted
+(`tern fmt --check std`, docs/style.md) and runs `tern test --diag-format=short std` from the repository
 root and requires exit status 0; while `tern test` is still the stub ("not
 implemented yet", exit 2) that case is reported as skipped.
 

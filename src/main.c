@@ -27,10 +27,21 @@ static const MainCmd main_cmds[] = {
      "  --std <s>           output dialect: sv (default) or verilog2005\n"},
     {"check", cmd_check, "Project", "[<file.tern>...]",
      "run every compile-time check without emitting; CDC report, unused signals", NULL},
-    {"fmt", cmd_fmt, "Project", "[<file.tern>...]",
-     "format sources canonically (no options)", NULL},
-    {"doc", cmd_doc, "Project", "[<pkg>]",
-     "generate static HTML docs from /// comments", NULL},
+    {"fmt", cmd_fmt, "Project", "[<file.tern|dir>...] [--check] [--stdout]",
+     "format sources canonically (no style options; docs/style.md)",
+     "  <file.tern|dir>     files to format; directories recurse (default: the\n"
+     "                      project's src/ and tests/, or the .tern files here)\n"
+     "  --check             change nothing; list files that would change (exit 1)\n"
+     "  --stdout            print the formatted text of one file\n"},
+    {"doc", cmd_doc, "Project", "[<pkg|item|path>] [-o <dir>] [--html|--text] [--open]",
+     "documentation from /// comments: static HTML site or terminal text",
+     "  <pkg|item|path>     std, std::fifo, std::fifo::Fifo, a project package, or\n"
+     "                      a .tern file / directory (default: the project)\n"
+     "  -o, --output <dir>  HTML output directory (default: build/doc)\n"
+     "  --html              write the HTML site (default unless a package or item\n"
+     "                      path is given without -o)\n"
+     "  --text              print a terminal rendering (the offline reference)\n"
+     "  --open              open the generated index.html in a browser\n"},
     {"test", cmd_test, "Verification", "[<filter>] [--waves] [--seed <n>] [--cover]",
      "run test blocks on the built-in simulator",
      "  <filter>            run only tests whose name contains <filter>\n"

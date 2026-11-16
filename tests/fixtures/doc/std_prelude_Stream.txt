@@ -1,0 +1,24 @@
+bundle std::prelude::Stream
+
+    pub bundle Stream<T: type>
+
+The standard valid/ready handshake. A beat transfers in every cycle in which
+both `valid` and `ready` are high. Once a producer raises `valid` it keeps
+`valid` high and `data` stable until the beat transfers; `valid` must never
+depend combinationally on `ready` (`ready` may depend on `valid`).
+
+Generics:
+  T  type
+
+Fields:
+  valid       bool  The producer offers `data` this cycle.
+  data        T     The payload. Meaningless while `valid` is low.
+  flip ready  bool  The consumer accepts a beat this cycle. Flows against the
+                    bundle.
+
+Methods:
+  fn fire() -> bool
+      True in a cycle in which a beat transfers (`valid and ready`).
+
+Tested behaviours:
+  * stream fire needs valid and ready

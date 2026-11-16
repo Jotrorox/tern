@@ -1,0 +1,30 @@
+// Line width 100: long lists break one per line, with trailing commas.
+module Long<FirstParameter: uint, SecondParameter: uint = 16, ThirdParameter: uint = 32, Fourth: bool = true>
+where FirstParameter >= 1, SecondParameter >= 2,
+      ThirdParameter >= 3
+{
+    in data_in: Stream<uint<FirstParameter>>
+    out data_out: Stream<uint<FirstParameter>>
+    let fifo = std::fifo::Fifo<uint<FirstParameter>, SecondParameter, SecondParameter - 1>(push: data_in, pop: data_out)
+    let short = f(a, b,
+                  c)
+    let kept = g(
+        a, b)
+    let one = some_function_with_a_long_name(another_function_with_a_long_name(argument_number_one_long))
+    let lit = Header { version: 4, length: total_length_in_bytes, protocol: 17, checksum: 0xFFFF, flags: 0 }
+    let table = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x0F]
+    let rows = [
+        1, 2, 3,
+        4, 5, 6,
+    ]
+    let pairs = [(1, 2), (3, 4)]
+    let ok = first_condition_holds and
+        second_condition_holds
+    let pick = if sel { first_long_value_name_here } else if other { second_long_value_name } else { 0 }
+}
+
+fn header_with_a_long_name<W: uint>(first: uint<W>, second: uint<W>, third: uint<W>) -> uint<W> {
+    first
+}
+
+property long_property_name { always (valid and !ready) |=> valid and stable(data) and stable(last) }

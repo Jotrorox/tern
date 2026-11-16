@@ -16,11 +16,11 @@ package std::bus
 /// for exactly one cycle per bus access.
 pub bundle RegBus<AW: uint = 32, DW: uint = 32> {
     /// The access; valid for exactly one cycle per bus transaction.
-    req: Valid<RegReq<AW, DW>>
+    req: Valid<RegReq<AW, DW>>,
     /// Read data for the current access (ignored for writes).
-    flip rdata: uint<DW>
+    flip rdata: uint<DW>,
     /// The current access failed (unmapped offset, ...); reported as SLVERR / PSLVERR / ERR.
-    flip err: bool
+    flip err: bool,
 }
 
 /// AXI4-Lite to RegBus front-end.
@@ -207,7 +207,12 @@ pub module WishboneRegPort<AW: uint = 32, DW: uint = 32> {
     s.dat_r = dat_q
     regs.req = Valid {
         valid: take,
-        data: RegReq { addr: s.adr, wdata: s.dat_w, strb: if s.we { s.sel } else { all0 }, write: s.we },
+        data: RegReq {
+            addr: s.adr,
+            wdata: s.dat_w,
+            strb: if s.we { s.sel } else { all0 },
+            write: s.we,
+        },
     }
 
     on clk {
@@ -296,10 +301,10 @@ pub module RegisterFile<Map: type, Bus: type = Axi4Lite<32, 32>> {
 /// Example register map used by the RegisterFile tests: a control register
 /// with fields, a read-only status input, a scratch register and a byte FIFO.
 regmap DemoRegs {
-    0x00 ctrl: rw { enable: bool @0, mode: uint<2> @[2:1] }
-    0x04 status: ro { busy: bool @0, err: bool @1 }
-    0x08 scratch: rw u32
-    0x10 txq: wo u8 -> Stream<u8>
+    0x00 ctrl: rw { enable: bool @0, mode: uint<2> @[2:1] },
+    0x04 status: ro { busy: bool @0, err: bool @1 },
+    0x08 scratch: rw u32,
+    0x10 txq: wo u8 -> Stream<u8>,
 }
 
 test "RegisterFile: rw register reads back what was written over AXI4-Lite" {

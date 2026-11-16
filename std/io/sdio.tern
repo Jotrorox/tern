@@ -120,7 +120,23 @@ where SlowHz <= FastHz, SlowHz > 0
     out cs_n: bool
 
     enum Step { Cmd0, Cmd8, Cmd55, Acmd41, Cmd58, Cmd16, Cmd17, Cmd24, Idle }
-    enum Phase { PowerUp, Gap, Frame, R1, Extra, Dispatch, Token, Data, Crc, WToken, WData, WCrc, WBusy, Idle, Fail }
+    enum Phase {
+        PowerUp,
+        Gap,
+        Frame,
+        R1,
+        Extra,
+        Dispatch,
+        Token,
+        Data,
+        Crc,
+        WToken,
+        WData,
+        WCrc,
+        WBusy,
+        Idle,
+        Fail,
+    }
 
     // ---- byte engine: one SPI mode-0 byte, MSB first ----
     reg bx_busy: bool = false
@@ -209,7 +225,11 @@ where SlowHz <= FastHz, SlowHz > 0
                 .R1 => if cnt != 0 and !bx_rx[7] {
                     r1 = bx_rx
                     cnt = 0
-                    phase = if (step == .Cmd8 and bx_rx == 0x01) or step == .Cmd58 { .Extra } else { .Dispatch }
+                    phase = if (step == .Cmd8 and bx_rx == 0x01) or step == .Cmd58 {
+                        .Extra
+                    } else {
+                        .Dispatch
+                    }
                 } else if cnt == 9 {
                     r1 = 0xFF                                     // no response (Ncr > 8)
                     cnt = 0
@@ -358,8 +378,10 @@ where SlowHz <= FastHz, SlowHz > 0
                 .Idle => if cmd.valid {
                     err = .None
                     step = if cmd.data.write { .Cmd24 } else { .Cmd17 }
-                    frame = sd_frame(if cmd.data.write { 24 } else { 17 },
-                                     if ccs { cmd.data.block } else { cmd.data.block << 9 })
+                    frame = sd_frame(
+                        if cmd.data.write { 24 } else { 17 },
+                        if ccs { cmd.data.block } else { cmd.data.block << 9 },
+                    )
                     phase = .Frame
                 },
                 .Fail => {},
@@ -467,7 +489,11 @@ module SdCardModel {
                                 0 => { idle = true; q = 0x01_FFFF_FFFF },
                                 8 => { q = 0x01_0000_01AA; qn = 5 },
                                 55 => q = if idle { 0x01_FFFF_FFFF } else { 0x00_FFFF_FFFF },
-                                41 => if idle { idle = false; q = 0x01_FFFF_FFFF } else { q = 0x00_FFFF_FFFF },
+                                41 => if idle {
+                                    idle = false; q = 0x01_FFFF_FFFF
+                                } else {
+                                    q = 0x00_FFFF_FFFF
+                                },
                                 58 => { q = 0x00_C0FF_8000; qn = 5 },
                                 17 => { q = 0x00_FFFF_FFFF; after = .RdData; dc = 0; larg = arg },
                                 24 => { q = 0x00_FFFF_FFFF; after = .WrToken; larg = arg },

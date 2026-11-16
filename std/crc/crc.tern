@@ -383,7 +383,12 @@ test "crc_update at compile time" {
 /// a descrambler locks to any scrambler after W bits regardless of the
 /// starting states. Taps use the `lfsr_taps` convention (bit k-1 set for
 /// x^k). The default is the 64b/66b scrambler x^58 + x^39 + 1.
-pub module Scrambler<T: type, W: uint = 58, Taps: uint = 0x0200_0040_0000_0000, Descramble: bool = false>
+pub module Scrambler<
+    T: type,
+    W: uint = 58,
+    Taps: uint = 0x0200_0040_0000_0000,
+    Descramble: bool = false,
+>
 where W >= 2, Taps < (1 << W), (Taps >> (W - 1)) == 1
 {
     /// Clock.

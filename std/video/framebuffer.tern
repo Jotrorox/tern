@@ -107,7 +107,10 @@ test "framebuffer write port never stalls" {
     let dut = sim Framebuffer<4, 4, Rgb565>()
     dut.reset()
     dut.rd.valid = false
-    dut.in = Stream { valid: true, data: PixelWrite { x: 2, y: 3, pixel: Rgb565 { r: 1, g: 2, b: 3 } } }
+    dut.in = Stream {
+        valid: true,
+        data: PixelWrite { x: 2, y: 3, pixel: Rgb565 { r: 1, g: 2, b: 3 } },
+    }
     for _ in 0..10 {
         expect dut.in.ready
         dut.step()

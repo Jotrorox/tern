@@ -28,7 +28,8 @@ pub struct DmaCmd<AW: uint, LenW: uint> {
 /// (RegisterFile with `wo DmaCmd -> Stream<DmaCmd>` entries) or a sequencer
 /// can drive them.
 pub module AxiDma<AW: uint = 32, DW: uint = 32, IDW: uint = 4, LenW: uint = 16, MaxBurst: uint = 16>
-where DW >= 8, DW <= 1024, DW.is_pow2(), MaxBurst >= 1, MaxBurst <= 256, MaxBurst.is_pow2(), AW >= 12
+where DW >= 8, DW <= 1024, DW.is_pow2(), MaxBurst >= 1, MaxBurst <= 256, MaxBurst.is_pow2(),
+      AW >= 12
 {
     /// Clock.
     in clk: clock
@@ -276,7 +277,12 @@ test "AxiDma MM2S reports an error response" {
     dut.step()
     for k in 0..2 {
         dut.m.r.valid = true
-        dut.m.r.data = Axi4R { id: 0, data: 0, resp: if k == 0 { RESP_SLVERR } else { RESP_OKAY }, last: k == 1 }
+        dut.m.r.data = Axi4R {
+            id: 0,
+            data: 0,
+            resp: if k == 0 { RESP_SLVERR } else { RESP_OKAY },
+            last: k == 1,
+        }
         dut.step()
     }
     dut.m.r.valid = false

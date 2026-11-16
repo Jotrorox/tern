@@ -14,7 +14,7 @@ pub extern module SB_PLL40_CORE("") <
     DIVR: bit<4> = 0,
     DIVF: bit<7> = 0,
     DIVQ: bit<3> = 0,
-    FILTER_RANGE: bit<3> = 0
+    FILTER_RANGE: bit<3> = 0,
 > {
     /// Reference clock.
     in REFERENCECLK: clock
@@ -43,7 +43,7 @@ pub extern module SB_PLL40_CORE("") <
 /// iCE40 programmable I/O cell.
 pub extern module SB_IO("") <
     PIN_TYPE: bit<6> = 0,
-    PULLUP: bit<1> = 0
+    PULLUP: bit<1> = 0,
 > {
     /// The pad (a #[top] tri port).
     in PACKAGE_PIN: tri<bool>
@@ -63,7 +63,7 @@ pub extern module EHXPLLL("") <
     CLKFB_DIV: uint = 1,
     CLKOP_DIV: uint = 8,
     CLKOP_CPHASE: uint = 0,
-    CLKOP_FPHASE: uint = 0
+    CLKOP_FPHASE: uint = 0,
 > {
     /// Reference clock.
     in CLKI: clock
@@ -138,9 +138,18 @@ where Divr <= 15, Divf <= 127, Divq >= 1, Divq <= 6
     pub const VCO_HZ: uint = ClkInHz * (Divf + 1) / (Divr + 1)
     /// Output frequency in Hz.
     pub const CLK_HZ: uint = VCO_HZ / (1 << Divq)
-    static_assert(PFD_HZ >= 10_000_000 and PFD_HZ <= 133_000_000, "SbPll: phase detector must run at 10..133 MHz")
-    static_assert(VCO_HZ >= 533_000_000 and VCO_HZ <= 1_066_000_000, "SbPll: VCO must be 533..1066 MHz")
-    static_assert(CLK_HZ >= 16_000_000 and CLK_HZ <= 275_000_000, "SbPll: output must be 16..275 MHz")
+    static_assert(
+        PFD_HZ >= 10_000_000 and PFD_HZ <= 133_000_000,
+        "SbPll: phase detector must run at 10..133 MHz",
+    )
+    static_assert(
+        VCO_HZ >= 533_000_000 and VCO_HZ <= 1_066_000_000,
+        "SbPll: VCO must be 533..1066 MHz",
+    )
+    static_assert(
+        CLK_HZ >= 16_000_000 and CLK_HZ <= 275_000_000,
+        "SbPll: output must be 16..275 MHz",
+    )
 
     /// Reference clock at `ClkInHz`.
     in clk_in: clock
@@ -155,10 +164,16 @@ where Divr <= 15, Divf <= 127, Divq >= 1, Divq <= 6
         DIVR: Divr,
         DIVF: Divf,
         DIVQ: Divq,
-        FILTER_RANGE: ice40_filter_range(PFD_HZ)
+        FILTER_RANGE: ice40_filter_range(PFD_HZ),
     >(
-        REFERENCECLK: clk_in, RESETB: rst, BYPASS: false, EXTFEEDBACK: false,
-        DYNAMICDELAY: 0, LATCHINPUTVALUE: false, SDI: false, SCLK: false
+        REFERENCECLK: clk_in,
+        RESETB: rst,
+        BYPASS: false,
+        EXTFEEDBACK: false,
+        DYNAMICDELAY: 0,
+        LATCHINPUTVALUE: false,
+        SDI: false,
+        SCLK: false,
     )
     clk = pll.PLLOUTGLOBAL
     locked = pll.LOCK
@@ -180,7 +195,9 @@ pub module SbIo<PullUp: bool = false> {
 
     // PIN_TYPE = PIN_OUTPUT_TRISTATE (0b1010xx) | PIN_INPUT (0bxxxx01)
     i = SB_IO<PIN_TYPE: 0b101001, PULLUP: if PullUp { 1 } else { 0 }>(
-        PACKAGE_PIN: pad, OUTPUT_ENABLE: oe, D_OUT_0: o
+        PACKAGE_PIN: pad,
+        OUTPUT_ENABLE: oe,
+        D_OUT_0: o,
     ).D_IN_0
 }
 
@@ -204,8 +221,14 @@ where ClkiDiv >= 1, ClkiDiv <= 128, ClkfbDiv >= 1, ClkfbDiv <= 128, ClkopDiv >= 
     pub const CLK_HZ: uint = ClkInHz * ClkfbDiv / ClkiDiv
     /// VCO frequency in Hz.
     pub const VCO_HZ: uint = CLK_HZ * ClkopDiv
-    static_assert(PFD_HZ >= 3_125_000 and PFD_HZ <= 400_000_000, "EcpPll: phase detector must run at 3.125..400 MHz")
-    static_assert(VCO_HZ >= 400_000_000 and VCO_HZ <= 800_000_000, "EcpPll: VCO must be 400..800 MHz")
+    static_assert(
+        PFD_HZ >= 3_125_000 and PFD_HZ <= 400_000_000,
+        "EcpPll: phase detector must run at 3.125..400 MHz",
+    )
+    static_assert(
+        VCO_HZ >= 400_000_000 and VCO_HZ <= 800_000_000,
+        "EcpPll: VCO must be 400..800 MHz",
+    )
 
     /// Reference clock at `ClkInHz`.
     in clk_in: clock
@@ -221,11 +244,18 @@ where ClkiDiv >= 1, ClkiDiv <= 128, ClkfbDiv >= 1, ClkfbDiv <= 128, ClkopDiv >= 
         CLKFB_DIV: ClkfbDiv,
         CLKOP_DIV: ClkopDiv,
         CLKOP_CPHASE: ClkopDiv - 1,
-        CLKOP_FPHASE: 0
+        CLKOP_FPHASE: 0,
     >(
-        CLKI: clk_in, RST: rst, STDBY: false, PHASESEL0: false, PHASESEL1: false,
-        PHASEDIR: false, PHASESTEP: false, PHASELOADREG: false, PLLWAKESYNC: false,
-        ENCLKOP: true
+        CLKI: clk_in,
+        RST: rst,
+        STDBY: false,
+        PHASESEL0: false,
+        PHASESEL1: false,
+        PHASEDIR: false,
+        PHASESTEP: false,
+        PHASELOADREG: false,
+        PLLWAKESYNC: false,
+        ENCLKOP: true,
     )
     pll.CLKFB = pll.CLKOP
     clk = pll.CLKOP

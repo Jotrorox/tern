@@ -23,7 +23,14 @@ package std::bus
 /// competing for one slave are served round-robin, one transaction each.
 /// Simplification (documented): AXI4-Lite level, one outstanding transaction
 /// per master port and per slave port.
-pub module Axi4Crossbar<Masters: uint, Slaves: uint, Bases: [uint; Slaves], Sizes: [uint; Slaves], AW: uint = 32, DW: uint = 32>
+pub module Axi4Crossbar<
+    Masters: uint,
+    Slaves: uint,
+    Bases: [uint; Slaves],
+    Sizes: [uint; Slaves],
+    AW: uint = 32,
+    DW: uint = 32,
+>
 where Masters >= 1, Slaves >= 1, DW == 32 or DW == 64
 {
     /// Clock.
@@ -43,9 +50,15 @@ where Masters >= 1, Slaves >= 1, DW == 32 or DW == 64
 
     for j in 0..Slaves {
         static_assert(Sizes[j] > 0, "Axi4Crossbar: empty address region")
-        static_assert(Bases[j] + Sizes[j] <= (1 << AW), "Axi4Crossbar: address region outside the address space")
+        static_assert(
+            Bases[j] + Sizes[j] <= (1 << AW),
+            "Axi4Crossbar: address region outside the address space",
+        )
         for k in 0..j {
-            static_assert(Bases[j] >= Bases[k] + Sizes[k] or Bases[k] >= Bases[j] + Sizes[j], "Axi4Crossbar: overlapping address regions")
+            static_assert(
+                Bases[j] >= Bases[k] + Sizes[k] or Bases[k] >= Bases[j] + Sizes[j],
+                "Axi4Crossbar: overlapping address regions",
+            )
         }
     }
 
@@ -122,7 +135,9 @@ where Masters >= 1, Slaves >= 1, DW == 32 or DW == 64
             if fire { owner = pick; last = pick }
         }
 
-        property owner_held_while_busy { always (!back.req.ready and !back.rsp.valid) |=> stable(owner) }
+        property owner_held_while_busy {
+            always (!back.req.ready and !back.rsp.valid) |=> stable(owner)
+        }
     }
 
     for i in 0..Masters {
@@ -154,6 +169,7 @@ where Masters >= 1, Slaves >= 1, DW == 32 or DW == 64
 
 /// Address map used by the interconnect tests: two 4 KiB slaves at 0x0000 and 0x1000.
 const TestBases: [uint; 2] = [0x0000, 0x1000]
+
 /// Sizes matching TestBases.
 const TestSizes: [uint; 2] = [0x1000, 0x1000]
 
@@ -274,7 +290,14 @@ test "Axi4Crossbar serves two masters competing for one slave in turn" {
 /// owning its address (or is answered with DECERR when unmapped), and the next
 /// request is granted once the response has been returned. This is the
 /// low-area alternative to Axi4Crossbar with the same ports and address map.
-pub module Axi4Interconnect<Masters: uint, Slaves: uint, Bases: [uint; Slaves], Sizes: [uint; Slaves], AW: uint = 32, DW: uint = 32>
+pub module Axi4Interconnect<
+    Masters: uint,
+    Slaves: uint,
+    Bases: [uint; Slaves],
+    Sizes: [uint; Slaves],
+    AW: uint = 32,
+    DW: uint = 32,
+>
 where Masters >= 1, Slaves >= 1, DW == 32 or DW == 64
 {
     /// Clock.
@@ -294,9 +317,15 @@ where Masters >= 1, Slaves >= 1, DW == 32 or DW == 64
 
     for j in 0..Slaves {
         static_assert(Sizes[j] > 0, "Axi4Interconnect: empty address region")
-        static_assert(Bases[j] + Sizes[j] <= (1 << AW), "Axi4Interconnect: address region outside the address space")
+        static_assert(
+            Bases[j] + Sizes[j] <= (1 << AW),
+            "Axi4Interconnect: address region outside the address space",
+        )
         for k in 0..j {
-            static_assert(Bases[j] >= Bases[k] + Sizes[k] or Bases[k] >= Bases[j] + Sizes[j], "Axi4Interconnect: overlapping address regions")
+            static_assert(
+                Bases[j] >= Bases[k] + Sizes[k] or Bases[k] >= Bases[j] + Sizes[j],
+                "Axi4Interconnect: overlapping address regions",
+            )
         }
     }
 

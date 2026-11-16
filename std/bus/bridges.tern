@@ -464,7 +464,7 @@ where DW == 32 or DW == 64
     reg state: State = .Idle
     reg adr: uint<AW> = 0
     reg dat: uint<DW> = 0
-    reg sel: bit<DW/8> = all0
+    reg sel: bit<DW / 8> = all0
     reg aw_pend: bool = false
     reg w_pend: bool = false
     reg ack_q: bool = false

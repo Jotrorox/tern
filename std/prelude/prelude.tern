@@ -18,9 +18,9 @@ package std::prelude
 /// consumer can always accept (pipelines with a fixed latency, status words).
 pub bundle Valid<T: type> {
     /// High in every cycle in which `data` carries a value.
-    valid: bool
+    valid: bool,
     /// The payload. Meaningless while `valid` is low.
-    data: T
+    data: T,
 }
 
 /// The standard valid/ready handshake. A beat transfers in every cycle in
@@ -29,11 +29,11 @@ pub bundle Valid<T: type> {
 /// never depend combinationally on `ready` (`ready` may depend on `valid`).
 pub bundle Stream<T: type> {
     /// The producer offers `data` this cycle.
-    valid: bool
+    valid: bool,
     /// The payload. Meaningless while `valid` is low.
-    data: T
+    data: T,
     /// The consumer accepts a beat this cycle. Flows against the bundle.
-    flip ready: bool
+    flip ready: bool,
 
     /// True in a cycle in which a beat transfers (`valid and ready`).
     fn fire() -> bool { self.valid and self.ready }
@@ -45,18 +45,25 @@ pub bundle Stream<T: type> {
 
 /// Unsigned 8-bit integer.
 pub type u8 = uint<8>
+
 /// Unsigned 16-bit integer.
 pub type u16 = uint<16>
+
 /// Unsigned 32-bit integer.
 pub type u32 = uint<32>
+
 /// Unsigned 64-bit integer.
 pub type u64 = uint<64>
+
 /// Signed (two's-complement) 8-bit integer.
 pub type s8 = sint<8>
+
 /// Signed (two's-complement) 16-bit integer.
 pub type s16 = sint<16>
+
 /// Signed (two's-complement) 32-bit integer.
 pub type s32 = sint<32>
+
 /// Signed (two's-complement) 64-bit integer.
 pub type s64 = sint<64>
 
@@ -146,7 +153,9 @@ test "integer aliases have the right widths" {
 
 test "stream fire needs valid and ready" {
     let dut = sim StreamProbe()
-    for (v, r, f) in [(false, false, false), (true, false, false), (false, true, false), (true, true, true)] {
+    for (v, r, f) in [
+        (false, false, false), (true, false, false), (false, true, false), (true, true, true),
+    ] {
         dut.s = Stream { valid: v, data: 0x5A }
         dut.accept = r
         dut.settle()

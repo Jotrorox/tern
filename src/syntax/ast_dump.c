@@ -868,6 +868,7 @@ static void ad_item(AdState *d, const Item *it)
                         sb_putc(d->sb, ' ');
                         ad_expr(d, f->bit_lo);
                     }
+                    ad_attrs(d, f->attrs);
                     ad_doc(d, f->doc);
                     sb_putc(d->sb, ')');
                 }

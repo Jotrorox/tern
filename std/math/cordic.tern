@@ -257,8 +257,10 @@ test "cordic rotate: cos and sin" {
     let dut = sim Cordic<16, .Rotate>()
     dut.reset()
     // (angle as a 16-bit binary angle, cos * 2^14, sin * 2^14)
-    for (z, c, s) in [(5461, 14189, 8192), (21845, -8192, 14189), (32767, -16384, 0),
-                      (-10923, 8192, -14189), (0, 16384, 0)] {
+    for (z, c, s) in [
+        (5461, 14189, 8192), (21845, -8192, 14189), (32767, -16384, 0),
+        (-10923, 8192, -14189), (0, 16384, 0),
+    ] {
         dut.in = Valid { valid: true, data: CordicData { x: 9949, y: 0, z: z } }
         dut.step()
         dut.in.valid = false
@@ -273,8 +275,10 @@ test "cordic vector: magnitude and atan2 in every quadrant" {
     let dut = sim Cordic<16, .Vector>()
     dut.reset()
     // (x, y, gain * |v|, atan2 as a binary angle)
-    for (x, y, m, a) in [(3000, 4000, 8234, 9672), (-3000, 4000, 8234, 23096),
-                         (4000, -3000, 8234, -6712), (-4000, -3000, 8234, -26056)] {
+    for (x, y, m, a) in [
+        (3000, 4000, 8234, 9672), (-3000, 4000, 8234, 23096),
+        (4000, -3000, 8234, -6712), (-4000, -3000, 8234, -26056),
+    ] {
         dut.in = Valid { valid: true, data: CordicData { x: x, y: y, z: 0 } }
         dut.step()
         dut.in.valid = false

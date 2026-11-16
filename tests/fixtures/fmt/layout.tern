@@ -1,0 +1,26 @@
+// Spacing, indentation, blank lines and item separation.
+package demo::layout
+use std::fifo::Fifo
+use std::stream::{Stream,Beat}
+
+
+pub use std::math::{gray , ungray}
+/// A small adder.
+pub module Adder<W:uint=8>{
+  in a:uint<W>
+  in b : uint<W>
+      out y: uint<W+1>
+
+
+
+  y=a+b
+}
+const Limit:uint=10
+const MAX_DEPTH : uint = 0x00FF_FFFF
+struct Pair<T:type>{a:T,b:T}
+enum Mode{Idle,Busy}
+type Word=uint< 32 >
+fn twice(x:u8)->u9{x+x}
+module Empty{
+}
+test "spaces"{let x=Pair{a:1,b:2};expect x.a==1}

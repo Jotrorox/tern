@@ -1,0 +1,50 @@
+module std::fifo::Fifo
+
+    pub module Fifo<T: type, Depth: uint = 16, AlmostFull: uint = Depth - 1>
+    where Depth.is_pow2(), Depth >= 2, AlmostFull <= Depth
+
+Synchronous FIFO built on a memory with a synchronous read port, so it infers
+block RAM. `pop.data` is driven directly by the RAM's output register. The read
+address is looked ahead (`rd_ptr + 1` while popping), which sustains one pop per
+cycle with no extra output stage. An entry becomes visible on `pop` two cycles
+after its push (one for the write, one for the registered read). `count`, `full`
+and `almost_full` count every stored entry, including the one still in flight to
+the output.
+
+Generics:
+  T           type
+  Depth       uint = 16
+  AlmostFull  uint = Depth - 1
+
+Ports:
+  in   clk          clock                   Clock.
+  in   rst          reset                   Reset; empties the FIFO (contents
+                                            are not cleared).
+  in   push         Stream<T>               Entries to store. `push.ready` is
+                                            low exactly when the FIFO is full.
+  out  pop          Stream<T>               The oldest entry.
+  out  count        uint<clog2(Depth) + 1>  Number of stored entries, 0 ..=
+                                            Depth.
+  out  empty        bool                    No entries are stored.
+  out  full         bool                    `Depth` entries are stored.
+  out  almost_full  bool                    At least `AlmostFull` entries are
+                                            stored.
+
+Constants:
+  LATENCY: uint = 2
+      Cycles from `push.fire()` to the entry being offered on an empty FIFO.
+
+Properties:
+  count_bounded        Occupancy never exceeds the depth.
+  visible_within_used  Only stored entries are ever offered.
+  pop_stable           A stalled output entry is held unchanged until it is
+                       popped.
+  fills_up             cover: `full`
+  wraps_around         cover: `full ##[1:$] empty`
+
+Tested behaviours:
+  * fifo preserves order
+  * fifo: full stops pushes, popping frees a slot
+  * fifo: entry appears two cycles after push
+  * fifo: simultaneous push and pop at full throughput
+  * fifo: random traffic is a perfect queue
