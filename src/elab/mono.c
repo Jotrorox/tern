@@ -645,8 +645,8 @@ Ty *el_regmap_type(Elab *el, Item *rm, FileUnit *file, const char *name, Span at
     Env *env = elab_env_new(el, NULL, file ? file : sema_file_of_item(S, rm));
     Ty *r = NULL;
     if (strcmp(name, "Regs") == 0) {
-        uint32_t n = rm->u.regmap.nentries;
-        TyField *tf = (TyField *)xcalloc(n ? n : 1, sizeof(TyField));
+        uint32_t n = rm->u.regmap.nentries, nf = 0;
+        TyField *tf = (TyField *)xcalloc(2 * n + 1, sizeof(TyField));
         StrBuf key = {0}, nm = {0}, emit = {0};
         int ok = 1;
         for (i = 0; i < n; i++) {
@@ -666,22 +666,47 @@ Ty *el_regmap_type(Elab *el, Item *rm, FileUnit *file, const char *name, Span at
                 }
                 t = st;
             }
-            tf[i].name = e->name.name;
-            tf[i].ty = t;
-            tf[i].loc = e->span;
-            tf[i].doc = e->doc;
-            /* hardware reads rw/wo registers (outputs of the register file) and
-             * provides ro/w1c/rw1s status (inputs: flip) */
-            tf[i].flip = strcmp(acc, "ro") == 0 || strcmp(acc, "w1c") == 0 || strcmp(acc, "rw1s") == 0;
+            /* the register file drives rw/wo/w1c/rw1s values (outputs) and the
+             * hardware provides ro values (inputs: flip); w1c registers also
+             * take `<name>_set` (bits the hardware sets) and rw1s registers
+             * `<name>_clr` (bits the hardware clears) */
+            tf[nf].name = e->name.name;
+            tf[nf].ty = t;
+            tf[nf].loc = e->span;
+            tf[nf].doc = e->doc;
+            tf[nf].flip = strcmp(acc, "ro") == 0;
+            nf++;
+            if (strcmp(acc, "w1c") == 0 || strcmp(acc, "rw1s") == 0) {
+                tf[nf].name = intern_cstr(arena_printf(&el->arena, "%s_%s", e->name.name, acc[0] == 'w' ? "set" : "clr"));
+                tf[nf].ty = t;
+                tf[nf].loc = e->span;
+                tf[nf].flip = 1;
+                nf++;
+            }
         }
         sb_printf(&key, "regmap|%p|Regs", (void *)rm);
         sb_printf(&nm, "%s::Regs", rm->name.name);
         sb_printf(&emit, "%s_Regs", rm->name.name);
-        r = ok ? ty_bundle(S, sb_cstr(&key), sb_cstr(&nm), sb_cstr(&emit), NULL, n, tf, rm->name.span) : S->t_error;
+        r = ok ? ty_bundle(S, sb_cstr(&key), sb_cstr(&nm), sb_cstr(&emit), rm, nf, tf, rm->name.span) : S->t_error;
+        if (r->kind != TY_ERROR)
+            r->file = file ? file : sema_file_of_item(S, rm);
         free(tf);
         sb_free(&key);
         sb_free(&nm);
         sb_free(&emit);
+    } else if (strncmp(name, "__stream_", 9) == 0) {
+        /* the stream type of a `wo T -> Stream<T>` entry (generated RegisterFile ports) */
+        for (i = 0; i < rm->u.regmap.nentries; i++) {
+            RegEntry *e = rm->u.regmap.entries[i];
+            if (e->kind == REG_STREAM && strcmp(e->name.name, name + 9) == 0) {
+                r = elab_eval_type(el, e->stream_type, env);
+                break;
+            }
+        }
+        if (!r) {
+            el_error(el, at, "regmap `%s` has no stream register `%s`", rm->name.name, name + 9);
+            r = S->t_error;
+        }
     } else {
         for (i = 0; i < rm->u.regmap.nentries; i++) {
             RegEntry *e = rm->u.regmap.entries[i];

@@ -149,4 +149,10 @@ int el_check_where(Elab *el, WhereList *w, Env *genv, const char *owner, Span at
 const char *el_ctx_prefix(Env *ctx);
 Ty *el_regmap_type(Elab *el, Item *regmap, FileUnit *file, const char *name, Span at);
 
+/* regfile.c: std::bus::RegisterFile<Map, Bus> */
+int el_regfile_is(const Item *it, const FileUnit *file);
+/* The generated statements of one instantiation (ports, front-end, storage,
+ * decode), to be appended to the declared body; 0 after reporting errors. */
+int el_regfile_body(Elab *el, ValModule *vm, Stmt ***body_out, uint32_t *n_out);
+
 #endif /* TERN_ELAB_IMPL_H */

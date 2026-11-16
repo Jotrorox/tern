@@ -671,6 +671,8 @@ Ty *elab_eval_type(Elab *el, Type *t, Env *env)
                 Ty *r = el_type_item(el, it, v.u.fn->file, v.u.fn->ctx, NULL, 0, env, t->span, NULL);
                 return r;
             }
+            if (it->kind == ITEM_REGMAP) /* a regmap as a type (RegisterFile<Map>): its Regs bundle */
+                return el_regmap_type(el, it, v.u.fn->file, "Regs", t->span);
         }
         el_error(el, t->span, "`%s` is not a type", el_span_text(t->span));
         return S->t_error;
@@ -1073,6 +1075,11 @@ Value el_member(Elab *el, Value base, const char *name, Span at, Env *env)
             v = val_int_bn(&el->arena, t, &b);
             bn_free(&b);
             return v;
+        }
+        if (t->def && t->def->kind == ITEM_REGMAP) {
+            /* `Map::Status` where Map is a regmap's Regs bundle */
+            Ty *r = el_regmap_type(el, t->def, t->file, name, at);
+            return r->kind == TY_ERROR ? val_error() : val_type(S, r);
         }
         if (strcmp(name, "from_bits") == 0) {
             Value v;

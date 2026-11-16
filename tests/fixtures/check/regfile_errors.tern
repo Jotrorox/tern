@@ -1,0 +1,29 @@
+// RegisterFile<Map, Bus>: errors in the regmap and in the generic arguments.
+use std::bus::{RegisterFile, Axi4Lite, Axi4}
+
+regmap Bad {
+    0x00 a: rw u8,
+    0x02 b: rw u8,
+    0x04 c: rw u32,
+    0x04 d: ro u8,
+    0x08 e: ro u8 -> Stream<u8>,
+    0x0C f: wo u8 -> Stream<u16>,
+}
+
+struct NotAMap { x: u8 }
+
+regmap Fine {
+    0x0 a: rw u8,
+}
+
+module Top {
+    in clk: clock
+    in rst: reset
+    in bus: Axi4Lite<32, 32>
+    in bus4: Axi4<32, 32, 4>
+    in bus2: Axi4Lite<32, 32>
+
+    let r1 = RegisterFile<Bad>(bus)
+    let r2 = RegisterFile<NotAMap>(bus: bus2)
+    let r3 = RegisterFile<Fine, Axi4<32, 32, 4>>(bus: bus4)
+}

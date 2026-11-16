@@ -145,18 +145,22 @@ ELAB_SRCS = \
 	src/elab/value.c \
 	src/elab/consteval.c \
 	src/elab/mono.c \
-	src/elab/elab.c
+	src/elab/elab.c \
+	src/elab/regfile.c
 ELAB_OBJS = \
 	$(OBJ)/elab_value.o \
 	$(OBJ)/elab_consteval.o \
 	$(OBJ)/elab_mono.o \
-	$(OBJ)/elab_elab.o
+	$(OBJ)/elab_elab.o \
+	$(OBJ)/elab_regfile.o
 $(OBJ)/elab_value.o: src/elab/value.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/elab/value.c -o $@
 $(OBJ)/elab_consteval.o: src/elab/consteval.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/elab/consteval.c -o $@
 $(OBJ)/elab_mono.o: src/elab/mono.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/elab/mono.c -o $@
+$(OBJ)/elab_regfile.o: src/elab/regfile.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/elab/regfile.c -o $@
 $(OBJ)/elab_elab.o: src/elab/elab.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/elab/elab.c -o $@
 

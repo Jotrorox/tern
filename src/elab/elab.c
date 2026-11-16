@@ -2043,6 +2043,21 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
     el->undo_depth = 0;
     body = it->kind == ITEM_MODULE ? it->u.module.body : it->u.extern_mod.body;
     nbody = it->kind == ITEM_MODULE ? it->u.module.nbody : it->u.extern_mod.nbody;
+    if (el_regfile_is(it, vm->file)) {
+        /* compiler-generated register file (regfile.c) */
+        Stmt **gen = NULL;
+        uint32_t ngen = 0;
+        if (el_regfile_body(el, vm, &gen, &ngen)) {
+            Stmt **all = ANEWN(&el->arena, Stmt *, nbody + ngen);
+            if (nbody)
+                memcpy(all, body, nbody * sizeof(Stmt *));
+            memcpy(all + nbody, gen, ngen * sizeof(Stmt *));
+            body = all;
+            nbody += ngen;
+        } else {
+            mi->failed = 1;
+        }
+    }
     elb_module_attrs(el, &mc);
     elb_params(el, &mc);
     if (!mc.is_extern)

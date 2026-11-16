@@ -1,0 +1,6 @@
+regfile_errors.tern:6:5: error: register `b` at offset 0x2 is not aligned to the 4-byte bus words
+regfile_errors.tern:9:13: error: a stream register (`T -> Stream<T>`) must be `wo`
+regfile_errors.tern:10:22: error: register `f`: Stream<uint<16>> is not a stream of uint<8> (fields `valid` and `data`)
+regfile_errors.tern:8:5: error: register `d` overlaps register `c`
+regfile_errors.tern:27:14: error: `RegisterFile` needs a regmap as its first generic argument, found NotAMap
+regfile_errors.tern:28:14: error: `RegisterFile` supports the buses Axi4Lite, Apb and Wishbone of std::bus, not Axi4<32, 32, 4>

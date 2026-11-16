@@ -279,10 +279,264 @@ done:
     tl_close(&t);
 }
 
+/* ----------------------------------------------------- register files -- */
+
+/* AXI4-Lite write; returns the B response (0 OKAY, 2 SLVERR), or 99 on timeout */
+static uint64_t tl_axi_write(TlDesign *t, uint64_t addr, uint64_t data, uint64_t strb)
+{
+    int aw_done = 0, w_done = 0, i;
+    tl_poke(t, "bus.aw.valid", 1);
+    tl_poke(t, "bus.aw.data", addr);
+    tl_poke(t, "bus.w.valid", 1);
+    tl_poke(t, "bus.w.data", (data << 4) | strb);
+    tl_poke(t, "bus.b.ready", 1);
+    for (i = 0; i < 50; i++) {
+        uint64_t b;
+        sim_settle(t->m);
+        if (!aw_done && tl_peek(t, "bus.aw.ready"))
+            aw_done = 2;
+        if (!w_done && tl_peek(t, "bus.w.ready"))
+            w_done = 2;
+        b = tl_peek(t, "bus.b.valid");
+        if (b) {
+            uint64_t resp = tl_peek(t, "bus.b.data");
+            tl_step(t, 1);
+            return resp;
+        }
+        tl_step(t, 1);
+        if (aw_done == 2) {
+            aw_done = 1;
+            tl_poke(t, "bus.aw.valid", 0);
+        }
+        if (w_done == 2) {
+            w_done = 1;
+            tl_poke(t, "bus.w.valid", 0);
+        }
+    }
+    return 99;
+}
+
+/* AXI4-Lite read; *resp gets the response */
+static uint64_t tl_axi_read(TlDesign *t, uint64_t addr, uint64_t *resp)
+{
+    int ar_done = 0, i;
+    tl_poke(t, "bus.ar.valid", 1);
+    tl_poke(t, "bus.ar.data", addr);
+    tl_poke(t, "bus.r.ready", 1);
+    for (i = 0; i < 50; i++) {
+        sim_settle(t->m);
+        if (!ar_done && tl_peek(t, "bus.ar.ready"))
+            ar_done = 2;
+        if (tl_peek(t, "bus.r.valid")) {
+            uint64_t r = tl_peek(t, "bus.r.data");
+            tl_step(t, 1);
+            *resp = r & 3;
+            return r >> 2;
+        }
+        tl_step(t, 1);
+        if (ar_done == 2) {
+            ar_done = 1;
+            tl_poke(t, "bus.ar.valid", 0);
+        }
+    }
+    *resp = 99;
+    return 0;
+}
+
+static void test_regfile_axi(void)
+{
+    TlDesign t;
+    uint64_t resp, v;
+    if (!tl_open(&t, "regfile.tern", "RegsAxi"))
+        goto done;
+    tl_poke(&t, "bus.aw.valid", 0);
+    tl_poke(&t, "bus.w.valid", 0);
+    tl_poke(&t, "bus.ar.valid", 0);
+    tl_poke(&t, "bus.b.ready", 1);
+    tl_poke(&t, "bus.r.ready", 1);
+    tl_poke(&t, "busy", 1);
+    tl_poke(&t, "irq_in", 0);
+    tl_poke(&t, "go_done", 0);
+    tl_poke(&t, "txq.ready", 0);
+    sim_reset(&t.m[0]);
+    sim_settle(t.m);
+    /* reset values: ctrl = 0x305 (enable, mode Slow... level 3), scratch */
+    TL_EQ(tl_peek(&t, "enable"), 1);
+    TL_EQ(tl_peek(&t, "mode"), 2);
+    TL_EQ(tl_peek(&t, "level"), 3);
+    TL_EQ(tl_peek(&t, "scratch"), 0x12345678);
+    v = tl_axi_read(&t, 0x00, &resp);
+    TL_EQ(resp, 0);
+    TL_EQ(v, 0x305);
+    /* rw with byte strobes */
+    TL_EQ(tl_axi_write(&t, 0x08, 0xDEADBEEF, 0xF), 0);
+    TL_EQ(tl_peek(&t, "scratch"), 0xDEADBEEF);
+    TL_EQ(tl_axi_write(&t, 0x08, 0x11223344, 0x4), 0);
+    TL_EQ(tl_peek(&t, "scratch"), 0xDE22BEEF);
+    v = tl_axi_read(&t, 0x08, &resp);
+    TL_EQ(v, 0xDE22BEEF);
+    /* fields with a gap: bits outside the fields stay zero */
+    TL_EQ(tl_axi_write(&t, 0x00, 0xFFFFFFFF, 0xF), 0);
+    TL_EQ(tl_axi_read(&t, 0x00, &resp), 0xF07);
+    TL_EQ(tl_peek(&t, "mode"), 3);
+    TL_EQ(tl_peek(&t, "level"), 15);
+    TL_EQ(tl_axi_write(&t, 0x00, 0x00000002, 0x1), 0); /* byte 0 only: level keeps 15 */
+    TL_EQ(tl_peek(&t, "enable"), 0);
+    TL_EQ(tl_peek(&t, "mode"), 1);
+    TL_EQ(tl_peek(&t, "level"), 15);
+    /* ro: reads the input in layout, writes ignored with OKAY */
+    v = tl_axi_read(&t, 0x04, &resp);
+    TL_EQ(resp, 0);
+    TL_EQ(v, 0x5A01);
+    TL_EQ(tl_axi_write(&t, 0x04, 0, 0xF), 0);
+    /* w1c: hardware sets, software clears written ones */
+    tl_poke(&t, "irq_in", 0x5);
+    tl_step(&t, 1);
+    tl_poke(&t, "irq_in", 0);
+    sim_settle(t.m);
+    TL_EQ(tl_peek(&t, "irq"), 0x5);
+    TL_EQ(tl_axi_read(&t, 0x0C, &resp), 0x5);
+    TL_EQ(tl_axi_write(&t, 0x0C, 0x4, 0xF), 0);
+    TL_EQ(tl_peek(&t, "irq"), 0x1);
+    /* rw1s: software sets, hardware clears */
+    TL_EQ(tl_axi_write(&t, 0x10, 0x2, 0xF), 0);
+    TL_EQ(tl_peek(&t, "go"), 0x2);
+    TL_EQ(tl_axi_write(&t, 0x10, 0x1, 0xF), 0);
+    TL_EQ(tl_peek(&t, "go"), 0x3);
+    tl_poke(&t, "go_done", 0x2);
+    tl_step(&t, 1);
+    tl_poke(&t, "go_done", 0);
+    sim_settle(t.m);
+    TL_EQ(tl_peek(&t, "go"), 0x1);
+    /* wo: output follows writes, reads give 0 */
+    TL_EQ(tl_axi_write(&t, 0x14, 0xABCD, 0x3), 0);
+    TL_EQ(tl_peek(&t, "key"), 0xABCD);
+    TL_EQ(tl_axi_read(&t, 0x14, &resp), 0);
+    TL_EQ(resp, 0);
+    /* stream register: one beat per write; a second write while full is SLVERR */
+    TL_EQ(tl_axi_write(&t, 0x18, 0x41, 0x1), 0);
+    sim_settle(t.m);
+    TL_EQ(tl_peek(&t, "txq.valid"), 1);
+    TL_EQ(tl_peek(&t, "txq.data"), 0x41);
+    TL_EQ(tl_axi_write(&t, 0x18, 0x42, 0x1), 2);
+    TL_EQ(tl_peek(&t, "txq.data"), 0x41);
+    tl_poke(&t, "txq.ready", 1);
+    tl_step(&t, 1);
+    sim_settle(t.m);
+    TL_EQ(tl_peek(&t, "txq.valid"), 0);
+    tl_poke(&t, "txq.ready", 0);
+    TL_EQ(tl_axi_write(&t, 0x18, 0x43, 0x1), 0);
+    sim_settle(t.m);
+    TL_EQ(tl_peek(&t, "txq.valid"), 1);
+    TL_EQ(tl_peek(&t, "txq.data"), 0x43);
+    tl_poke(&t, "txq.ready", 1);
+    tl_step(&t, 1);
+    sim_settle(t.m);
+    TL_EQ(tl_peek(&t, "txq.valid"), 0);
+    /* a register wider than the bus: two words */
+    TL_EQ(tl_axi_write(&t, 0x20, 0x89ABCDEF, 0xF), 0);
+    TL_EQ(tl_axi_write(&t, 0x24, 0x76543210, 0xF), 0);
+    TL_EQ(tl_peek(&t, "stamp"), 0x3210ull << 32 | 0x89ABCDEFull);
+    TL_EQ(tl_axi_read(&t, 0x24, &resp), 0x3210);
+    /* unmapped offsets */
+    tl_axi_read(&t, 0x40, &resp);
+    TL_EQ(resp, 2);
+    TL_EQ(tl_axi_write(&t, 0x1C, 1, 0xF), 2);
+done:
+    tl_close(&t);
+}
+
+static void test_regfile_apb_wb(void)
+{
+    TlDesign t;
+    if (tl_open(&t, "regfile.tern", "RegsApb")) {
+        tl_poke(&t, "b", 0x77);
+        tl_poke(&t, "c_set", 0);
+        tl_poke(&t, "bus.pprot", 0);
+        tl_poke(&t, "bus.psel", 0);
+        tl_poke(&t, "bus.penable", 0);
+        sim_reset(t.m);
+        /* write a = 0x5C */
+        tl_poke(&t, "bus.psel", 1);
+        tl_poke(&t, "bus.pwrite", 1);
+        tl_poke(&t, "bus.paddr", 0x0);
+        tl_poke(&t, "bus.pwdata", 0x5C);
+        tl_poke(&t, "bus.pstrb", 0xF);
+        tl_step(&t, 1);
+        tl_poke(&t, "bus.penable", 1);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "bus.pready"), 1);
+        TL_EQ(tl_peek(&t, "bus.pslverr"), 0);
+        tl_step(&t, 1);
+        tl_poke(&t, "bus.psel", 0);
+        tl_poke(&t, "bus.penable", 0);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "a"), 0x5C);
+        /* read b (ro) */
+        tl_poke(&t, "bus.psel", 1);
+        tl_poke(&t, "bus.pwrite", 0);
+        tl_poke(&t, "bus.paddr", 0x4);
+        tl_step(&t, 1);
+        tl_poke(&t, "bus.penable", 1);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "bus.prdata"), 0x77);
+        TL_EQ(tl_peek(&t, "bus.pslverr"), 0);
+        /* unmapped */
+        tl_poke(&t, "bus.paddr", 0x100);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "bus.pslverr"), 1);
+        tl_poke(&t, "bus.psel", 0);
+        tl_poke(&t, "bus.penable", 0);
+        /* w1c c */
+        tl_poke(&t, "c_set", 0x81);
+        tl_step(&t, 1);
+        tl_poke(&t, "c_set", 0);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "c"), 0x81);
+    }
+    tl_close(&t);
+    if (tl_open(&t, "regfile.tern", "RegsWb")) {
+        tl_poke(&t, "b", 0x66);
+        tl_poke(&t, "bus.cyc", 0);
+        tl_poke(&t, "bus.stb", 0);
+        sim_reset(t.m);
+        tl_poke(&t, "bus.cyc", 1);
+        tl_poke(&t, "bus.stb", 1);
+        tl_poke(&t, "bus.we", 1);
+        tl_poke(&t, "bus.adr", 0x0);
+        tl_poke(&t, "bus.dat_w", 0x3E);
+        tl_poke(&t, "bus.sel", 0xF);
+        tl_step(&t, 1);
+        tl_poke(&t, "bus.stb", 0);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "bus.ack"), 1);
+        TL_EQ(tl_peek(&t, "a"), 0x3E);
+        tl_step(&t, 1);
+        tl_poke(&t, "bus.stb", 1);
+        tl_poke(&t, "bus.we", 0);
+        tl_poke(&t, "bus.adr", 0x4);
+        tl_step(&t, 1);
+        tl_poke(&t, "bus.stb", 0);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "bus.ack"), 1);
+        TL_EQ(tl_peek(&t, "bus.dat_r"), 0x66);
+        tl_step(&t, 1);
+        tl_poke(&t, "bus.stb", 1);
+        tl_poke(&t, "bus.adr", 0x40);
+        tl_step(&t, 1);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "bus.err"), 1);
+        TL_EQ(tl_peek(&t, "bus.ack"), 0);
+    }
+    tl_close(&t);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1)
         tl_tern = argv[1];
+    test_regfile_axi();
+    test_regfile_apb_wb();
     test_index_range();
     test_bundle_index();
     test_fn_return();

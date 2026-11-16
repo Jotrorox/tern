@@ -39,6 +39,7 @@
 #include "elab/consteval.c"
 #include "elab/mono.c"
 #include "elab/elab.c"
+#include "elab/regfile.c"
 #include "check/check.c"
 
 #include "sim/bitvec.c"

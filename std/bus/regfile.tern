@@ -275,13 +275,23 @@ test "WishboneRegPort: err instead of ack" {
 /// * adds one port per regmap entry (the fields of `Map::Regs`): `rw`, `wo`,
 ///   `w1c` and `rw1s` registers are outputs of type `Map::<Name>` (or the
 ///   scalar type), `ro` registers are inputs, and `wo T -> Stream<T>` entries
-///   are output streams that carry one beat per bus write;
-/// * generates the decode on the RegBus: a write updates the addressed register
-///   honouring `strb` (`w1c` clears the written one bits, `rw1s` sets them),
-///   a read returns the addressed register (`ro`: the input; `wo`: zero),
-///   writes to `ro` registers are ignored with OKAY, and any access to an
-///   offset not in `Map` reports `err` (SLVERR on AXI4-Lite);
-/// * resets every register to zero unless the regmap gives a reset value.
+///   are output streams that carry one beat per bus write; a `w1c` register
+///   also has an input `<name>_set` (bits the hardware sets) and an `rw1s`
+///   register an input `<name>_clr` (bits the hardware clears);
+/// * generates the decode on the RegBus, on word addresses (offsets are
+///   aligned to the bus width; a register wider than the bus takes
+///   consecutive words, least significant first): a write updates the
+///   addressed register honouring `strb` (`w1c` clears the written one bits,
+///   with a hardware set in the same cycle winning; `rw1s` sets them, winning
+///   over a hardware clear), a read returns the addressed register in its
+///   bus layout (fields at their `@` positions, gaps read as zero; `ro`: the
+///   input; `wo`: zero), writes to `ro` registers are ignored with OKAY, and
+///   any access to an offset not in `Map` reports `err` (SLVERR on
+///   AXI4-Lite), as does a write to a stream register whose previous beat
+///   was not taken yet (the write is dropped);
+/// * resets every register to zero unless the regmap gives a reset value
+///   (`= value`: an integer in the bus layout or a value of the register's
+///   type).
 ///
 /// The bus behaviour (handshakes, latency, error responses) is therefore
 /// exactly that of the front-end module; see its tests.
