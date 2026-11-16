@@ -1,0 +1,205 @@
+package std::fifo
+
+use std::math::{gray, ungray}
+
+// ---------------------------------------------------------------------------
+// AsyncFifo
+// ---------------------------------------------------------------------------
+
+/// Dual-clock FIFO: the standard clock-domain-crossing data path.
+///
+/// Each side keeps a binary pointer (one bit wider than the address, so full
+/// and empty are distinguishable) and a registered Gray-coded copy of it.
+/// Only the Gray pointers cross domains, each through a two-flop
+/// synchronizer; because a Gray pointer changes one bit per increment, a
+/// sampled value is always either the old or the new pointer. Full is
+/// computed in the write domain against the synchronized read pointer and
+/// empty in the read domain against the synchronized write pointer, so both
+/// flags are conservative: the FIFO may look fuller (or emptier) than it is
+/// for a few cycles, never the other way round.
+///
+/// Storage is distributed RAM read combinationally in the read domain; an
+/// entry is only read after its write pointer has been synchronized, which
+/// guarantees the data has been stable for at least two read-clock cycles.
+///
+/// Both resets must be asserted together (overlapping) so the pointers
+/// restart consistently; derive them from one source with
+/// `std::cdc::ResetBridge`.
+#[cdc(async_fifo)]
+pub module AsyncFifo<T: type, Depth: uint = 16>
+where Depth.is_pow2(), Depth >= 2
+{
+    /// Write-side clock.
+    in src: clock
+    /// Write-side reset.
+    in src_rst: reset
+    /// Read-side clock.
+    in dst: clock
+    /// Read-side reset.
+    in dst_rst: reset
+
+    domain src_d = (src, src_rst)
+    domain dst_d = (dst, dst_rst)
+
+    /// Entries to store (write domain). `push.ready` is low while full.
+    in push: Stream<T> @ src_d
+    /// The oldest entry (read domain).
+    out pop: Stream<T> @ dst_d
+    /// Conservative occupancy seen from the write side (never too low).
+    out wr_count: uint<clog2(Depth) + 1> @ src_d
+    /// Conservative occupancy seen from the read side (never too high).
+    out rd_count: uint<clog2(Depth) + 1> @ dst_d
+
+    /// Read-clock cycles from a write-pointer update to the entry being
+    /// offered on an empty FIFO (two synchronizer flops plus the compare),
+    /// plus one write-clock cycle for the write itself.
+    pub const LATENCY: uint = 3
+
+    const AW: uint = clog2(Depth)
+    const PW: uint = AW + 1
+    type Addr = uint<AW>
+
+    #[ram(distributed)]
+    mem buf: [T; Depth]
+
+    // ---- write domain ----
+    reg wbin: uint<PW> = 0 @ src_d
+    reg wgray: bit<PW> = all0 @ src_d
+    #[async_reg]
+    reg wq1_rgray: bit<PW> = all0 @ src_d
+    #[async_reg]
+    reg wq2_rgray: bit<PW> = all0 @ src_d
+
+    let wused = wbin -% ungray(wq2_rgray)
+    push.ready = wused != Depth
+    wr_count = wused
+
+    on src_d {
+        wq1_rgray = rgray
+        wq2_rgray = wq1_rgray
+        if push.fire() {
+            buf[wbin as Addr] = push.data
+            let wnext = wbin +% 1
+            wbin = wnext
+            wgray = gray(wnext)
+        }
+    }
+
+    // ---- read domain ----
+    reg rbin: uint<PW> = 0 @ dst_d
+    reg rgray: bit<PW> = all0 @ dst_d
+    #[async_reg]
+    reg rq1_wgray: bit<PW> = all0 @ dst_d
+    #[async_reg]
+    reg rq2_wgray: bit<PW> = all0 @ dst_d
+
+    let rused = ungray(rq2_wgray) -% rbin
+    pop.valid = rused != 0
+    pop.data = buf[rbin as Addr]
+    rd_count = rused
+
+    on dst_d {
+        rq1_wgray = wgray
+        rq2_wgray = rq1_wgray
+        if pop.fire() {
+            let rnext = rbin +% 1
+            rbin = rnext
+            rgray = gray(rnext)
+        }
+    }
+
+    /// The write side never overfills.
+    property no_overflow {
+        always wr_count <= Depth
+    }
+
+    /// The read side never sees more entries than exist.
+    property no_underflow {
+        always rd_count <= Depth
+    }
+
+    /// The Gray write pointer changes at most one bit per write-clock cycle.
+    property wgray_one_bit {
+        always !stable(wgray) |-> count_ones(wgray ^ past(wgray)) == 1
+    }
+
+    /// The Gray read pointer changes at most one bit per read-clock cycle.
+    property rgray_one_bit {
+        always !stable(rgray) |-> count_ones(rgray ^ past(rgray)) == 1
+    }
+
+    /// A stalled output entry is held unchanged until it is popped.
+    property pop_stable {
+        always (pop.valid and !pop.ready) |=> pop.valid and stable(pop.data)
+    }
+
+    cover property fills_up { !push.ready }
+}
+
+test "async fifo: entry crosses after two read-clock cycles" {
+    let dut = sim AsyncFifo<u8, 8>()
+    dut.reset()
+    dut.pop.ready = false
+    dut.push = Stream { valid: true, data: 0x42 }
+    dut.src.step()
+    dut.push.valid = false
+    dut.settle()
+    expect !dut.pop.valid
+    dut.dst.step()
+    dut.settle()
+    expect !dut.pop.valid
+    dut.dst.step()
+    dut.settle()
+    expect dut.pop.valid and dut.pop.data == 0x42
+}
+
+test "async fifo: full after Depth writes with a stopped reader" {
+    let dut = sim AsyncFifo<u8, 4>()
+    dut.reset()
+    dut.pop.ready = false
+    for i in 0..4 {
+        dut.push = Stream { valid: true, data: i as u8 }
+        dut.settle()
+        expect dut.push.ready
+        dut.src.step()
+    }
+    dut.settle()
+    expect !dut.push.ready and dut.wr_count == 4
+    // the read side drains; the write side sees space only after the read
+    // pointer has been synchronized back
+    dut.pop.ready = true
+    dut.settle()
+    for _ in 0..3 { dut.dst.step() }
+    dut.pop.ready = false
+    dut.settle()
+    expect !dut.push.ready
+    dut.src.step()
+    dut.src.step()
+    dut.settle()
+    expect dut.push.ready
+}
+
+test "async fifo: random clock ratio and traffic keep order" {
+    let dut = sim AsyncFifo<u8, 8>()
+    dut.reset()
+    var next_in: u8 = 0
+    var next_out: u8 = 0
+    for _ in 0..4000 {
+        if rand<bool>() {
+            dut.push = Stream { valid: rand<bool>(), data: next_in }
+            dut.settle()
+            if dut.push.valid and dut.push.ready { next_in = next_in +% 1 }
+            dut.src.step()
+        }
+        if rand<bool>() {
+            dut.pop.ready = rand<bool>()
+            dut.settle()
+            if dut.pop.valid and dut.pop.ready {
+                expect dut.pop.data == next_out
+                next_out = next_out +% 1
+            }
+            dut.dst.step()
+        }
+    }
+    expect next_out != 0
+}
