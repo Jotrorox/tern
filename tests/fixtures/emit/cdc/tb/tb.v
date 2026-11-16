@@ -5,11 +5,14 @@ module tb;
     reg sys_clk = 1'b0;
     reg pix_clk = 1'b0;
     reg sys_rst_n = 1'b1;
+    reg pix_arst = 1'b0;
     reg [7:0] din = 8'd0;
     reg [3:0] cfg = 4'd0;
     wire flag_pix;
     wire [7:0] data_pix;
     wire [3:0] cfg_pix;
+    wire [3:0] pix_count;
+    wire pix_in_reset;
     reg [11:0] stim [0:239];
     integer i;
 
@@ -21,7 +24,10 @@ module tb;
         .cfg(cfg),
         .flag_pix(flag_pix),
         .data_pix(data_pix),
-        .cfg_pix(cfg_pix)
+        .cfg_pix(cfg_pix),
+        .pix_arst(pix_arst),
+        .pix_count(pix_count),
+        .pix_in_reset(pix_in_reset)
     );
 
     task cycle_sys_clk;
@@ -45,10 +51,14 @@ module tb;
     task do_reset;
         begin
             sys_rst_n = 1'b0;
+            pix_arst = 1'b1;
             #1;
             cycle_sys_clk;
             cycle_sys_clk;
+            cycle_pix_clk;
+            cycle_pix_clk;
             sys_rst_n = 1'b1;
+            pix_arst = 1'b0;
             #1;
         end
     endtask
@@ -61,7 +71,7 @@ module tb;
                 do_reset;
             {din, cfg} = stim[i];
             #1;
-            $display("D %0d %h %h %h", i, flag_pix, data_pix, cfg_pix);
+            $display("D %0d %h %h %h %h %h", i, flag_pix, data_pix, cfg_pix, pix_count, pix_in_reset);
             cycle_sys_clk;
             cycle_pix_clk;
         end

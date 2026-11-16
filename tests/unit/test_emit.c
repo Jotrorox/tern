@@ -964,7 +964,8 @@ static void te_asserts(void)
 /* std::cdc-style primitives, constraints and the CDC report */
 static void te_cdc(void)
 {
-    IrModule *sync, *fifo, *top;
+    IrModule *sync, *fifo, *rsync, *top;
+    uint32_t rs_clk, rs_in, rs_out, rs_act, rs_chain, pix_arst, w_prst, w_pact, pcnt, opcnt, opact;
     uint32_t src, dst, d, q, s1, s2, i, wclk, wrst, rclk, rrst, wen, wdat, rdat, wgray, wbin, rgray, rq1, rq2, wq1, wq2,
         mem, odata, sclk, srst, pclk, flag, cfg, cfgp, oflag, odat, ocfg, w_q, w_d, din, rd_q, c_sync, w_cfg;
     IrCrossing x;
@@ -1053,6 +1054,25 @@ static void te_cdc(void)
     CONT(fifo, rdat, S(fifo, odata), 548);
     ir_design_add_module(D, fifo);
 
+    /* ResetSync<2>: asynchronous assertion, synchronous release */
+    rsync = ir_module_new(D, "ResetSync_2", "ResetSync", "ResetSync<2>", SP(550));
+    rsync->is_cdc = 1;
+    rsync->cdc_kind = IRC_RESET_SYNC;
+    rs_clk = SIG(rsync, "clk", IRS_IN, CLK(), 551);
+    rs_in = SIG(rsync, "rst_in", IRS_IN, ir_type_reset(D, 1, 0), 552);
+    rs_out = SIG(rsync, "rst_out", IRS_OUT, ir_type_reset(D, 1, 0), 553);
+    rs_act = SIG(rsync, "active", IRS_OUT, BOOL(), 554);
+    rs_chain = SIG(rsync, "chain", IRS_REG, BITS(2), 555);
+    ir_add_domain(D, rsync, "d", rs_clk, rs_in, 0);
+    rsync->sigs[rs_chain].domain = 0;
+    ir_signal_add_attr(D, rsync, rs_chain, "async_reg", NULL);
+    ir_set_init(D, rsync, rs_chain, ir_bits_u64(TA, 2, 3));
+    ir_add_process(D, rsync, IRP_CLOCKED, 0, BL(ASG(rsync, rs_chain, BIN(IROP_SHL, S(rsync, rs_chain), K(1, 1)), 557), NULL),
+                   SP(556));
+    CONT(rsync, rs_act, SL(S(rsync, rs_chain), 1, 1), 558);
+    CONT(rsync, rs_out, SL(S(rsync, rs_chain), 1, 1), 559);
+    ir_design_add_module(D, rsync);
+
     top = ir_module_new(D, "CdcTop", NULL, NULL, SP(560));
     sclk = SIG(top, "sys_clk", IRS_IN, CLK(), 561);
     srst = SIG(top, "sys_rst_n", IRS_IN, ir_type_reset(D, 1, 1), 562);
@@ -1095,6 +1115,24 @@ static void te_cdc(void)
     CONT(top, oflag, S(top, w_q), 583);
     CONT(top, odat, S(top, w_d), 584);
     CONT(top, ocfg, S(top, cfgp), 585);
+    /* a counter in a domain reset by the ResetSync output */
+    pix_arst = SIG(top, "pix_arst", IRS_IN, ir_type_reset(D, 1, 0), 586);
+    w_prst = SIG(top, "u_rsync_rst_out", IRS_WIRE, ir_type_reset(D, 1, 0), 587);
+    w_pact = SIG(top, "u_rsync_active", IRS_WIRE, BOOL(), 588);
+    pcnt = SIG(top, "pix_cnt", IRS_REG, U(4), 589);
+    opcnt = SIG(top, "pix_count", IRS_OUT, U(4), 590);
+    opact = SIG(top, "pix_in_reset", IRS_OUT, BOOL(), 591);
+    ir_add_domain(D, top, "pix_r", pclk, w_prst, 0);
+    top->sigs[pcnt].domain = 2;
+    ir_set_init(D, top, pcnt, ir_bits_u64(TA, 4, 0));
+    i = ir_add_instance(D, top, "u_rsync", rsync, SP(592));
+    ir_connect(D, top, i, rs_clk, S(top, pclk));
+    ir_connect(D, top, i, rs_in, S(top, pix_arst));
+    ir_connect(D, top, i, rs_out, S(top, w_prst));
+    ir_connect(D, top, i, rs_act, S(top, w_pact));
+    ir_add_process(D, top, IRP_CLOCKED, 2, BL(ASG(top, pcnt, BIN(IROP_ADD, S(top, pcnt), K(4, 1)), 594), NULL), SP(593));
+    CONT(top, opcnt, S(top, pcnt), 595);
+    CONT(top, opact, S(top, w_pact), 596);
     ir_design_set_top(D, top);
     memset(&x, 0, sizeof x);
     x.path = "CdcTop > u_sync";

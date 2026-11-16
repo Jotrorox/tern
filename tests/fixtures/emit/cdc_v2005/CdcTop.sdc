@@ -14,6 +14,10 @@ set_max_delay -from [get_registers {u_xfer|rgray[*]}] -to [get_registers {u_xfer
 set_max_delay -from [get_registers {u_xfer|wgray[*]}] -to [get_registers {u_xfer|rq1_wgray[*]}] 40.000
 set_max_delay -from [get_registers {u_xfer|mem*}] -to [get_registers {u_xfer|odata[*]}] 40.000
 
+# CDC CdcTop > u_rsync: ResetSync<2> (reset_sync)
+# synchronizer registers (Quartus: SYNCHRONIZER_IDENTIFICATION in the .qsf): u_rsync|chain[*]
+set_false_path -to [get_registers {u_rsync|chain[*]}]  ;# asynchronous assertion
+
 # CDC report
 #   CdcTop > u_sync: sync2, sys -> pix, signal flag (src/demo.tern:581)
 #   CdcTop > u_xfer: async_fifo, sys -> pix, signal din (src/demo.tern:582)

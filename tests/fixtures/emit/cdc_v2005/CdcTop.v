@@ -7,7 +7,10 @@ module CdcTop (  // tern: src/demo.tern:560
     input  wire [3:0] cfg,  // tern: src/demo.tern:565
     output wire       flag_pix,  // tern: src/demo.tern:566
     output wire [7:0] data_pix,  // tern: src/demo.tern:567
-    output wire [3:0] cfg_pix  // tern: src/demo.tern:568
+    output wire [3:0] cfg_pix,  // tern: src/demo.tern:568
+    input  wire       pix_arst,  // tern: src/demo.tern:586
+    output wire [3:0] pix_count,  // tern: src/demo.tern:590
+    output wire       pix_in_reset  // tern: src/demo.tern:591
 );
 
     // wires
@@ -15,10 +18,13 @@ module CdcTop (  // tern: src/demo.tern:560
     wire [7:0] u_xfer_rdata;  // tern: src/demo.tern:572
     wire [3:0] cfg_cross;  // CDC: unchecked  // tern: src/demo.tern:573
     wire       pix_rst_n;  // tern: src/demo.tern:574
+    wire       u_rsync_rst_out;  // tern: src/demo.tern:587
+    wire       u_rsync_active;  // tern: src/demo.tern:588
 
     // registers
     reg       flag;  // tern: src/demo.tern:569
     reg [3:0] cfg_q;  // tern: src/demo.tern:570
+    reg [3:0] pix_cnt;  // tern: src/demo.tern:589
 
     // continuous assignments
     assign cfg_cross = cfg;  // CDC: unchecked  // tern: src/demo.tern:577
@@ -26,6 +32,8 @@ module CdcTop (  // tern: src/demo.tern:560
     assign flag_pix = u_sync_q;  // tern: src/demo.tern:583
     assign data_pix = u_xfer_rdata;  // tern: src/demo.tern:584
     assign cfg_pix = cfg_q;  // tern: src/demo.tern:585
+    assign pix_count = pix_cnt;  // tern: src/demo.tern:595
+    assign pix_in_reset = u_rsync_active;  // tern: src/demo.tern:596
 
     Sync2_bool u_sync (  // tern: src/demo.tern:581
         .src (sys_clk),
@@ -44,6 +52,13 @@ module CdcTop (  // tern: src/demo.tern:560
         .rdata (u_xfer_rdata)
     );
 
+    ResetSync_2 u_rsync (  // tern: src/demo.tern:592
+        .clk     (pix_clk),
+        .rst_in  (pix_arst),
+        .rst_out (u_rsync_rst_out),
+        .active  (u_rsync_active)
+    );
+
     always @(posedge sys_clk or negedge sys_rst_n) begin  // tern: src/demo.tern:575
         if (!sys_rst_n) begin
             flag <= 1'b0;
@@ -57,6 +72,14 @@ module CdcTop (  // tern: src/demo.tern:560
     end
     initial begin  // power-on values (the domain has no reset)
         cfg_q = 4'd9;
+    end
+
+    always @(posedge pix_clk or posedge u_rsync_rst_out) begin  // tern: src/demo.tern:593
+        if (u_rsync_rst_out) begin
+            pix_cnt <= 4'd0;
+        end else begin
+            pix_cnt <= pix_cnt + 4'd1;  // tern: src/demo.tern:594
+        end
     end
 
 endmodule

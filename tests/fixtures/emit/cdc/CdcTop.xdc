@@ -14,6 +14,10 @@ set_max_delay -datapath_only -from [get_cells {u_xfer/rgray_reg[*]}] -to [get_ce
 set_max_delay -datapath_only -from [get_cells {u_xfer/wgray_reg[*]}] -to [get_cells {u_xfer/rq1_wgray_reg[*]}] 40.000
 set_max_delay -datapath_only -from [get_cells {u_xfer/mem_reg*}] -to [get_cells {u_xfer/odata_reg[*]}] 40.000
 
+# CDC CdcTop > u_rsync: ResetSync<2> (reset_sync)
+set_property ASYNC_REG TRUE [get_cells {u_rsync/chain_reg[*]}]
+set_false_path -to [get_pins -of_objects [get_cells {u_rsync/chain_reg[*]}] -filter {IS_PRESET || IS_CLEAR}]
+
 # CDC report
 #   CdcTop > u_sync: sync2, sys -> pix, signal flag (src/demo.tern:581)
 #   CdcTop > u_xfer: async_fifo, sys -> pix, signal din (src/demo.tern:582)
