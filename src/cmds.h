@@ -41,6 +41,11 @@ int cmd_remap(int argc, char **argv);
  * AST dump used by the golden tests (tests/fixtures/.../<name>.parse). */
 int cmd_parse(int argc, char **argv);
 
+/* Shared by `tern parse` and the interim `tern check` (cmd_parse.c): parses
+ * the files/directories in argv[1..], reports syntax errors and, with
+ * `--dump` (when allow_dump), prints each AST. Returns an exit status. */
+int cmd_parse_files(int argc, char **argv, const char *cmd, int allow_dump);
+
 /* Print the usage block of a command (from main.c's table) to stdout.
  * Returns 0 if the command exists. */
 int cmd_print_usage(const char *name);

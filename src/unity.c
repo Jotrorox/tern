@@ -26,6 +26,12 @@
 #include "base/diag.c"
 #include "base/args.c"
 
+#include "syntax/lexer.c"
+#include "syntax/parser.c"
+#include "syntax/ast_dump.c"
+
 #include "std_embed.c"
+#include "cmd_parse.c"
+#include "cmd_check.c"
 #include "cmd_stubs.c"
 #include "main.c"

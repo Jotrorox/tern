@@ -35,6 +35,7 @@ HDRS = \
 	src/base/diag.h src/base/args.h \
 	src/os/os.h \
 	src/ir/ir.h \
+	src/syntax/token.h src/syntax/lexer.h src/syntax/ast.h src/syntax/parser.h \
 	src/cmds.h src/std_embed.h
 
 BASE_SRCS = \
@@ -44,15 +45,19 @@ BASE_SRCS = \
 
 OS_SRCS = src/os/os_posix.c src/os/os_win32.c src/os/os_common.c
 
-SRCS = $(OS_SRCS) $(BASE_SRCS) \
-	src/std_embed.c src/cmd_stubs.c src/main.c
+SYNTAX_SRCS = src/syntax/lexer.c src/syntax/parser.c src/syntax/ast_dump.c
+
+SRCS = $(OS_SRCS) $(BASE_SRCS) $(SYNTAX_SRCS) \
+	src/std_embed.c src/cmd_parse.c src/cmd_check.c src/cmd_stubs.c src/main.c
 
 OBJS = \
 	$(OBJ)/os_posix.o $(OBJ)/os_win32.o $(OBJ)/os_common.o \
 	$(OBJ)/base_common.o $(OBJ)/base_arena.o $(OBJ)/base_str.o \
 	$(OBJ)/base_map.o $(OBJ)/base_bignum.o $(OBJ)/base_json.o \
 	$(OBJ)/base_utf8.o $(OBJ)/base_diag.o $(OBJ)/base_args.o \
-	$(OBJ)/std_embed.o $(OBJ)/cmd_stubs.o $(OBJ)/main.o
+	$(OBJ)/syntax_lexer.o $(OBJ)/syntax_parser.o $(OBJ)/syntax_ast_dump.o \
+	$(OBJ)/std_embed.o $(OBJ)/cmd_parse.o $(OBJ)/cmd_check.o \
+	$(OBJ)/cmd_stubs.o $(OBJ)/main.o
 
 all: $(BIN)
 
@@ -91,8 +96,19 @@ $(OBJ)/base_diag.o: src/base/diag.c $(HDRS) $(OBJ)/.dir
 $(OBJ)/base_args.o: src/base/args.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/base/args.c -o $@
 
+$(OBJ)/syntax_lexer.o: src/syntax/lexer.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/syntax/lexer.c -o $@
+$(OBJ)/syntax_parser.o: src/syntax/parser.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/syntax/parser.c -o $@
+$(OBJ)/syntax_ast_dump.o: src/syntax/ast_dump.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/syntax/ast_dump.c -o $@
+
 $(OBJ)/std_embed.o: src/std_embed.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/std_embed.c -o $@
+$(OBJ)/cmd_parse.o: src/cmd_parse.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/cmd_parse.c -o $@
+$(OBJ)/cmd_check.o: src/cmd_check.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/cmd_check.c -o $@
 $(OBJ)/cmd_stubs.o: src/cmd_stubs.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/cmd_stubs.c -o $@
 $(OBJ)/main.o: src/main.c $(HDRS) $(OBJ)/.dir
@@ -124,6 +140,7 @@ build/test_base: tests/unit/test_base.c $(TEST_DEPS) $(OBJ)/.dir
 
 test: $(BIN) tests/run build/test_base
 	./build/test_base
+	./$(BIN) parse std
 	./tests/run --tern ./$(BIN)
 
 # ---------------------------------------------------------------- other ---
