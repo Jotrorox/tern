@@ -127,6 +127,7 @@ TokenKind lex_keyword_kind(const char *s, size_t len)
 typedef VEC(Token) LexTokVec;
 typedef VEC(Comment) LexCommentVec;
 typedef VEC(TokDoc) LexDocVec;
+typedef VEC(LexDiag) LexDiagVec;
 
 typedef struct Lexer {
     Arena *arena;
@@ -141,8 +142,12 @@ typedef struct Lexer {
     StrBuf doc_text;      /* pending doc block */
     size_t doc_start, doc_end;
     int doc_pending;
-    int nerrors;
+    LexDiagVec diags;     /* errors, reported later in source order (lex_emit_diag) */
 } Lexer;
+
+/* The lexer running now (the compiler is single-threaded); lex_help attaches
+ * to its last error. */
+static Lexer *lex_current;
 
 static Span lex_span(Lexer *lx, size_t off, size_t len)
 {
@@ -153,11 +158,32 @@ static void lex_error(Lexer *lx, size_t off, size_t len, const char *fmt, ...) T
 
 static void lex_error(Lexer *lx, size_t off, size_t len, const char *fmt, ...)
 {
+    LexDiag d;
     va_list ap;
     va_start(ap, fmt);
-    diag_verror(lex_span(lx, off, len), fmt, ap);
+    d.span = lex_span(lx, off, len);
+    d.msg = arena_vprintf(lx->arena, fmt, ap);
+    d.help = NULL;
     va_end(ap);
-    lx->nerrors++;
+    vec_push(lx->diags, d);
+}
+
+static void lex_help(const char *fmt, ...) TERN_PRINTF(1, 2);
+static void lex_help(const char *fmt, ...)
+{
+    va_list ap;
+    if (!lex_current || lex_current->diags.len == 0)
+        return;
+    va_start(ap, fmt);
+    vec_last(lex_current->diags).help = arena_vprintf(lex_current->arena, fmt, ap);
+    va_end(ap);
+}
+
+void lex_emit_diag(const LexDiag *d)
+{
+    diag_error(d->span, "%s", d->msg);
+    if (d->help)
+        diag_help("%s", d->help);
 }
 
 static Token *lex_push(Lexer *lx, TokenKind kind, size_t off, size_t len)
@@ -320,7 +346,7 @@ static void lex_number(Lexer *lx)
         while (f < lx->n && (tern_is_digit((unsigned char)lx->s[f]) || lx->s[f] == '_'))
             f++;
         lex_error(lx, start, f - start, "floating-point literals do not exist in Tern");
-        diag_help("use an integer, or std::math::Fixed for fractional values");
+        lex_help("use an integer, or std::math::Fixed for fractional values");
         lx->i = f;
         end = f;
         bad = 1;
@@ -342,7 +368,7 @@ static void lex_number(Lexer *lx)
                     e++;
                 lex_error(lx, lx->i, e - lx->i, "invalid suffix `%.*s` on integer literal",
                           (int)(e - lx->i), lx->s + lx->i);
-                diag_help("a typed literal is written `42u8`, `3s12` or `0xFFu<W>`");
+                lex_help("a typed literal is written `42u8`, `3s12` or `0xFFu<W>`");
                 t->kind = TK_ERROR;
                 w = e;
             }
@@ -365,7 +391,7 @@ static void lex_number(Lexer *lx)
             else
                 lex_error(lx, lx->i, e - lx->i, "invalid suffix `%.*s` on integer literal",
                           (int)(e - lx->i), lx->s + lx->i);
-            diag_help("a typed literal is written `42u8`, `3s12` or `0xFFu<W>`");
+            lex_help("a typed literal is written `42u8`, `3s12` or `0xFFu<W>`");
             t->kind = TK_ERROR;
             lx->i = e;
         }
@@ -377,7 +403,7 @@ static void lex_number(Lexer *lx)
         if (t->kind != TK_ERROR) {
             lex_error(lx, lx->i, e - lx->i, "invalid suffix `%.*s` on integer literal",
                       (int)(e - lx->i), lx->s + lx->i);
-            diag_help("a typed literal is written `42u8`, `3s12` or `0xFFu<W>`");
+            lex_help("a typed literal is written `42u8`, `3s12` or `0xFFu<W>`");
         }
         t->kind = TK_ERROR;
         lx->i = e;
@@ -396,7 +422,7 @@ static void lex_string(Lexer *lx)
         int c;
         if (lx->i >= lx->n || lx->s[lx->i] == '\n') {
             lex_error(lx, start, 1, "unterminated string literal");
-            diag_help("close it with `\"` on the same line");
+            lex_help("close it with `\"` on the same line");
             ok = 0;
             break;
         }
@@ -466,7 +492,7 @@ static void lex_string(Lexer *lx)
                     goto done;
                 }
                 lex_error(lx, esc, 2, "unknown escape `\\%c`", e);
-                diag_help("valid escapes: \\n \\t \\r \\0 \\\\ \\\" \\xHH \\u{XXXX}");
+                lex_help("valid escapes: \\n \\t \\r \\0 \\\\ \\\" \\xHH \\u{XXXX}");
                 ok = 0;
                 break;
             }
@@ -509,11 +535,11 @@ static void lex_sv_quote(Lexer *lx)
     if (e == start + 2 && (lx->s[start + 1] == '0' || lx->s[start + 1] == '1')) {
         lex_error(lx, tok_start, e - tok_start, "`%.*s` is SystemVerilog, not Tern",
                   (int)(e - tok_start), lx->s + tok_start);
-        diag_help("write `all%c`", lx->s[start + 1]);
+        lex_help("write `all%c`", lx->s[start + 1]);
     } else {
         lex_error(lx, tok_start, e - tok_start, "SystemVerilog sized literal `%.*s` does not exist in Tern",
                   (int)(e - tok_start), lx->s + tok_start);
-        diag_help("write a typed literal such as `0xFFu8`, or a plain `0xFF` where the width comes from context");
+        lex_help("write a typed literal such as `0xFFu8`, or a plain `0xFF` where the width comes from context");
     }
     lx->i = e;
     lex_push(lx, TK_ERROR, tok_start, e - tok_start);
@@ -523,7 +549,7 @@ static void lex_compound_assign(Lexer *lx, size_t oplen)
 {
     lex_error(lx, lx->i, oplen + 1, "compound assignment `%.*s=` does not exist in Tern",
               (int)oplen, lx->s + lx->i);
-    diag_help("write it out: `x = x %.*s y`", (int)oplen, lx->s + lx->i);
+    lex_help("write it out: `x = x %.*s y`", (int)oplen, lx->s + lx->i);
     lex_push(lx, TK_ASSIGN, lx->i, oplen + 1);
     lx->i += oplen + 1;
 }
@@ -545,6 +571,7 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
     lx.s = sf ? sf->text : "";
     lx.n = sf ? sf->len : 0;
     lx.nl = 1;
+    lex_current = &lx;
     if (lx.n >= 3 && (unsigned char)lx.s[0] == 0xEF && (unsigned char)lx.s[1] == 0xBB &&
         (unsigned char)lx.s[2] == 0xBF)
         lx.i = 3;
@@ -583,7 +610,7 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
         case '=':
             if (c1 == '=' && c2 == '=') {
                 lex_error(&lx, lx.i, 3, "`===` does not exist; equality is always 2-state");
-                diag_help("use `==`");
+                lex_help("use `==`");
                 lex_op(&lx, TK_EQ, 3);
             } else if (c1 == '=') lex_op(&lx, TK_EQ, 2);
             else if (c1 == '>') lex_op(&lx, TK_FAT_ARROW, 2);
@@ -592,7 +619,7 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
         case '!':
             if (c1 == '=' && c2 == '=') {
                 lex_error(&lx, lx.i, 3, "`!==` does not exist; equality is always 2-state");
-                diag_help("use `!=`");
+                lex_help("use `!=`");
                 lex_op(&lx, TK_NE, 3);
             } else if (c1 == '=') lex_op(&lx, TK_NE, 2);
             else lex_op(&lx, TK_NOT, 1);
@@ -623,7 +650,7 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
         case '*':
             if (c1 == '*') {
                 lex_error(&lx, lx.i, 2, "`**` does not exist in Tern");
-                diag_help("use `1 << n` for powers of two, or a const fn");
+                lex_help("use `1 << n` for powers of two, or a const fn");
                 lex_op(&lx, TK_ERROR, 2);
             } else if (c1 == '=') lex_compound_assign(&lx, 1);
             else lex_op(&lx, TK_STAR, 1);
@@ -660,17 +687,17 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
             else {
                 if (tern_is_digit(c1)) {
                     lex_error(&lx, lx.i, 1, "`#` delays do not exist; the simulator is cycle-based");
-                    diag_help("in a test, advance time with `dut.step(n)`");
+                    lex_help("in a test, advance time with `dut.step(n)`");
                 } else {
                     lex_error(&lx, lx.i, 1, "unexpected `#`");
-                    diag_help("attributes are written `#[name(args)]`");
+                    lex_help("attributes are written `#[name(args)]`");
                 }
                 lex_op(&lx, TK_ERROR, 1);
             }
             continue;
         case '?':
             lex_error(&lx, lx.i, 1, "`?:` does not exist in Tern");
-            diag_help("use `if c { a } else { b }`; `if` is an expression");
+            lex_help("use `if c { a } else { b }`; `if` is an expression");
             lex_op(&lx, TK_ERROR, 1);
             continue;
         case '\'':
@@ -680,9 +707,9 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
             size_t e = lx.i + 1;
             while (e < lx.n && tern_is_ident((unsigned char)lx.s[e]))
                 e++;
-            lex_error(&lx, lx.i, e - lx.i, "`%.*s`: there is no preprocessor in Tern", (int)(e - lx.i),
-                      lx.s + lx.i);
-            diag_help("use `const`/`const fn` for macros, `use` for includes and a bool generic or "
+            lex_error(&lx, lx.i, e - lx.i, "SystemVerilog directive `%.*s` does not exist: there is no preprocessor in Tern",
+                      (int)(e - lx.i - 1), lx.s + lx.i + 1);
+            lex_help("use `const`/`const fn` for macros, `use` for includes and a bool generic or "
                       "`cfg::feature` for `ifdef`");
             lex_push(&lx, TK_ERROR, lx.i, e - lx.i);
             lx.i = e;
@@ -706,7 +733,7 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
             else
                 lex_error(&lx, lx.i, adv, "non-ASCII character `%.*s` outside a string or comment",
                           (int)adv, lx.s + lx.i);
-            diag_help("identifiers are ASCII; Unicode is allowed only in strings and comments");
+            lex_help("identifiers are ASCII; Unicode is allowed only in strings and comments");
             lex_push(&lx, TK_ERROR, lx.i, adv);
             lx.i += adv;
         } else {
@@ -729,7 +756,11 @@ void lex_source(Arena *a, uint32_t file, LexOutput *out)
                         : NULL;
     out->ndocs = (uint32_t)lx.docs.len;
     out->docs = lx.docs.len ? (TokDoc *)arena_memdup(a, lx.docs.data, lx.docs.len * sizeof(TokDoc)) : NULL;
-    out->nerrors = lx.nerrors;
+    out->ndiags = (uint32_t)lx.diags.len;
+    out->diags = lx.diags.len ? (LexDiag *)arena_memdup(a, lx.diags.data, lx.diags.len * sizeof(LexDiag)) : NULL;
+    out->nerrors = (int)lx.diags.len;
+    vec_free(lx.diags);
+    lex_current = NULL;
     vec_free(lx.toks);
     vec_free(lx.comments);
     vec_free(lx.docs);

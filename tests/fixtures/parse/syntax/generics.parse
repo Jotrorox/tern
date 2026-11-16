@@ -1,0 +1,33 @@
+(file
+  (module@2:1 G (generics (T type = bool) (N uint = 4) (Bus type = Axi4Lite<32, 32>) (Data [T; N] = all0))
+    (let@3:5 lt = (< a b))
+    (let@4:5 both = (and (< a b) (> c d)))
+    (let@5:5 shifted = (< x (>> y 2)))
+    (let@6:5 call = (call f<8> x))
+    (let@7:5 nested = (call Stream<Stream<u8>> x))
+    (let@8:5 nested3 = (call A<B<C<u8>>> x))
+    (let@9:5 assoc = Cordic<16>::GAIN_COMP)
+    (let@10:5 lit = (struct Stream<u8> (valid true) (data 1)))
+    (let@11:5 ge : uint<8> = 3)
+    (let@12:5 named = (call Lfsr<8, Galois: true>))
+    (let@13:5 arr = (call RomTable<u8, 4, (array 10 20 30 40)>))
+    (let@14:5 arrty = (call Foo<(type [u8; 4])>))
+    (let@15:5 cond = (call Foo<PULLUP: (if PullUp (block
+      (tail 1)) else (block
+      (tail 0)))>))
+    (let@16:5 negs = (call Fir<s16, 3, 4, (array (neg 1) 2 (neg 1))>))
+    (let@17:5 variant = (call Cic<2, 4, s16, .Interpolate>))
+    (let@18:5 ty = (call Foo<(call typeof x), (tuple u8 u16), (type (struct-type (field a u8)))>))
+    (let@19:5 expr_arg = (call Foo<(+ (* N 2) 1), (paren (> N 2)), (call clog2 N)>))
+    (let@20:5 multi = (call IDELAYE2<IDELAY_VALUE: Taps, REFCLK_FREQUENCY: RefMHz> IDATAIN: d))
+    (let@24:5 path = (call std::bus::RegisterFile<Ctrl, Apb<32, 32>> bus: b))
+    (let@25:5 k = Mmcm<100_000_000, 10, 1, 5>::CLK0_HZ)
+    (let@26:5 r = (call rand<u32>)))
+  (fn@29:1 round (generics (F uint) (R Round = .Truncate)) (params (x bit<F>)) -> bit<(<< 1 F)>
+    (block
+      (tail x)))
+  (type@30:1 Ptr (generics (W uint)) = uint<(+ W 1)>)
+  (struct@31:1 Beat (generics (T type))
+    (field data T)
+    (field last bool))
+  (comments 1))

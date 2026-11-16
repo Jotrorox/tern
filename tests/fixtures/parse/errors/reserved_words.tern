@@ -1,0 +1,14 @@
+// Reserved words and keywords used as names.
+impl Foo {}
+trait Bar {}
+
+module R {
+    let yield = 1
+    let generate = 2
+    let flip = 3
+    in rs: reset<async, low>
+    in let: u8
+    out q: u8
+}
+
+fn async() -> u8 { 0 }

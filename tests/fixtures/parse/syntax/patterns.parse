@@ -1,0 +1,28 @@
+(file
+  (fn@2:1 f (params (x u8) (c Cmd) (t (tuple-type u8 u8))) -> u8
+    (block
+      (let@3:5 r = (match x
+        (arm 0 => 1)
+        (arm (| 1 2) => 2)
+        (arm (..= 3 9) => 3)
+        (arm (.. 10 20) => 4)
+        (arm (int 0xFF u 8) => 5)
+        (arm LIMIT => 6)
+        (arm consts::MAX => 7)
+        (arm (..= LO HI) => 8)
+        (arm _ => 9)))
+      (expr@14:5 (match c
+        (arm (.Write addr (data d)) => (block))
+        (arm (.Read (addr 0) ..) => (block))
+        (arm Cmd::Idle => (block))
+        (arm (struct-pat Cmd::Write addr ..) => (block))
+        (arm .Nop => (block))))
+      (expr@21:5 (match (tuple x c)
+        (arm (tuple-pat 0 (| .Idle .Nop)) => (block))
+        (arm (tuple-pat _ (tuple-pat a _)) => (block))
+        (arm (tuple-pat true false) => (block))))
+      (let@26:5 (struct-pat Fifo pop count) = fifo)
+      (let@27:5 (tuple-pat a b) = t)
+      (for@28:5 (tuple-pat i (tuple-pat p q)) z (block))
+      (tail r)))
+  (comments 1))

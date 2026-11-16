@@ -1,0 +1,23 @@
+// Type syntax.
+module Types<S: uint, M: uint, N: uint, T: type> {
+    in a: [u8; 16]
+    in b: [[bool; S]; M]
+    in c: struct { x: u8, y: bit<4> }
+    in d: (u8, bool)
+    in e: typeof(a)
+    in f: Ctrl::Status
+    in g: clock<falling>
+    in h: reset<async, low>
+    in i: tri<bool>
+    in j: uint
+    in k: std::bus::Axi4Lite<32, 32>
+    in l: [Stream<T>; N]
+    in m: sint<8>
+    in n: bit<N * 2>
+    in o: reset
+    in p: reset<async>
+    out q: clock
+    let r = x as std::x::T<u8>
+    let s = b as reset<async>
+    let t = q as clock<falling>
+}

@@ -1,0 +1,30 @@
+// Patterns in match arms, let and for.
+fn f(x: u8, c: Cmd, t: (u8, u8)) -> u8 {
+    let r = match x {
+        0 => 1,
+        1 | 2 => 2,
+        3..=9 => 3,
+        10..20 => 4,
+        0xFFu8 => 5,
+        LIMIT => 6,
+        consts::MAX => 7,
+        LO..=HI => 8,
+        _ => 9,
+    }
+    match c {
+        .Write { addr, data: d } => {},
+        .Read { addr: 0, .. } => {}
+        Cmd::Idle => {},
+        Cmd::Write { addr, .. } => {},
+        .Nop => {}
+    }
+    match (x, c) {
+        (0, .Idle | .Nop) => {},
+        (_, (a, _)) => {},
+        (true, false) => {},
+    }
+    let Fifo { pop, count } = fifo
+    let (a, b) = t
+    for (i, (p, q)) in z { }
+    r
+}

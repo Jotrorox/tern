@@ -1,0 +1,23 @@
+(file
+  (module@2:1 NL
+    (let@3:5 after_op = (+ b c))
+    (let@5:5 args = (call f x y))
+    (let@9:5 arr = (array 1 2 3))
+    (let@13:5 chain = (if c (block
+      (tail 1)) else (if d (block
+      (tail 2)) else (block
+      (tail 3)))))
+    (let@16:5 first = x)
+    (expr@17:5 (neg y))
+    (let@18:5 lit = (struct Stream (valid true) (data 0)))
+    (=@22:5 x 1)
+    (=@22:12 y 2)
+    (let@23:5 logic_ = (or (and a b) c))
+    (let@26:5 inst = (call Fifo<u8, 64> push: x))
+    (let@28:5 eq = 5)
+    (property@30:5 p (always (|=> a b))))
+  (module@36:1 W (generics (T type)) (where (> T::WIDTH 1) (< T::WIDTH 64)))
+  (fn@42:1 spread (params (a u8) (b u8)) -> u8
+    (block
+      (tail a)))
+  (comments 1))

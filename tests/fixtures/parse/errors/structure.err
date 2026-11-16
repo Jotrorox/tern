@@ -1,0 +1,11 @@
+structure.tern:3:10: error: SystemVerilog-style port list after `module Sv`
+structure.tern:5:1: error: `reg` outside a module
+structure.tern:9:14: error: expected `=` in `let`, found end of line
+structure.tern:10:11: error: expected `:` and a type after `reg r`, found `=`
+structure.tern:11:8: error: expected a clock or domain after `on`, found `{`
+structure.tern:13:10: error: expected `=>` after match pattern, found `:`
+structure.tern:15:17: error: `+:` part-selects are SystemVerilog
+structure.tern:16:16: error: expected `(` after `domain d =`, found identifier `clk`
+structure.tern:17:7: error: `|->` is only allowed in a `property` or `sequence`
+structure.tern:18:5: error: `module` is not allowed here
+structure.tern:27:1: error: unexpected end of file: a `{` is not closed

@@ -1,0 +1,48 @@
+// Where line breaks end statements and where they do not.
+module NL {
+    let after_op = b +
+        c
+    let args = f(
+        x,
+        y,
+    )
+    let arr = [
+        1, 2,
+        3,
+    ]
+    let chain = if c { 1 }
+        else if d { 2 }
+        else { 3 }
+    let first = x
+    -y
+    let lit = Stream {
+        valid: true
+        data: 0
+    }
+    x = 1; y = 2
+    let logic_ = a and
+        b or
+        c
+    let inst = Fifo<u8,
+        64>(push: x)
+    let eq =
+        5
+    property p {
+        always a
+            |=> b
+    }
+}
+
+module W<T: type>
+where T::WIDTH > 1,
+      T::WIDTH < 64
+{
+}
+
+fn spread(
+    a: u8,
+    b: u8,
+) -> u8
+{
+    a
+}

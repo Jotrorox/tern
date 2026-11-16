@@ -1,0 +1,27 @@
+(file
+  (module@3:1 Heads
+    (on@4:5 clk (block
+      (expr@5:9 (if (. tx valid) (block
+        (=@5:23 shift (. tx data)))))
+      (expr@6:9 (if Flag (block
+        (=@6:19 x 1))))
+      (expr@7:9 (if (== x Foo::A) (block
+        (=@7:26 y 1))))
+      (expr@8:9 (if (== (paren (struct Foo (a 1))) y) (block
+        (=@8:34 z 1))))
+      (expr@9:9 (if (call f (struct Foo (a 1))) (block
+        (=@9:30 z 2))))
+      (expr@10:9 (match state
+        (arm .Idle => (block))))
+      (expr@11:9 (match Kind
+        (arm _ => (block))))
+      (for@12:9 x xs (block))
+      (for@13:9 x (array (struct Foo (a 1))) (block)))))
+  (fn@17:1 w const (params (n uint)) -> uint
+    (block
+      (var@18:5 r = 0)
+      (while@19:5 (< r n) (block
+        (=@19:19 r (+ r 1))))
+      (while@20:5 Limit (block))
+      (tail r)))
+  (comments 2))

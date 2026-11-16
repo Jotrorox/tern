@@ -1,0 +1,35 @@
+// Temporal expressions inside properties and sequences.
+module Props<N: uint> {
+    in a: bool
+    in b: bool
+    in s: State
+
+    property p1 { always a ##1 b |=> !a }
+    property p2 { always (a ##1 (!a and b)) |=> stable(s) }
+    property p3 { a ##N b }
+    property p4 { a ##(N + 1) b ##[1:3] a }
+    property p5 { ##1 a }
+    property p6 { always !stable(s) |-> past(s) == .Idle }
+    property p7 { always a |-> eventually[..N] b }
+    property p8 { never a and b }
+    property p9 { always a until b }
+    property p10 { always a |-> b |=> a }
+    /// A documented property.
+    property p11 {
+        always (a and b)
+            |=> a
+                or b
+    }
+    cover property c1 { a ##[1:$] b }
+    sequence seq1 { a ##1 b }
+    if N > 1 {
+        property in_if { always a |-> b }
+    }
+    for i in 0..N {
+        assert property in_for { always a |-> b }
+    }
+    // the contextual words are plain identifiers outside properties
+    let always = a
+    let never = always and b
+    let eventually = until(never)
+}

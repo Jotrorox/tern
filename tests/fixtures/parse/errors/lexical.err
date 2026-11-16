@@ -1,0 +1,13 @@
+lexical.tern:3:13: error: floating-point literals do not exist in Tern
+lexical.tern:4:14: error: invalid suffix `us` on integer literal
+lexical.tern:5:15: error: typed literal `42u` needs a width
+lexical.tern:6:14: error: SystemVerilog sized literal `8'hFF` does not exist in Tern
+lexical.tern:7:13: error: `'0` is SystemVerilog, not Tern
+lexical.tern:8:17: error: invalid digit `2` in binary literal
+lexical.tern:9:13: error: missing digits after `0x`
+lexical.tern:10:15: error: `**` does not exist in Tern
+lexical.tern:11:18: error: unknown escape `\q`
+lexical.tern:12:13: error: unterminated string literal
+lexical.tern:13:13: error: SystemVerilog directive `WIDTH` does not exist: there is no preprocessor in Tern
+lexical.tern:14:15: error: `!==` does not exist; equality is always 2-state
+lexical.tern:15:9: error: non-ASCII character `µ` outside a string or comment

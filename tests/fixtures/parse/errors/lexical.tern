@@ -1,0 +1,17 @@
+// Lexical errors are reported once each and lexing continues.
+module Lex {
+    let f = 1.5
+    let s = 5us
+    let w = 42u
+    let sv = 8'hFF
+    let z = '0
+    let b = 0b102
+    let x = 0x
+    let p = 2 ** 3
+    let e = "bad \q escape"
+    let u = "unterminated
+    let m = `WIDTH
+    let n = x !== y
+    let µ = 1
+    let ok = 1
+}

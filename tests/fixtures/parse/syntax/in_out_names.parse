@@ -1,0 +1,23 @@
+(file
+  (module@3:1 Skid (generics (T type) (N uint))
+    (in@4:5 clk clock)
+    (in@5:5 in Stream<T>)
+    (out@6:5 out Stream<T>)
+    (in@7:5 ins [Stream<T>; N])
+    (out@8:5 outs [Stream<T>; N])
+    (=@10:5 (. in ready) (not (. out valid)))
+    (=@11:5 (. out valid) (. in valid))
+    (=@12:5 (. out data) (. in data))
+    (=@13:5 (. (index outs 0) valid) (. (index ins 1) valid))
+    (let@14:5 c = (call Crc<u8> in: in out: out clear: clear))
+    (let@15:5 m = (in (. in data) (array 1 2)))
+    (for@16:5 i (.. 0 N) (block
+      (=@17:9 (. (index outs i) ready) (call (. in fire)))))
+    (let@19:5 fired = (and (call (. in fire)) (. out ready))))
+  (test@22:1 "dut ports"
+    (block
+      (let@23:5 dut = (sim (call Skid<u8, 2>)))
+      (=@24:5 (. dut in) (struct Stream (valid true) (data 1)))
+      (expect@25:5 (. (. dut out) ready))
+      (=@26:5 (index (. dut ins) 0) (. dut out))))
+  (comments 2))

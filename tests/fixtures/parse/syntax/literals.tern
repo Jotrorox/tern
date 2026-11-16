@@ -1,0 +1,22 @@
+// Integer, typed, fill, boolean and string literals; comments.
+module Lits<W: uint = 8> {
+    let dec = 42
+    let hex = 0xFF
+    let bin = 0b1010_0011
+    let oct = 0o17
+    let sep = 1_000_000
+    let big = 18446744073709551616 // does not fit in 64 bits: kept as text
+    let max = 0xFFFF_FFFF_FFFF_FFFF
+    let t8 = 42u8
+    let neg = -3s12
+    let tw = 0xFFu<W>
+    let tw2 = 1u<W + 1>
+    let cat = 0b110u3 ++ 1u1
+    let z = all0
+    let o = all1
+    let b = true and not false
+    let s = "quote \" backslash \\ newline \n tab \t hex \x41 unicode \u{e9} braces {}"
+    let u = "Grüße — §"
+    /* a block comment /* with a nested one */ still a comment */
+    let after = 1 /* inline */ + 2
+}

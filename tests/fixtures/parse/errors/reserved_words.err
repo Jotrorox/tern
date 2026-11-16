@@ -1,0 +1,7 @@
+reserved_words.tern:2:1: error: `impl` is a reserved word
+reserved_words.tern:3:1: error: `trait` is a reserved word
+reserved_words.tern:6:9: error: `yield` is a reserved word
+reserved_words.tern:7:9: error: `generate` is SystemVerilog, not Tern
+reserved_words.tern:8:9: error: expected a pattern, found keyword `flip`
+reserved_words.tern:10:8: error: expected a port name, found keyword `let`
+reserved_words.tern:14:4: error: `async` is a reserved word

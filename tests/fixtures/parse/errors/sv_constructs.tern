@@ -1,0 +1,28 @@
+// SystemVerilog habits get dedicated messages, and parsing continues.
+module Top {
+    in clk: clock
+    in a: u8
+    in b: u8
+    out y: u8
+    out z: u8
+    reg q: u8 = 0
+
+    on clk begin
+        q = a
+    end
+    on clk {
+        q <= a
+    }
+    y = a == b ? a : b
+    z = a === b
+    always_ff @(posedge clk) q = a
+    assign y = a & b
+    wire w = a
+    logic [7:0] l
+    let ok = a + b
+}
+
+initial begin
+end
+
+endmodule

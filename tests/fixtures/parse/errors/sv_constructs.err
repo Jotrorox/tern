@@ -1,0 +1,11 @@
+sv_constructs.tern:10:12: error: `begin`/`end` is SystemVerilog; Tern uses `{ }`
+sv_constructs.tern:12:5: error: `begin`/`end` is SystemVerilog; Tern uses `{ }`
+sv_constructs.tern:14:11: error: `<=` non-blocking assignment does not exist in Tern
+sv_constructs.tern:16:16: error: `?:` does not exist in Tern
+sv_constructs.tern:17:11: error: `===` does not exist; equality is always 2-state
+sv_constructs.tern:18:5: error: `always_ff` is SystemVerilog
+sv_constructs.tern:19:5: error: `assign` is SystemVerilog
+sv_constructs.tern:20:5: error: `wire` is SystemVerilog, not Tern
+sv_constructs.tern:21:5: error: `logic` is SystemVerilog, not Tern
+sv_constructs.tern:25:1: error: `initial` is SystemVerilog, not Tern
+sv_constructs.tern:28:1: error: `endmodule` is SystemVerilog

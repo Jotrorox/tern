@@ -1,0 +1,22 @@
+// Struct literals are not allowed in if/match/while/for heads unless
+// parenthesized: `if tx.valid { ... }` is a block.
+module Heads {
+    on clk {
+        if tx.valid { shift = tx.data }
+        if Flag { x = 1 }
+        if x == Foo::A { y = 1 }
+        if (Foo { a: 1 }) == y { z = 1 }
+        if f(Foo { a: 1 }) { z = 2 }
+        match state { .Idle => {} }
+        match Kind { _ => {} }
+        for x in xs { }
+        for x in [Foo { a: 1 }] { }
+    }
+}
+
+const fn w(n: uint) -> uint {
+    var r = 0
+    while r < n { r = r + 1 }
+    while Limit { }
+    r
+}

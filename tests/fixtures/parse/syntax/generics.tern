@@ -1,0 +1,31 @@
+// Generic arguments vs. `<` comparison, `>>` closing nested lists.
+module G<T: type = bool, N: uint = 4, Bus: type = Axi4Lite<32, 32>, Data: [T; N] = all0> {
+    let lt = a < b
+    let both = a < b and c > d
+    let shifted = x < y >> 2
+    let call = f<8>(x)
+    let nested = Stream<Stream<u8>>(x)
+    let nested3 = A<B<C<u8>>>(x)
+    let assoc = Cordic<16>::GAIN_COMP
+    let lit = Stream<u8> { valid: true, data: 1 }
+    let ge: uint<8>= 3
+    let named = Lfsr<8, Galois: true>()
+    let arr = RomTable<u8, 4, [10, 20, 30, 40]>()
+    let arrty = Foo<[u8; 4]>()
+    let cond = Foo<PULLUP: if PullUp { 1 } else { 0 }>()
+    let negs = Fir<s16, 3, 4, [-1, 2, -1]>()
+    let variant = Cic<2, 4, s16, .Interpolate>()
+    let ty = Foo<typeof(x), (u8, u16), struct { a: u8 }>()
+    let expr_arg = Foo<N * 2 + 1, (N > 2), clog2(N)>()
+    let multi = IDELAYE2<
+        IDELAY_VALUE: Taps,
+        REFCLK_FREQUENCY: RefMHz
+    >(IDATAIN: d)
+    let path = std::bus::RegisterFile<Ctrl, Apb<32, 32>>(bus: b)
+    let k = Mmcm<100_000_000, 10, 1, 5>::CLK0_HZ
+    let r = rand<u32>()
+}
+
+fn round<F: uint, R: Round = .Truncate>(x: bit<F>) -> bit<1 << F> { x }
+type Ptr<W: uint> = uint<W + 1>
+struct Beat<T: type> { data: T, last: bool }

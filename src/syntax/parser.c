@@ -27,12 +27,16 @@ typedef struct Parser {
     Token *toks;
     uint32_t ntoks;
     TokDoc *docs;
+    LexDiag *ldiags;      /* lexical errors, reported as the parser passes them */
+    uint32_t nldiags, next_ldiag;
     uint32_t pos;
     uint32_t split;       /* bytes of toks[pos] already consumed (`>>` closing two generic lists) */
     uint32_t prev_end;    /* end offset of the last consumed token */
     ParseCtx ctx;
     int spec;             /* > 0 while speculating: errors are not reported */
     int panic;            /* an error was reported; unwinding to a sync point */
+    int eof_reported;     /* an unclosed `{` at end of file was reported */
+    uint32_t construct_pos; /* first token of the statement/item/entry being parsed */
     int nerrors;
 } Parser;
 
@@ -141,6 +145,13 @@ static uint32_t ps_off(Parser *p)
     return p->toks[p->pos].off + p->split;
 }
 
+/* Reports the lexical errors located before byte offset `off`. */
+static void ps_flush_lex(Parser *p, uint32_t off)
+{
+    while (p->next_ldiag < p->nldiags && p->ldiags[p->next_ldiag].span.off < off)
+        lex_emit_diag(&p->ldiags[p->next_ldiag++]);
+}
+
 static void ps_advance(Parser *p)
 {
     Token *t = &p->toks[p->pos];
@@ -149,6 +160,8 @@ static void ps_advance(Parser *p)
     p->prev_end = t->off + t->len;
     p->split = 0;
     p->pos++;
+    if (p->next_ldiag < p->nldiags)
+        ps_flush_lex(p, p->toks[p->pos].off);
 }
 
 static int ps_accept(Parser *p, TokenKind k)
@@ -192,6 +205,15 @@ static Span ps_tok_span(Parser *p)
     return span_make(p->file, t->off + p->split, t->len - p->split);
 }
 
+/* Where to report "expected X, found Y": the token, or the end of the
+ * previous line when the token starts a new line that ends the construct. */
+static Span ps_err_span(Parser *p)
+{
+    if (ps_nl(p) && p->pos > 0 && p->pos != p->construct_pos)
+        return span_make(p->file, p->prev_end, 0);
+    return ps_tok_span(p);
+}
+
 static ParseMark ps_mark(Parser *p)
 {
     ParseMark m;
@@ -222,6 +244,8 @@ static const char *ps_describe(Parser *p)
     TokenKind k = ps_kind(p);
     if (p->split)
         return tok_kind_name(k);
+    if (ps_nl(p) && k != TK_EOF && p->pos != p->construct_pos)
+        return "end of line";
     switch (k) {
     case TK_IDENT: return arena_printf(p->a, "identifier `%s`", t->str);
     case TK_INT: return arena_printf(p->a, "`%.*s`", (int)t->len, p->src + t->off);
@@ -238,6 +262,7 @@ static int ps_verror(Parser *p, Span sp, int fatal, const char *fmt, va_list ap)
     }
     if (p->panic)
         return 0;
+    ps_flush_lex(p, sp.off + 1);
     diag_verror(sp, fmt, ap);
     p->nerrors++;
     if (fatal)
@@ -286,7 +311,7 @@ static int ps_expect(Parser *p, TokenKind k, const char *context)
         ps_silent_fail(p);
         return 0;
     }
-    ps_error(p, ps_tok_span(p), "expected %s%s%s, found %s", tok_kind_name(k), context ? " " : "",
+    ps_error(p, ps_err_span(p), "expected %s%s%s, found %s", tok_kind_name(k), context ? " " : "",
              context ? context : "", ps_describe(p));
     return 0;
 }
@@ -321,6 +346,33 @@ static void ps_reserved(Parser *p, int fatal)
         else
             ps_error_soft(p, ps_tok_span(p), "`%s` is a reserved word", t->str);
     }
+}
+
+/* Expects the `}` closing the `{` at offset lbrace. At end of file only the
+ * innermost unclosed brace is reported. */
+static void ps_close_brace(Parser *p, uint32_t lbrace)
+{
+    if (ps_kind(p) == TK_RBRACE) {
+        ps_advance(p);
+        return;
+    }
+    if (ps_kind(p) == TK_EOF) {
+        if (p->eof_reported) {
+            p->panic = 1;
+            return;
+        }
+        if (ps_error(p, ps_tok_span(p), "unexpected end of file: a `{` is not closed")) {
+            p->eof_reported = 1;
+            diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
+        }
+        return;
+    }
+    if (ps_kind(p) == TK_ERROR) {
+        ps_silent_fail(p);
+        return;
+    }
+    if (ps_error(p, ps_err_span(p), "expected `}`, found %s", ps_describe(p)))
+        diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
 }
 
 /* ------------------------------------------------------------ helpers */
@@ -401,10 +453,10 @@ static Ident ps_name(Parser *p, const char *what, int allow_inout)
     } else if (k == TK_ERROR) {
         ps_silent_fail(p);
     } else if (tok_kind_text(k) && tern_is_alpha((unsigned char)tok_kind_text(k)[0])) {
-        if (ps_error(p, ps_tok_span(p), "expected %s, found %s", what, ps_describe(p)))
+        if (ps_error(p, ps_err_span(p), "expected %s, found %s", what, ps_describe(p)))
             diag_help("`%s` is a keyword and cannot be used as a name", tok_kind_text(k));
     } else {
-        ps_error(p, ps_tok_span(p), "expected %s, found %s", what, ps_describe(p));
+        ps_error(p, ps_err_span(p), "expected %s, found %s", what, ps_describe(p));
     }
     return id;
 }
@@ -457,7 +509,7 @@ static void ps_attr(Parser *p, PsAttrVec *out)
             at.name = ps_ident_here(p);
             ps_advance(p);
         } else {
-            ps_error(p, ps_tok_span(p), "expected an attribute name after `#[`, found %s", ps_describe(p));
+            ps_error(p, ps_err_span(p), "expected an attribute name after `#[`, found %s", ps_describe(p));
         }
     }
     if (!p->panic && ps_kind(p) == TK_LPAREN) {
@@ -571,7 +623,7 @@ static Expr *ps_int_lit(Parser *p)
                 if (ps_is_gt(p))
                     ps_eat_gt(p);
                 else
-                    ps_error(p, ps_tok_span(p), "expected `>` after the literal's width, found %s",
+                    ps_error(p, ps_err_span(p), "expected `>` after the literal's width, found %s",
                              ps_describe(p));
             }
         }
@@ -687,7 +739,7 @@ static void ps_generic_args(Parser *p, PathSeg *seg)
     if (ps_is_gt(p))
         ps_eat_gt(p);
     else
-        ps_error(p, ps_tok_span(p), "expected `,` or `>` in generic arguments, found %s", ps_describe(p));
+        ps_error(p, ps_err_span(p), "expected `,` or `>` in generic arguments, found %s", ps_describe(p));
 }
 
 /* ------------------------------------------------------------ types */
@@ -844,7 +896,7 @@ static Type *ps_type(Parser *p)
         ps_silent_fail(p);
         return ps_error_type(p, start);
     }
-    ps_error(p, ps_tok_span(p), "expected a type, found %s", ps_describe(p));
+    ps_error(p, ps_err_span(p), "expected a type, found %s", ps_describe(p));
     return ps_error_type(p, start);
 }
 
@@ -948,7 +1000,7 @@ static int ps_list_sep(Parser *p, const char *what)
         ps_silent_fail(p);
         return 0;
     }
-    ps_error(p, ps_tok_span(p), "expected `,` or a new line between %s, found %s", what, ps_describe(p));
+    ps_error(p, ps_err_span(p), "expected `,` or a new line between %s, found %s", what, ps_describe(p));
     return 0;
 }
 
@@ -1046,7 +1098,7 @@ static Expr *ps_if_expr(Parser *p)
     return ps_done(p, e, start);
 }
 
-static void ps_sync_stmt(Parser *p);
+static void ps_sync_stmt(Parser *p, uint32_t start_pos);
 
 static Expr *ps_match_expr(Parser *p)
 {
@@ -1073,15 +1125,16 @@ static Expr *ps_match_expr(Parser *p)
         MatchArm arm;
         uint32_t astart = ps_off(p), before = p->pos;
         memset(&arm, 0, sizeof arm);
+        p->construct_pos = p->pos;
         arm.pat = ps_pattern(p);
         if (!p->panic && ps_kind(p) != TK_FAT_ARROW) {
             if (ps_kind(p) == TK_COLON) {
-                if (ps_error(p, ps_tok_span(p), "expected `=>` after match pattern, found `:`"))
+                if (ps_error(p, ps_err_span(p), "expected `=>` after match pattern, found `:`"))
                     diag_help("`case` labels are SystemVerilog; write `pattern => value,`");
             } else if (ps_kind(p) == TK_ERROR) {
                 ps_silent_fail(p);
             } else {
-                ps_error(p, ps_tok_span(p), "expected `=>` after match pattern, found %s", ps_describe(p));
+                ps_error(p, ps_err_span(p), "expected `=>` after match pattern, found %s", ps_describe(p));
             }
         }
         if (!p->panic) {
@@ -1102,7 +1155,7 @@ static Expr *ps_match_expr(Parser *p)
             else if (k == TK_ERROR)
                 ps_silent_fail(p);
             else
-                ps_error(p, ps_tok_span(p), "expected `,` or a new line after match arm, found %s",
+                ps_error(p, ps_err_span(p), "expected `,` or a new line after match arm, found %s",
                          ps_describe(p));
         }
         if (p->panic) {
@@ -1114,7 +1167,7 @@ static Expr *ps_match_expr(Parser *p)
     PS_TAKE(p, arms, MatchArm, e->u.match.arms, e->u.match.narms);
     p->ctx = saved;
     if (ps_kind(p) != TK_RBRACE) {
-        if (ps_error(p, ps_tok_span(p), "expected `}` to close the match, found %s", ps_describe(p)))
+        if (ps_error(p, ps_err_span(p), "expected `}` to close the match, found %s", ps_describe(p)))
             diag_note(span_make(p->file, lbrace, 1), "the match arms open here");
     } else {
         ps_advance(p);
@@ -1220,8 +1273,8 @@ static Expr *ps_postfix(Parser *p, Expr *e, uint32_t start)
                 s->u.slice.base = e;
                 s->u.slice.hi = x;
                 s->u.slice.lo = ps_expr(p);
-                if (!p->panic && ps_kind(p) == TK_PLUS && ps_peek(p, 1) == TK_COLON) {
-                    if (ps_error(p, ps_tok_span(p), "`+:` part-selects are SystemVerilog"))
+                if (!p->panic && (ps_kind(p) == TK_PLUS || ps_kind(p) == TK_MINUS) && ps_peek(p, 1) == TK_COLON) {
+                    if (ps_error(p, ps_tok_span(p), "`%s:` part-selects are SystemVerilog", ps_kind(p) == TK_PLUS ? "+" : "-"))
                         diag_help("write the slice with both bounds: `x[hi:lo]`");
                 }
                 if (!p->panic)
@@ -1232,8 +1285,8 @@ static Expr *ps_postfix(Parser *p, Expr *e, uint32_t start)
                 Expr *ix = ps_new_expr(p, EXPR_INDEX, start);
                 ix->u.index.base = e;
                 ix->u.index.index = x;
-                if (!p->panic && ps_kind(p) == TK_PLUS && ps_peek(p, 1) == TK_COLON) {
-                    if (ps_error(p, ps_tok_span(p), "`+:` part-selects are SystemVerilog"))
+                if (!p->panic && (ps_kind(p) == TK_PLUS || ps_kind(p) == TK_MINUS) && ps_peek(p, 1) == TK_COLON) {
+                    if (ps_error(p, ps_tok_span(p), "`%s:` part-selects are SystemVerilog", ps_kind(p) == TK_PLUS ? "+" : "-"))
                         diag_help("write the slice with both bounds: `x[hi:lo]`");
                 }
                 if (!p->panic)
@@ -1317,7 +1370,7 @@ static void ps_delay_spec(Parser *p, Expr *e)
             ps_path(p, &x->u.path, PS_PATH_EXPR);
             e->u.delay.lo = ps_done(p, x, start);
         } else {
-            ps_error(p, ps_tok_span(p), "expected a cycle count after `##`, found %s", ps_describe(p));
+            ps_error(p, ps_err_span(p), "expected a cycle count after `##`, found %s", ps_describe(p));
             e->u.delay.lo = ps_error_expr(p, start);
         }
     }
@@ -1429,7 +1482,7 @@ static Expr *ps_primary(Parser *p)
     default:
         break;
     }
-    ps_error(p, ps_tok_span(p), "expected an expression, found %s", ps_describe(p));
+    ps_error(p, ps_err_span(p), "expected an expression, found %s", ps_describe(p));
     return ps_error_expr(p, start);
 }
 
@@ -1576,6 +1629,8 @@ static Expr *ps_expr_bp(Parser *p, int min_bp)
             break;
         if (lbp < min_bp)
             break;
+        if ((k == TK_PLUS || k == TK_MINUS) && ps_peek(p, 1) == TK_COLON)
+            break; /* x[i +: w]: reported by the index parser */
         if ((op == BIN_IMPLIES || op == BIN_IMPLIES_NEXT) && !p->ctx.temporal)
             ps_error_soft(p, ps_tok_span(p), "`%s` is only allowed in a `property` or `sequence`",
                           ast_binary_op_text(op));
@@ -1724,8 +1779,8 @@ static Pattern *ps_pattern1(Parser *p)
             ps_silent_fail(p);
         else if (k == TK_RESERVED)
             ps_reserved(p, 1);
-        else
-            ps_error(p, ps_tok_span(p), "expected a pattern, found %s", ps_describe(p));
+        else if (ps_error(p, ps_err_span(p), "expected a pattern, found %s", ps_describe(p)) && ps_is_word_tok(k))
+            diag_help("`%s` is a keyword and cannot be used as a name", tok_kind_text(k));
         pt = ps_new_pat(p, PAT_ERROR);
     }
     pt->span = ps_span(p, start);
@@ -1753,11 +1808,32 @@ static Pattern *ps_pattern(Parser *p)
 
 /* ------------------------------------------------------------ statements */
 
+/* Does the token start a statement for sure (a declaration keyword)? */
+static int ps_starts_stmt_kw(TokenKind k)
+{
+    switch (k) {
+    case TK_KW_LET: case TK_KW_VAR: case TK_KW_REG: case TK_KW_MEM: case TK_KW_CONST: case TK_KW_FN:
+    case TK_KW_ON: case TK_KW_COMB: case TK_KW_FOR: case TK_KW_WHILE: case TK_KW_RETURN:
+    case TK_KW_EXPECT: case TK_KW_ASSERT: case TK_KW_ASSUME: case TK_KW_COVER: case TK_KW_DOMAIN:
+    case TK_KW_STRUCT: case TK_KW_ENUM: case TK_KW_TYPE: case TK_KW_PUB: case TK_KW_PROPERTY:
+    case TK_KW_SEQUENCE: case TK_KW_MODULE: case TK_KW_EXTERN: case TK_KW_TEST: case TK_KW_REGMAP:
+    case TK_KW_BUNDLE: case TK_ATTR:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* Skips to the start of the next statement: a line break, `;` or `}` at the
- * current nesting level. */
-static void ps_sync_stmt(Parser *p)
+ * current nesting level. A declaration keyword at the start of a line where
+ * the error was found is itself the next statement. */
+static void ps_sync_stmt(Parser *p, uint32_t start_pos)
 {
     int depth = 0;
+    if (p->pos != start_pos && ps_tok(p)->nl_before && ps_starts_stmt_kw(ps_kind(p))) {
+        p->panic = 0;
+        return;
+    }
     while (ps_kind(p) != TK_EOF) {
         TokenKind k = ps_kind(p);
         if (depth == 0) {
@@ -1800,12 +1876,12 @@ static void ps_stmt_list(Parser *p, PsStmtVec *out)
                 if (ps_kind(p) == TK_ERROR)
                     ps_silent_fail(p);
                 else
-                    ps_error(p, ps_tok_span(p), "expected a new line or `;` after the statement, found %s",
+                    ps_error(p, ps_err_span(p), "expected a new line or `;` after the statement, found %s",
                              ps_describe(p));
             }
         }
         if (p->panic) {
-            ps_sync_stmt(p);
+            ps_sync_stmt(p, before);
             if (p->pos == before)
                 ps_advance(p);
         }
@@ -1829,7 +1905,7 @@ static Block *ps_block(Parser *p)
         } else if (ps_kind(p) == TK_ERROR) {
             ps_silent_fail(p);
         } else {
-            ps_error(p, ps_tok_span(p), "expected `{`, found %s", ps_describe(p));
+            ps_error(p, ps_err_span(p), "expected `{`, found %s", ps_describe(p));
         }
         b->span = ps_span(p, start);
         return b;
@@ -1852,8 +1928,7 @@ static Block *ps_block(Parser *p)
                 b->tail = last->u.expr;
         }
     } else {
-        if (ps_error(p, ps_tok_span(p), "expected `}`, found %s", ps_describe(p)))
-            diag_note(span_make(p->file, start, 1), "unclosed `{` opens here");
+        ps_close_brace(p, start);
     }
     b->span = ps_span(p, start);
     return b;
@@ -1977,6 +2052,7 @@ static Stmt *ps_stmt(Parser *p)
     Stmt *s = ps_new_stmt(p, STMT_ERROR);
     AstDoc *doc = NULL;
     TokenKind k;
+    p->construct_pos = p->pos;
     ps_prefix(p, &s->attrs, &doc);
     s->doc = doc;
     if (p->panic) {
@@ -1988,7 +2064,7 @@ static Stmt *ps_stmt(Parser *p)
     case TK_KW_PUB:
         ps_advance(p);
         if (!ps_is_item_kw(ps_kind(p))) {
-            ps_error(p, ps_tok_span(p), "expected an item after `pub`, found %s", ps_describe(p));
+            ps_error(p, ps_err_span(p), "expected an item after `pub`, found %s", ps_describe(p));
             break;
         }
         s->kind = STMT_ITEM;
@@ -2003,7 +2079,7 @@ static Stmt *ps_stmt(Parser *p)
             break;
         }
         if (k != TK_KW_ASSERT) {
-            if (ps_error(p, ps_tok_span(p), "expected `property` after `%s`", tok_kind_text(k)))
+            if (ps_error(p, ps_err_span(p), "expected `property` after `%s`", tok_kind_text(k)))
                 diag_help("`%s property name { ... }` declares a property", tok_kind_text(k));
             break;
         }
@@ -2038,7 +2114,8 @@ static Stmt *ps_stmt(Parser *p)
         break;
     case TK_KW_IN:
     case TK_KW_OUT:
-        if (ps_is_name_tok(ps_peek(p, 1)) && ps_peek(p, 2) == TK_COLON) {
+        if ((ps_is_name_tok(ps_peek(p, 1)) || (ps_is_word_tok(ps_peek(p, 1)) && ps_peek(p, 1) != TK_KW_IN)) &&
+            ps_peek(p, 2) == TK_COLON) {
             ps_port(p, s);
             break;
         }
@@ -2051,7 +2128,7 @@ static Stmt *ps_stmt(Parser *p)
         if (p->panic || !ps_expect(p, TK_ASSIGN, "after the domain name"))
             break;
         if (ps_kind(p) != TK_LPAREN) {
-            if (ps_error(p, ps_tok_span(p), "expected `(` after `domain %s =`, found %s",
+            if (ps_error(p, ps_err_span(p), "expected `(` after `domain %s =`, found %s",
                          s->u.domain.name.name, ps_describe(p)))
                 diag_help("a domain is a clock and an optional reset: `domain sys = (clk, rst)`");
             break;
@@ -2079,7 +2156,7 @@ static Stmt *ps_stmt(Parser *p)
         if (ps_kind(p) != TK_ASSIGN) {
             if (ps_kind(p) == TK_ERROR) {
                 ps_silent_fail(p);
-            } else if (ps_error(p, ps_tok_span(p), "expected `=` in `let`, found %s", ps_describe(p))) {
+            } else if (ps_error(p, ps_err_span(p), "expected `=` in `let`, found %s", ps_describe(p))) {
                 diag_help("a `let` is a wire and needs a value (`let x = expr`); use `var x: T` for a variable "
                           "assigned later");
             }
@@ -2107,7 +2184,7 @@ static Stmt *ps_stmt(Parser *p)
         if (p->panic)
             break;
         if (ps_kind(p) != TK_COLON) {
-            if (ps_error(p, ps_tok_span(p), "expected `:` and a type after `reg %s`, found %s",
+            if (ps_error(p, ps_err_span(p), "expected `:` and a type after `reg %s`, found %s",
                          s->u.reg.name.name, ps_describe(p)))
                 diag_help("a register needs a type: `reg %s: u8 = 0`", s->u.reg.name.name);
             break;
@@ -2151,7 +2228,7 @@ static Stmt *ps_stmt(Parser *p)
         ps_advance(p);
         p->ctx.no_struct = 1;
         if (ps_kind(p) == TK_LBRACE) {
-            if (ps_error(p, ps_tok_span(p), "expected a clock or domain after `on`, found `{`"))
+            if (ps_error(p, ps_err_span(p), "expected a clock or domain after `on`, found `{`"))
                 diag_help("write `on clk { ... }`");
             p->ctx = saved;
             break;
@@ -2281,7 +2358,7 @@ static void ps_generic_params(Parser *p, GenericParams *out)
         if (p->panic)
             break;
         if (ps_kind(p) != TK_COLON) {
-            if (ps_error(p, ps_tok_span(p), "expected `:` after generic parameter `%s`, found %s", gp.name.name,
+            if (ps_error(p, ps_err_span(p), "expected `:` after generic parameter `%s`, found %s", gp.name.name,
                          ps_describe(p)))
                 diag_help("write `%s: type` for a type parameter or `%s: uint` for a value", gp.name.name,
                           gp.name.name);
@@ -2310,7 +2387,7 @@ static void ps_generic_params(Parser *p, GenericParams *out)
         if (ps_is_gt(p))
             ps_eat_gt(p);
         else
-            ps_error(p, ps_tok_span(p), "expected `,` or `>` in generic parameters, found %s", ps_describe(p));
+            ps_error(p, ps_err_span(p), "expected `,` or `>` in generic parameters, found %s", ps_describe(p));
     }
     out->span = ps_span(p, start);
 }
@@ -2351,11 +2428,7 @@ static void ps_body(Parser *p, Stmt ***out, uint32_t *n, const char *what)
     ps_stmt_list(p, &v);
     p->ctx = saved;
     PS_TAKE(p, v, Stmt *, *out, *n);
-    if (ps_kind(p) == TK_RBRACE) {
-        ps_advance(p);
-    } else if (ps_error(p, ps_tok_span(p), "expected `}`, found %s", ps_describe(p))) {
-        diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
-    }
+    ps_close_brace(p, lbrace);
 }
 
 static Field *ps_field(Parser *p, int allow_flip)
@@ -2394,6 +2467,7 @@ static void ps_field_list(Parser *p, PsFieldVec *fields, PsItemVec *fns, int all
     while (ps_kind(p) != TK_RBRACE && ps_kind(p) != TK_EOF) {
         uint32_t before = p->pos;
         TokenKind k;
+        p->construct_pos = p->pos;
         {
             /* look past attributes/docs to see whether a fn follows */
             uint32_t i = p->pos;
@@ -2436,11 +2510,7 @@ static void ps_field_list(Parser *p, PsFieldVec *fields, PsItemVec *fns, int all
         }
     }
     p->ctx = saved;
-    if (ps_kind(p) == TK_RBRACE) {
-        ps_advance(p);
-    } else if (ps_error(p, ps_tok_span(p), "expected `}`, found %s", ps_describe(p))) {
-        diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
-    }
+    ps_close_brace(p, lbrace);
 }
 
 static void ps_variants(Parser *p, PsVariantVec *out)
@@ -2455,6 +2525,7 @@ static void ps_variants(Parser *p, PsVariantVec *out)
     while (ps_kind(p) != TK_RBRACE && ps_kind(p) != TK_EOF) {
         uint32_t before = p->pos, start = ps_off(p);
         Variant *v = ANEW(p->a, Variant);
+        p->construct_pos = p->pos;
         AstDoc *doc = NULL;
         ps_prefix(p, &v->attrs, &doc);
         v->doc = doc;
@@ -2480,11 +2551,7 @@ static void ps_variants(Parser *p, PsVariantVec *out)
         }
     }
     p->ctx = saved;
-    if (ps_kind(p) == TK_RBRACE) {
-        ps_advance(p);
-    } else if (ps_error(p, ps_tok_span(p), "expected `}`, found %s", ps_describe(p))) {
-        diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
-    }
+    ps_close_brace(p, lbrace);
 }
 
 static void ps_params(Parser *p, Param **out, uint32_t *n)
@@ -2537,7 +2604,7 @@ static RegField *ps_reg_field(Parser *p)
         f->type = ps_error_type(p, ps_off(p));
     if (!p->panic) {
         if (ps_kind(p) != TK_AT) {
-            if (ps_error(p, ps_tok_span(p), "expected `@` and a bit position after field `%s`, found %s",
+            if (ps_error(p, ps_err_span(p), "expected `@` and a bit position after field `%s`, found %s",
                          f->name.name, ps_describe(p)))
                 diag_help("write `%s: bool @0` or `%s: uint<2> @[2:1]`", f->name.name, f->name.name);
         } else {
@@ -2571,7 +2638,7 @@ static RegEntry *ps_reg_entry(Parser *p)
     if (p->panic)
         return r;
     if (ps_kind(p) == TK_IDENT && ps_peek(p, 1) == TK_COLON) {
-        ps_error(p, ps_tok_span(p), "expected the register's offset before its name, as in `0x00 %s: rw u32`",
+        ps_error(p, ps_err_span(p), "expected the register's offset before its name, as in `0x00 %s: rw u32`",
                  ps_tok(p)->str);
         return r;
     }
@@ -2586,7 +2653,7 @@ static RegEntry *ps_reg_entry(Parser *p)
         r->access = ps_ident_here(p);
         ps_advance(p);
     } else {
-        if (ps_error(p, ps_tok_span(p), "expected a register access (rw, ro, wo, w1c, rw1s), found %s",
+        if (ps_error(p, ps_err_span(p), "expected a register access (rw, ro, wo, w1c, rw1s), found %s",
                      ps_describe(p)))
             diag_help("write `offset name: access type`, e.g. `0x08 count: rw u32`");
         return r;
@@ -2611,10 +2678,7 @@ static RegEntry *ps_reg_entry(Parser *p)
         }
         p->ctx = saved;
         PS_TAKE(p, fields, RegField *, r->fields, r->nfields);
-        if (ps_kind(p) == TK_RBRACE)
-            ps_advance(p);
-        else if (ps_error(p, ps_tok_span(p), "expected `}`, found %s", ps_describe(p)))
-            diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
+        ps_close_brace(p, lbrace);
     } else {
         r->kind = REG_SCALAR;
         r->type = ps_type(p);
@@ -2661,7 +2725,7 @@ static Expr *ps_temporal_body(Parser *p, const char *what)
     }
     if (ps_kind(p) == TK_RBRACE) {
         ps_advance(p);
-    } else if (ps_error(p, ps_tok_span(p), "expected `}` after the property expression, found %s", ps_describe(p))) {
+    } else if (ps_error(p, ps_err_span(p), "expected `}` after the property expression, found %s", ps_describe(p))) {
         diag_note(span_make(p->file, lbrace, 1), "the property body opens here");
     }
     return e;
@@ -2714,7 +2778,7 @@ static Item *ps_item_rest(Parser *p, uint32_t start, AstDoc *doc, AttrList attrs
         if (p->panic)
             break;
         if (ps_kind(p) != TK_LPAREN) {
-            if (ps_error(p, ps_tok_span(p), "expected `(` and the SystemVerilog file after `extern module %s`, found %s",
+            if (ps_error(p, ps_err_span(p), "expected `(` and the SystemVerilog file after `extern module %s`, found %s",
                          it->name.name, ps_describe(p)))
                 diag_help("write `extern module %s(\"rtl/file.sv\") { ... }` (`\"\"` for a vendor library cell)",
                           it->name.name);
@@ -2726,7 +2790,7 @@ static Item *ps_item_rest(Parser *p, uint32_t start, AstDoc *doc, AttrList attrs
             it->u.extern_mod.file_span = ps_tok_span(p);
             ps_advance(p);
         } else {
-            ps_error(p, ps_tok_span(p), "expected the SystemVerilog file name as a string, found %s", ps_describe(p));
+            ps_error(p, ps_err_span(p), "expected the SystemVerilog file name as a string, found %s", ps_describe(p));
             break;
         }
         if (!ps_expect(p, TK_RPAREN, "after the file name"))
@@ -2840,21 +2904,19 @@ static Item *ps_item_rest(Parser *p, uint32_t start, AstDoc *doc, AttrList attrs
         p->ctx.generic = 0;
         while (ps_kind(p) != TK_RBRACE && ps_kind(p) != TK_EOF) {
             uint32_t before = p->pos;
+            p->construct_pos = p->pos;
             vec_push(entries, ps_reg_entry(p));
             if (!p->panic && !ps_list_sep(p, "register entries"))
                 break;
             if (p->panic) {
-                ps_sync_stmt(p);
+                ps_sync_stmt(p, before);
                 if (p->pos == before)
                     ps_advance(p);
             }
         }
         p->ctx = saved;
         PS_TAKE(p, entries, RegEntry *, it->u.regmap.entries, it->u.regmap.nentries);
-        if (ps_kind(p) == TK_RBRACE)
-            ps_advance(p);
-        else if (ps_error(p, ps_tok_span(p), "expected `}`, found %s", ps_describe(p)))
-            diag_note(span_make(p->file, lbrace, 1), "unclosed `{` opens here");
+        ps_close_brace(p, lbrace);
         break;
     }
     case TK_KW_TEST:
@@ -2865,7 +2927,7 @@ static Item *ps_item_rest(Parser *p, uint32_t start, AstDoc *doc, AttrList attrs
             it->u.test.name_span = ps_tok_span(p);
             ps_advance(p);
         } else {
-            if (ps_error(p, ps_tok_span(p), "expected the test name as a string, found %s", ps_describe(p)))
+            if (ps_error(p, ps_err_span(p), "expected the test name as a string, found %s", ps_describe(p)))
                 diag_help("write `test \"what it checks\" { ... }`");
             break;
         }
@@ -2906,7 +2968,7 @@ static Item *ps_item_rest(Parser *p, uint32_t start, AstDoc *doc, AttrList attrs
         if (k == TK_ERROR)
             ps_silent_fail(p);
         else
-            ps_error(p, ps_tok_span(p), "expected an item (module, fn, struct, enum, const, ...), found %s",
+            ps_error(p, ps_err_span(p), "expected an item (module, fn, struct, enum, const, ...), found %s",
                      ps_describe(p));
         break;
     }
@@ -2968,16 +3030,22 @@ static int ps_starts_item(Parser *p)
     case TK_KW_ENUM: case TK_KW_CONST: case TK_KW_FN: case TK_KW_TYPE: case TK_KW_REGMAP:
     case TK_KW_TEST: case TK_KW_PROPERTY: case TK_KW_SEQUENCE: case TK_KW_USE: case TK_ATTR:
     case TK_KW_ASSERT: case TK_KW_ASSUME: case TK_KW_COVER: case TK_KW_PACKAGE:
+    case TK_RESERVED:
+    /* not items, but reported as "... outside a module" by ps_file */
+    case TK_KW_REG: case TK_KW_LET: case TK_KW_VAR: case TK_KW_ON: case TK_KW_COMB: case TK_KW_MEM:
+    case TK_KW_IN: case TK_KW_OUT:
         return 1;
     default:
         return 0;
     }
 }
 
-static void ps_sync_item(Parser *p)
+static void ps_sync_item(Parser *p, uint32_t start_pos)
 {
     int depth = 0;
     p->panic = 0;
+    if (p->pos != start_pos && ps_tok(p)->nl_before && ps_starts_item(p))
+        return;
     while (ps_kind(p) != TK_EOF) {
         TokenKind k = ps_kind(p);
         if (k == TK_LBRACE)
@@ -2987,7 +3055,8 @@ static void ps_sync_item(Parser *p)
                 depth--;
         }
         ps_advance(p);
-        if (depth == 0 && ps_tok(p)->nl_before && ps_starts_item(p))
+        if (depth == 0 && ps_tok(p)->nl_before &&
+            (ps_starts_item(p) || (ps_kind(p) == TK_IDENT && strcmp(ps_tok(p)->str, "endmodule") == 0)))
             return;
     }
 }
@@ -3035,7 +3104,7 @@ static void ps_file(Parser *p, AstFile *f)
     PsItemVec items = {0};
     if (ps_kind(p) == TK_KW_PACKAGE) {
         PsIdentVec path = {0};
-        uint32_t start = ps_off(p);
+        uint32_t start = ps_off(p), pkg_pos = p->pos;
         ps_advance(p);
         f->has_package = 1;
         for (;;) {
@@ -3049,14 +3118,15 @@ static void ps_file(Parser *p, AstFile *f)
         PS_TAKE(p, path, Ident, f->package, f->npackage);
         f->package_span = ps_span(p, start);
         if (!p->panic && !ps_at_stmt_end(p))
-            ps_error(p, ps_tok_span(p), "expected a new line after the package name, found %s", ps_describe(p));
+            ps_error(p, ps_err_span(p), "expected a new line after the package name, found %s", ps_describe(p));
         if (p->panic)
-            ps_sync_item(p);
+            ps_sync_item(p, pkg_pos);
         ps_accept(p, TK_SEMI);
     }
     while (ps_kind(p) != TK_EOF) {
         uint32_t before = p->pos;
         uint32_t start = ps_off(p);
+        p->construct_pos = p->pos;
         if (ps_kind(p) == TK_SEMI) {
             ps_advance(p);
             continue;
@@ -3095,7 +3165,7 @@ static void ps_file(Parser *p, AstFile *f)
                 } else if (ps_kind(p) == TK_KW_IN || ps_kind(p) == TK_KW_OUT || ps_kind(p) == TK_KW_REG ||
                            ps_kind(p) == TK_KW_LET || ps_kind(p) == TK_KW_VAR || ps_kind(p) == TK_KW_ON ||
                            ps_kind(p) == TK_KW_COMB || ps_kind(p) == TK_KW_MEM) {
-                    if (ps_error(p, ps_tok_span(p), "%s outside a module", ps_describe(p)))
+                    if (ps_error(p, ps_tok_span(p), "`%s` outside a module", tok_kind_text(ps_kind(p))))
                         diag_help("ports, signals and blocks are declared inside `module Name { ... }`");
                 } else {
                     vec_push(items, ps_item_rest(p, start, doc, attrs, is_pub));
@@ -3109,11 +3179,11 @@ static void ps_file(Parser *p, AstFile *f)
                 if (ps_kind(p) == TK_ERROR)
                     ps_silent_fail(p);
                 else
-                    ps_error(p, ps_tok_span(p), "expected a new line after the item, found %s", ps_describe(p));
+                    ps_error(p, ps_err_span(p), "expected a new line after the item, found %s", ps_describe(p));
             }
         }
         if (p->panic) {
-            ps_sync_item(p);
+            ps_sync_item(p, before);
             if (p->pos == before)
                 ps_advance(p);
         }
@@ -3132,6 +3202,9 @@ static void ps_init(Parser *p, Arena *a, uint32_t src, LexOutput *lx)
     p->toks = lx->toks;
     p->ntoks = lx->ntoks;
     p->docs = lx->docs;
+    p->ldiags = lx->diags;
+    p->nldiags = lx->ndiags;
+    ps_flush_lex(p, p->toks[0].off + 1);
 }
 
 AstFile *parse_file(Arena *a, uint32_t src_id)
@@ -3150,6 +3223,7 @@ AstFile *parse_file(Arena *a, uint32_t src_id)
     f->ntokens = lx.ntoks;
     ps_init(&p, a, src_id, &lx);
     ps_file(&p, f);
+    ps_flush_lex(&p, UINT32_MAX);
     f->nerrors = lx.nerrors + p.nerrors;
     return f;
 }
@@ -3167,7 +3241,8 @@ Expr *parse_expr_string(Arena *a, const char *text, size_t len, const char *name
     p.ctx.nl_ignore = 1;
     e = ps_expr(&p);
     if (!p.panic && ps_kind(&p) != TK_EOF)
-        ps_error(&p, ps_tok_span(&p), "unexpected %s after the expression", ps_describe(&p));
+        ps_error(&p, ps_err_span(&p), "unexpected %s after the expression", ps_describe(&p));
+    ps_flush_lex(&p, UINT32_MAX);
     return e;
 }
 
@@ -3184,7 +3259,8 @@ Type *parse_type_string(Arena *a, const char *text, size_t len, const char *name
     p.ctx.nl_ignore = 1;
     t = ps_type(&p);
     if (!p.panic && ps_kind(&p) != TK_EOF)
-        ps_error(&p, ps_tok_span(&p), "unexpected %s after the type", ps_describe(&p));
+        ps_error(&p, ps_err_span(&p), "unexpected %s after the type", ps_describe(&p));
+    ps_flush_lex(&p, UINT32_MAX);
     return t;
 }
 

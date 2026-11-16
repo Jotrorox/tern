@@ -1,0 +1,33 @@
+(file
+  (package demo::docs)
+  (use@4:1 pub (doc "Re-exported for convenience.") std::fifo::Fifo)
+  (module@8:1 Doc pub #[top] #[clock_gate] (doc "A documented module.\nSecond line.") (generics (T type))
+    (in@15:5 #[clock(hz: 100_000_000)] (doc "The clock.") clk clock)
+    (in@17:5 (doc "An input with a domain.") d T @ clk)
+    (out@18:5 #[test_port] (doc "Doc after the attribute.") q T)
+    (reg@23:5 #[async_reg] #[keep] (doc "A register.") r : T = (call T::from_bits all0) @ clk)
+    (let@26:5 #[max_fanout(8)] #[dont_touch] w = r)
+    (mem@27:5 #[ram(block)] m : [T; 4])
+    (const@30:5 LATENCY pub (doc "The latency.") : uint = 1)
+    (var@31:5 #[probe] v : T))
+  (struct@35:1 S pub (doc "A struct.")
+    (field a u8 (doc "Field a."))
+    (field b bool #[keep] (doc "Field b.")))
+  (enum@44:1 E pub #[encoding(onehot)] (doc "An enum.")
+    (variant A (doc "First."))
+    (variant B (doc "Second, with a payload.") { (field x u8) }))
+  (bundle@53:1 Bu pub (doc "A bundle.") (generics (T type))
+    (field data T (doc "Data."))
+    (flip ready bool (doc "Back pressure."))
+    (fn@59:5 idle pub (doc "A bundle function.") (params) -> bool
+      (block
+        (tail (not (. self ready))))))
+  (regmap@63:1 R (doc "A register map.")
+    (reg@65:5 (doc "Control.") 0x00 ctrl rw (en bool @ 0 (doc "Enable bit.")) (mode uint<2> @ 2 1 (doc "Mode field.")))
+    (reg@72:5 (doc "Scratch with a reset value.") 0x04 scratch rw u32 = 0xDEAD_BEEF)
+    (reg@73:5 #[volatile] 0x08 irq w1c bit<4>)
+    (reg@75:5 0x0C set rw1s bit<4>))
+  (fn@78:1 g #[sv_name("x")] (doc "Doc after attributes on an item.") (params) -> u8
+    (block
+      (tail 0)))
+  (comments 25))

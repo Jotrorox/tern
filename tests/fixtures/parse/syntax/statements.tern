@@ -1,0 +1,75 @@
+// Module-level and block statements.
+pub module Stmts<T: type, N: uint, Strict: bool = true> where N >= 1, N <= 64 {
+    in src: clock
+    in src_rst: reset
+    in dst: clock
+    in dst_rst: reset
+    in d: T @ src_d
+    out q: T @ dst_d
+
+    domain src_d = (src, src_rst)
+    domain dst_d = (dst, dst_rst)
+    let src_async = src_rst as reset<async>
+    domain conv = (dst, src_async)
+
+    pub const LATENCY: uint = 2
+    const SW: uint = if N > 1 { clog2(N) } else { 1 }
+    type Ptr = uint<clog2(N) + 1>
+    enum State { Idle, Busy }
+    struct St { x: u8, y: u8 }
+    fn step(s: St) -> St { St { x: s.y, y: s.x } }
+
+    reg s1: T = T::from_bits(all0) @ dst_d
+    reg cnt: Ptr = 0
+    reg state: State = .Idle @ src_d
+    var arr: [bool; N + 1]
+    mem rom: [T; N] = Data
+
+    on dst_d {
+        s1 = d
+        arr[0] = true
+        cnt[0] = false
+        q.x[3:0] = 0
+        let t = s1
+        if Strict { assert t == t, "same" }
+    }
+    on src_d { state = .Busy }
+    comb { assert !(Strict and cnt == 0), "never zero" }
+
+    for i in 0..N {
+        reg r: bool = false
+        on src { r = arr[i] }
+        arr[i + 1] = r
+        if i == 0 {
+            static_assert(N > 0, "at least one stage")
+        }
+    }
+    static_assert(
+        N <= 64,
+        "too many stages",
+    )
+    let inst = Sub(a: 1).y
+    dut.step(8)
+    log("value {}", q)
+    {
+        let scoped = 1
+    }
+}
+
+const fn early(x: uint) -> uint {
+    if x == 0 { return 1 }
+    return x
+}
+
+test "statements in tests" {
+    var t = 0
+    t = t + 1
+    var d: sint<16> = 0
+    let enc = sim Enc()
+    let dec = sim Dec()
+    dec.in = enc.out
+    dut.a = rand<u8>() where dut.a != 0
+    var v = rand<u8>() where v > 3
+    for k in 0..(10 * t) { t = t + k }
+    d0.step_until(d0.out.valid, max: 300); expect d0.out.data == v
+}

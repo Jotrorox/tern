@@ -1,0 +1,80 @@
+package demo::docs
+
+/// Re-exported for convenience.
+pub use std::fifo::Fifo
+
+/// A documented module.
+/// Second line.
+#[top]
+#[clock_gate]
+pub module Doc<
+    /// generic docs are not kept (no slot), but do not break parsing
+    T: type
+> {
+    /// The clock.
+    in clk: clock #[clock(hz: 100_000_000)]
+    /// An input with a domain.
+    in d: T @ clk
+    #[test_port]
+    /// Doc after the attribute.
+    out q: T
+
+    /// A register.
+    #[async_reg]
+    #[keep]
+    reg r: T = T::from_bits(all0) @ clk
+    #[max_fanout(8)] #[dont_touch] let w = r
+    #[ram(block)]
+    mem m: [T; 4]
+    /// The latency.
+    pub const LATENCY: uint = 1
+    #[probe] var v: T
+}
+
+/// A struct.
+pub struct S {
+    /// Field a.
+    a: u8,
+    /// Field b.
+    #[keep]
+    b: bool,
+}
+
+/// An enum.
+#[encoding(onehot)]
+pub enum E {
+    /// First.
+    A,
+    /// Second, with a payload.
+    B { x: u8 },
+}
+
+/// A bundle.
+pub bundle Bu<T: type> {
+    /// Data.
+    data: T
+    /// Back pressure.
+    flip ready: bool
+    /// A bundle function.
+    pub fn idle() -> bool { !self.ready }
+}
+
+/// A register map.
+regmap R {
+    /// Control.
+    0x00 ctrl: rw {
+        /// Enable bit.
+        en: bool @0
+        /// Mode field.
+        mode: uint<2> @[2:1]
+    }
+    /// Scratch with a reset value.
+    0x04 scratch: rw u32 = 0xDEAD_BEEF
+    #[volatile]
+    0x08 irq: w1c bit<4>
+    0x0C set: rw1s bit<4>
+}
+
+#[sv_name("x")]
+/// Doc after attributes on an item.
+fn g() -> u8 { 0 }

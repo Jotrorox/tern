@@ -1,0 +1,35 @@
+// Several independent errors: the parser reports each one and
+// resynchronizes at the next statement or item.
+module M {
+    in a: u8
+    out y: u8
+    let x = (a +
+    let ok1 = a
+    reg r u8 = 0
+    let = 3
+    y = a +
+}
+
+module N {
+    let t = match a {
+        0 => 1
+        1 2
+        _ => 3,
+    }
+    let v = f(a b)
+    var ok2: u8
+}
+
+struct S { a u8, b: u8 }
+enum E { A, B(u8), C }
+
+fn g(x: u8) -> u8 {
+    let k = x x
+    k
+}
+
+const C: uint = 3 +
+
+module After {
+    in a: u8
+}

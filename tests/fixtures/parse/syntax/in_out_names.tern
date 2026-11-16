@@ -1,0 +1,27 @@
+// `in` and `out` as port names, expression roots, assignment targets and
+// argument labels, next to `for x in e` and `x in [..]`.
+module Skid<T: type, N: uint> {
+    in clk: clock
+    in in: Stream<T>
+    out out: Stream<T>
+    in ins: [Stream<T>; N]
+    out outs: [Stream<T>; N]
+
+    in.ready = !out.valid
+    out.valid = in.valid
+    out.data = in.data
+    outs[0].valid = ins[1].valid
+    let c = Crc<u8>(in: in, out: out, clear: clear)
+    let m = in.data in [1, 2]
+    for i in 0..N {
+        outs[i].ready = in.fire()
+    }
+    let fired = in.fire() and out.ready
+}
+
+test "dut ports" {
+    let dut = sim Skid<u8, 2>()
+    dut.in = Stream { valid: true, data: 1 }
+    expect dut.out.ready
+    dut.ins[0] = dut.out
+}

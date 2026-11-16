@@ -1,0 +1,76 @@
+(file
+  (module@2:1 Stmts pub (generics (T type) (N uint) (Strict bool = true)) (where (>= N 1) (<= N 64))
+    (in@3:5 src clock)
+    (in@4:5 src_rst reset)
+    (in@5:5 dst clock)
+    (in@6:5 dst_rst reset)
+    (in@7:5 d T @ src_d)
+    (out@8:5 q T @ dst_d)
+    (domain@10:5 src_d src src_rst)
+    (domain@11:5 dst_d dst dst_rst)
+    (let@12:5 src_async = (as src_rst reset<async>))
+    (domain@13:5 conv dst src_async)
+    (const@15:5 LATENCY pub : uint = 2)
+    (const@16:5 SW : uint = (if (> N 1) (block
+      (tail (call clog2 N))) else (block
+      (tail 1))))
+    (type@17:5 Ptr = uint<(+ (call clog2 N) 1)>)
+    (enum@18:5 State
+      (variant Idle)
+      (variant Busy))
+    (struct@19:5 St
+      (field x u8)
+      (field y u8))
+    (fn@20:5 step (params (s St)) -> St
+      (block
+        (tail (struct St (x (. s y)) (y (. s x))))))
+    (reg@22:5 s1 : T = (call T::from_bits all0) @ dst_d)
+    (reg@23:5 cnt : Ptr = 0)
+    (reg@24:5 state : State = .Idle @ src_d)
+    (var@25:5 arr : [bool; (+ N 1)])
+    (mem@26:5 rom : [T; N] = Data)
+    (on@28:5 dst_d (block
+      (=@29:9 s1 d)
+      (=@30:9 (index arr 0) true)
+      (=@31:9 (index cnt 0) false)
+      (=@32:9 (slice (. q x) 3 0) 0)
+      (let@33:9 t = s1)
+      (tail (if Strict (block
+        (assert@34:21 (== t t) "same"))))))
+    (on@36:5 src_d (block
+      (=@36:16 state .Busy)))
+    (comb@37:5 (block
+      (assert@37:12 (not (paren (and Strict (== cnt 0)))) "never zero")))
+    (for@39:5 i (.. 0 N) (block
+      (reg@40:9 r : bool = false)
+      (on@41:9 src (block
+        (=@41:18 r (index arr i))))
+      (=@42:9 (index arr (+ i 1)) r)
+      (tail (if (== i 0) (block
+        (static_assert@44:13 (> N 0) "at least one stage"))))))
+    (static_assert@47:5 (<= N 64) "too many stages")
+    (let@51:5 inst = (. (call Sub a: 1) y))
+    (expr@52:5 (call (. dut step) 8))
+    (expr@53:5 (call log "value {}" q))
+    (expr@54:5 (block
+      (let@55:9 scoped = 1))))
+  (fn@59:1 early const (params (x uint)) -> uint
+    (block
+      (expr@60:5 (if (== x 0) (block
+        (return@60:17 1))))
+      (return@61:5 x)))
+  (test@64:1 "statements in tests"
+    (block
+      (var@65:5 t = 0)
+      (=@66:5 t (+ t 1))
+      (var@67:5 d : sint<16> = 0)
+      (let@68:5 enc = (sim (call Enc)))
+      (let@69:5 dec = (sim (call Dec)))
+      (=@70:5 (. dec in) (. enc out))
+      (=@71:5 (. dut a) (call rand<u8>) where (!= (. dut a) 0))
+      (var@72:5 v = (call rand<u8>) where (> v 3))
+      (for@73:5 k (.. 0 (paren (* 10 t))) (block
+        (=@73:28 t (+ t k))))
+      (expr@74:5 (call (. d0 step_until) (. (. d0 out) valid) max: 300))
+      (expect@74:44 (== (. (. d0 out) data) v))))
+  (comments 1))

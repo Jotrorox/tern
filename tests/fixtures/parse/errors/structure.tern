@@ -1,0 +1,26 @@
+// Structural errors: SV-style port lists, misplaced declarations,
+// unclosed braces and misuse of `let`/`reg`.
+module Sv(input clk, output q);
+
+reg outside: u8 = 0
+
+module Body {
+    in a: u8
+    let w: u8
+    reg r = 0
+    on { r = a }
+    match a {
+        0: r = 1
+    }
+    let x = a[3 +: 4]
+    domain d = clk
+    a |-> a
+    module Inner {}
+}
+
+module Open {
+    in a: u8
+    on clk {
+        if a == 0 {
+            a = 1
+    }
