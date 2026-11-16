@@ -50,6 +50,7 @@ HDRS = \
 	src/sema/sema.h \
 	src/elab/value.h src/elab/elab.h src/elab/elab_impl.h \
 	src/check/check.h \
+	src/backend/backend.h \
 	src/cmds.h src/std_embed.h src/driver.h
 
 # --- os/
@@ -221,8 +222,16 @@ $(OBJ)/sim_vcd.o: src/sim/vcd.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/vcd.c -o $@
 
 # --- backend/
-BACKEND_SRCS =
-BACKEND_OBJS =
+BACKEND_SRCS = \
+	src/backend/build.c \
+	src/backend/verilator.c
+BACKEND_OBJS = \
+	$(OBJ)/backend_build.o \
+	$(OBJ)/backend_verilator.o
+$(OBJ)/backend_build.o: src/backend/build.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/build.c -o $@
+$(OBJ)/backend_verilator.o: src/backend/verilator.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/verilator.c -o $@
 
 # --- pkg/
 PKG_SRCS = \

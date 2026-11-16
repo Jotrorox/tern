@@ -49,6 +49,8 @@
 #include "emit/constraints.c"
 #include "emit/regmap.c"
 #include "emit/cmd_emit.c"
+#include "backend/build.c"
+#include "backend/verilator.c"
 #include "pkg/toml.c"
 #include "pkg/manifest.c"
 #include "pkg/lock.c"
