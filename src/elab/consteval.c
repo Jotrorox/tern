@@ -3269,7 +3269,9 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
     Value result = val_void(el->S);
     int hw = 0, ok = 1;
     struct BlkCtx *saved_blk;
-    int saved_in_fn;
+    int saved_in_fn, saved_fn_active, saved_ret_have;
+    Value saved_fn_path, saved_ret_cond, saved_ret_val;
+    Ty *saved_ret_ty;
     char frame[256];
     TERN_UNUSED(expect);
     if (el->depth >= CE_MAX_DEPTH) {
@@ -3402,8 +3404,18 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
     snprintf(frame, sizeof frame, "%s()", it->name.name);
     saved_blk = el->blk;
     saved_in_fn = el->in_fn;
+    saved_fn_active = el->fn_active;
+    saved_fn_path = el->fn_path;
+    saved_ret_have = el->fn_ret_have;
+    saved_ret_cond = el->fn_ret_cond;
+    saved_ret_val = el->fn_ret_val;
+    saved_ret_ty = el->fn_ret_ty;
     el->blk = NULL;
     el->in_fn = 1;
+    el->fn_active = 1;
+    el->fn_path = el_mk_bool(el, 1);
+    el->fn_ret_have = 0;
+    el->fn_ret_ty = NULL;
     el->depth++;
     if (it->u.fn.body) {
         Value tail = val_void(el->S);
@@ -3415,15 +3427,33 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
             el->quiet = q;
             el->quiet_errors = 0;
             el->tail_expect = rt && rt->kind != TY_ERROR ? rt : NULL;
+            el->fn_ret_ty = el->tail_expect;
         }
         el_exec_stmts(el, it->u.fn.body->stmts, it->u.fn.body->nstmts, benv, it->u.fn.body->tail, &tail);
         if (el->returned) {
             result = el->ret;
             el->returned = 0;
+        } else if (el->fn_ret_have && el->fn_ret_val.kind != VAL_ERROR) {
+            /* some paths returned early: they take priority over the tail */
+            if (tail.kind == VAL_VOID || tail.kind == VAL_ERROR) {
+                if (tail.kind == VAL_VOID && it->u.fn.ret)
+                    el_error(el, it->u.fn.body->span, "`%s` does not return a value on every path", it->name.name);
+                result = val_error();
+            } else {
+                result = el_unify_mux(el, el->fn_ret_cond, el->fn_ret_val, tail, el->fn_ret_ty, at);
+            }
+        } else if (el->fn_ret_have) {
+            result = val_error();
         } else {
             result = tail;
         }
     }
+    el->fn_active = saved_fn_active;
+    el->fn_path = saved_fn_path;
+    el->fn_ret_have = saved_ret_have;
+    el->fn_ret_cond = saved_ret_cond;
+    el->fn_ret_val = saved_ret_val;
+    el->fn_ret_ty = saved_ret_ty;
     el->depth--;
     el->blk = saved_blk;
     el->in_fn = saved_in_fn;
@@ -4497,9 +4527,12 @@ static Value ce_mod_lookup(CeModVec *v, Env *env, const char *name, int *found)
 
 typedef struct CeArmRun {
     Value cond;               /* hw bool, or const true for a default */
+    Value excl;               /* inside fns: the condition under which this arm runs
+                                 (cond and not the earlier arms); VAL_VOID if unknown */
     IrStmtList stmts;
     CeModVec mods;
     Value val;
+    int returned;             /* the arm ended in a `return` */
 } CeArmRun;
 
 /* merges locals modified in the arms: value = mux chain over the arm
@@ -4556,8 +4589,11 @@ static void ce_run_arm(Elab *el, CeArmRun *arm, Stmt *body_stmt, Expr *body_expr
     uint32_t mark = (uint32_t)el->undo.len;
     IrStmtList *saved = el->blk ? el->blk->out : NULL;
     Env *aenv = elab_env_new(el, env, NULL);
+    Value saved_path = el->fn_path;
     if (el->blk)
         el->blk->out = &arm->stmts;
+    if (el->fn_active && arm->excl.kind != VAL_VOID)
+        el->fn_path = el_and(el, el->fn_path, arm->excl, body_stmt ? body_stmt->span : body_expr->span);
     el->undo_depth++;
     if (pat)
         el_bind_pattern(el, pat, subj, aenv, 0);
@@ -4579,10 +4615,30 @@ static void ce_run_arm(Elab *el, CeArmRun *arm, Stmt *body_stmt, Expr *body_expr
             el_exec_stmt(el, body_stmt, aenv);
     }
     el->undo_depth--;
+    el->fn_path = saved_path;
+    if (el->returned && el->fn_active) {
+        /* a `return` under this arm's condition was recorded in fn_ret_*;
+         * the code after the branch still runs for the other paths */
+        arm->returned = 1;
+        el->returned = 0;
+    }
     ce_collect_restore(el, mark, env, &arm->mods);
     if (el->blk)
         el->blk->out = saved;
     elab_env_free(aenv);
+}
+
+/* every arm of a branch returned: the branch as a whole returns */
+static void ce_all_returned(Elab *el, CeArmRun *arms, uint32_t n)
+{
+    uint32_t a;
+    if (!el->fn_active || !el->fn_ret_have || !n)
+        return;
+    for (a = 0; a < n; a++)
+        if (!arms[a].returned)
+            return;
+    el->ret = el->fn_ret_val;
+    el->returned = 1;
 }
 
 static IrBlock ce_finish(Elab *el, IrStmtList *l)
@@ -4612,6 +4668,12 @@ static Value ce_if_hw(Elab *el, Value c, Block *then_b, Expr *else_e, Env *env, 
     then_expr.u.block = then_b;
     arms[0].cond = c;
     arms[1].cond = el_mk_bool(el, 1);
+    arms[0].excl = val_void(el->S);
+    arms[1].excl = val_void(el->S);
+    if (el->fn_active) {
+        arms[0].excl = c;
+        arms[1].excl = el_not(el, c, at);
+    }
     ce_run_arm(el, &arms[0], NULL, &then_expr, NULL, val_void(el->S), env, expect, want_value);
     if (else_e)
         ce_run_arm(el, &arms[1], NULL, else_e, NULL, val_void(el->S), env, expect, want_value);
@@ -4623,10 +4685,17 @@ static Value ce_if_hw(Elab *el, Value c, Block *then_b, Expr *else_e, Env *env, 
         ir_stmts_finish(&el->arena, &arms[1].stmts);
     }
     ce_merge_arms(el, arms, 2, 1, env, at);
-    if (want_value) {
+    if (else_e)
+        ce_all_returned(el, arms, 2);
+    if (want_value && el->returned) {
+        r = val_void(el->S); /* both arms returned from the fn */
+    } else if (want_value) {
         if (!else_e) {
             el_error(el, at, "an `if` used as a value needs an `else`");
             r = val_error();
+        } else if (arms[0].returned || arms[1].returned) {
+            /* the arm that returned has no value: the fn result covers that path */
+            r = arms[0].returned ? arms[1].val : arms[0].val;
         } else {
             r = el_unify_mux(el, c, arms[0].val, arms[1].val, expect, at);
         }
@@ -4796,9 +4865,15 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
         for (a = 0; simple && a < n; a++)
             if (!ce_case_vals(el, e->u.match.arms[a].pat, subj.ty, env, &vals[a], &defs[a]))
                 simple = 0;
+        Value prev = el_mk_bool(el, 0);
         for (a = 0; a < n; a++) {
             MatchArm *arm = &e->u.match.arms[a];
             arms[a].cond = el_match_test(el, arm->pat, subj, env);
+            arms[a].excl = val_void(el->S);
+            if (el->fn_active && arms[a].cond.kind != VAL_ERROR) {
+                arms[a].excl = el_and(el, arms[a].cond, el_not(el, prev, arm->span), arm->span);
+                prev = el_or(el, prev, arms[a].cond, arm->span);
+            }
             ce_run_arm(el, &arms[a], arm->body, NULL, arm->pat, subj, env, expect, want_value);
         }
         exhaustive = 1;
@@ -4856,10 +4931,17 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
         free(defs);
     }
     ce_merge_arms(el, arms, n, exhaustive, env, e->span);
-    if (want_value && n) {
-        r = arms[n - 1].val;
-        for (a = n - 1; a-- > 0;)
-            r = el_unify_mux(el, arms[a].cond, arms[a].val, r, expect, e->span);
+    ce_all_returned(el, arms, n);
+    if (want_value && n && el->returned) {
+        r = val_void(el->S); /* every arm returned from the fn */
+    } else if (want_value && n) {
+        uint32_t last = n;
+        while (last > 0 && arms[last - 1].returned)
+            last--;
+        r = last ? arms[last - 1].val : val_void(el->S);
+        for (a = last ? last - 1 : 0; a-- > 0;)
+            if (!arms[a].returned)
+                r = el_unify_mux(el, arms[a].cond, arms[a].val, r, expect, e->span);
     }
     for (a = 0; a < n; a++)
         vec_free(arms[a].mods);
@@ -5571,15 +5653,42 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
         }
         return;
     }
-    case STMT_RETURN:
-        if (el->undo_depth) {
-            el_error(el, s->span, "`return` under a condition on signals is not supported");
-            el_help(el, "compute the result with an `if` expression instead");
+    case STMT_RETURN: {
+        Value v;
+        if (el->blk && !el->in_fn) {
+            el_error(el, s->span, "`return` outside a function");
             return;
         }
-        el->ret = s->u.ret ? elab_eval(el, s->u.ret, env, NULL) : val_void(S);
+        v = s->u.ret ? elab_eval(el, s->u.ret, env, el->fn_active ? el->fn_ret_ty : NULL) : val_void(S);
+        if (el->fn_active && el->fn_ret_ty && v.kind != VAL_ERROR && v.kind != VAL_VOID)
+            v = elab_convert(el, v, el->fn_ret_ty, s->u.ret, "the return type", s->u.ret ? s->u.ret->span : s->span);
+        if (el->fn_active && (el->fn_ret_have || el->fn_path.kind != VAL_BOOL)) {
+            /* returns under conditions on signals: the result is a mux over
+             * the return points, the earliest one taking priority */
+            if (v.kind == VAL_ERROR || v.kind == VAL_VOID) {
+                if (v.kind == VAL_VOID)
+                    el_error(el, s->span, "a `return` under a condition on signals needs a value");
+                el->ret = val_error();
+                el->returned = 1;
+                return;
+            }
+            if (!el->fn_ret_have) {
+                el->fn_ret_val = v;
+                el->fn_ret_cond = el->fn_path;
+                el->fn_ret_have = 1;
+            } else if (el->fn_ret_val.kind != VAL_ERROR) {
+                el->fn_ret_val = el_maybe_temp(el, el_unify_mux(el, el->fn_ret_cond, el->fn_ret_val, v, el->fn_ret_ty,
+                                                                s->span), s->span);
+                el->fn_ret_cond = el_or(el, el->fn_ret_cond, el->fn_path, s->span);
+            }
+            el->ret = el->fn_ret_val;
+            el->returned = 1;
+            return;
+        }
+        el->ret = v;
         el->returned = 1;
         return;
+    }
     case STMT_ITEM:
         if (s->u.item->kind == ITEM_PROPERTY || s->u.item->kind == ITEM_SEQUENCE)
             el_error(el, s->span, "properties are declared at module level");

@@ -230,6 +230,14 @@ struct Elab {
     uint32_t undo_depth;
     int returned;             /* a `return` is propagating */
     Value ret;
+    /* `return` under conditions on signals in a fn inlined on signals: the
+     * condition (relative to the fn's entry) of the arm being run, and the
+     * merged result of the returns seen so far (taken when ret_cond holds) */
+    int fn_active;            /* inside el_call_fn */
+    Value fn_path;            /* path condition of the current arm (bool true at the fn level) */
+    int fn_ret_have;
+    Value fn_ret_cond, fn_ret_val;
+    Ty *fn_ret_ty;
     Ty *tail_expect;          /* expected type of the next block's tail value */
     struct BlkCtx *temp_blk;  /* block receiving intermediate values (see el_maybe_temp) */
     Map seen_errors;          /* (span, message) hashes: report each error once */

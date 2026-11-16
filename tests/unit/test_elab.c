@@ -237,12 +237,55 @@ done:
     tl_close(&t);
 }
 
+/* ------------------------------------------------ return in branches -- */
+
+static uint64_t tl_ref_first(uint64_t x)
+{
+    uint64_t i;
+    for (i = 0; i < 8; i++)
+        if (x >> i & 1)
+            return i;
+    return 8;
+}
+
+static uint64_t tl_ref_class(uint64_t x)
+{
+    if (x == 0)
+        return 0;
+    if (x < 16)
+        return ((x + 100) & 0xFF) == 105 ? 3 : 1;
+    return x == 0xFF ? 3 : 2;
+}
+
+static void test_fn_return(void)
+{
+    TlDesign t;
+    uint64_t x;
+    if (!tl_open(&t, "fn_return.tern", "FnReturn"))
+        goto done;
+    for (x = 0; x < 256; x++) {
+        uint64_t a = (x * 37) & 0xFF, b = (x * 91 + 7) & 0xFF;
+        tl_poke(&t, "x", x);
+        tl_poke(&t, "a", a);
+        tl_poke(&t, "b", b);
+        tl_poke(&t, "c", x & 1);
+        sim_settle(t.m);
+        TL_EQ(tl_peek(&t, "first"), tl_ref_first(x));
+        TL_EQ(tl_peek(&t, "class"), tl_ref_class(x));
+        TL_EQ(tl_peek(&t, "pick"), (x & 1) ? a : b);
+        TL_EQ(tl_peek(&t, "sum"), a + b > 255 ? 255 : a + b);
+    }
+done:
+    tl_close(&t);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1)
         tl_tern = argv[1];
     test_index_range();
     test_bundle_index();
+    test_fn_return();
     src_free_all();
     intern_free_all();
     if (tl_fails) {
