@@ -35,6 +35,18 @@ jobs:
           ./tools/embed std src/std_embed.c
           git diff --exit-code -- src/std_embed.c
 
+  hdl:
+    name: Emitted HDL (iverilog cross-check, verilator lint, yosys synth)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install HDL tools
+        run: sudo apt-get update && sudo apt-get install -y verilator yosys iverilog libxml2-utils
+      - name: make test (test_emit compiles every emitted file set with iverilog and cross-checks it against the simulator)
+        run: make EXTRA=-Werror test
+      - name: Lint and synthesize the emitted fixtures
+        run: tests/lint_emitted.sh
+
   warnings:
     name: Linux check-warnings (gcc + clang, c99 + c11)
     runs-on: ubuntu-latest
