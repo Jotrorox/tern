@@ -1,0 +1,158 @@
+package std::prelude
+
+// The prelude is imported into every Tern file (spec §4). It holds the two
+// handshake bundles every std component speaks, the integer aliases, and the
+// width helpers that type expressions need.
+//
+// Also available everywhere, but provided by the compiler as intrinsics and
+// therefore not defined here: bits(x), T::from_bits(b), typeof(e), T::WIDTH,
+// T::MAX, T::MIN, static_assert(c, "msg"), const_log, log, rand<T>(),
+// include_hex, include_bin, unsafe_cross(x), stable/rose/fell/past,
+// n.is_pow2() on compile-time integers, a.len, all0 and all1.
+
+// ---------------------------------------------------------------------------
+// Handshake bundles
+// ---------------------------------------------------------------------------
+
+/// A value qualified by a valid bit, without back-pressure. Use it where the
+/// consumer can always accept (pipelines with a fixed latency, status words).
+pub bundle Valid<T: type> {
+    /// High in every cycle in which `data` carries a value.
+    valid: bool
+    /// The payload. Meaningless while `valid` is low.
+    data: T
+}
+
+/// The standard valid/ready handshake. A beat transfers in every cycle in
+/// which both `valid` and `ready` are high. Once a producer raises `valid` it
+/// keeps `valid` high and `data` stable until the beat transfers; `valid` must
+/// never depend combinationally on `ready` (`ready` may depend on `valid`).
+pub bundle Stream<T: type> {
+    /// The producer offers `data` this cycle.
+    valid: bool
+    /// The payload. Meaningless while `valid` is low.
+    data: T
+    /// The consumer accepts a beat this cycle. Flows against the bundle.
+    flip ready: bool
+
+    /// True in a cycle in which a beat transfers (`valid and ready`).
+    fn fire() -> bool { self.valid and self.ready }
+}
+
+// ---------------------------------------------------------------------------
+// Integer aliases
+// ---------------------------------------------------------------------------
+
+/// Unsigned 8-bit integer.
+pub type u8 = uint<8>
+/// Unsigned 16-bit integer.
+pub type u16 = uint<16>
+/// Unsigned 32-bit integer.
+pub type u32 = uint<32>
+/// Unsigned 64-bit integer.
+pub type u64 = uint<64>
+/// Signed (two's-complement) 8-bit integer.
+pub type s8 = sint<8>
+/// Signed (two's-complement) 16-bit integer.
+pub type s16 = sint<16>
+/// Signed (two's-complement) 32-bit integer.
+pub type s32 = sint<32>
+/// Signed (two's-complement) 64-bit integer.
+pub type s64 = sint<64>
+
+// ---------------------------------------------------------------------------
+// Width helpers
+// ---------------------------------------------------------------------------
+
+/// Ceiling of log2: the number of bits needed to index `n` distinct values.
+/// clog2(0) == 0, clog2(1) == 0, clog2(2) == 1, clog2(5) == 3, clog2(256) == 8.
+/// Compile-time only (it contains a `while`).
+pub const fn clog2(n: uint) -> uint {
+    var r: uint = 0
+    while (1 << r) < n {
+        r = r + 1
+    }
+    r
+}
+
+/// Number of set bits of `x`, as a value just wide enough to hold N.
+/// Usable on signals (an adder tree) and at compile time.
+pub fn count_ones(x: bit<N>) -> uint<clog2(N + 1)> {
+    var c: uint<clog2(N + 1)> = 0
+    for i in 0..N {
+        c = c +% (x[i] as uint<1>)
+    }
+    c
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+// A tiny module used only by the tests below, to exercise Stream::fire()
+// and bundle directions through a real port.
+module StreamProbe {
+    in s: Stream<u8>
+    in accept: bool
+    out fired: bool
+    out seen: Valid<u8>
+
+    s.ready = accept
+    fired = s.fire()
+    seen.valid = s.valid
+    seen.data = s.data
+}
+
+test "clog2 of small values" {
+    expect clog2(0) == 0
+    expect clog2(1) == 0
+    expect clog2(2) == 1
+    expect clog2(3) == 2
+    expect clog2(4) == 2
+    expect clog2(5) == 3
+    expect clog2(8) == 3
+    expect clog2(9) == 4
+    expect clog2(256) == 8
+    expect clog2(257) == 9
+    expect clog2(1_000_000) == 20
+}
+
+test "count_ones counts set bits" {
+    expect count_ones(0b0000 as bit<4>) == 0
+    expect count_ones(0b1011 as bit<4>) == 3
+    expect count_ones(0b1111 as bit<4>) == 4
+    expect count_ones(0xFF as bit<8>) == 8
+    expect count_ones(0x8000_0001 as bit<32>) == 2
+    for _ in 0..100 {
+        let v = rand<u8>()
+        var n: uint = 0
+        for i in 0..8 {
+            if bits(v)[i] { n = n + 1 }
+        }
+        expect count_ones(bits(v)) == n
+    }
+}
+
+test "integer aliases have the right widths" {
+    expect u8::WIDTH == 8
+    expect u16::WIDTH == 16
+    expect u32::WIDTH == 32
+    expect u64::WIDTH == 64
+    expect s8::WIDTH == 8
+    expect s64::WIDTH == 64
+    expect u8::MAX == 255
+    expect s8::MIN == -128
+}
+
+test "stream fire needs valid and ready" {
+    let dut = sim StreamProbe()
+    for (v, r, f) in [(false, false, false), (true, false, false), (false, true, false), (true, true, true)] {
+        dut.s = Stream { valid: v, data: 0x5A }
+        dut.accept = r
+        dut.settle()
+        expect dut.fired == f
+        expect dut.s.ready == r
+        expect dut.seen.valid == v
+        expect dut.seen.data == 0x5A
+    }
+}
