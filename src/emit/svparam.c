@@ -25,7 +25,7 @@ int sv_xexpr_eval(const SvXExpr *x, const int64_t *params, int64_t *out)
             return 0;
         break;
     case SVX_CLOG2: {
-        int64_t n;
+        int64_t n = 0;
         if (!sv_xexpr_eval(x->a, params, &n))
             return 0;
         r = 0;
