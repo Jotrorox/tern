@@ -48,7 +48,9 @@
  *     and counts the attempts that complete non-vacuously.  Attempts are
  *     discarded while the domain is in reset.  Unbounded `eventually` /
  *     `##[n:$]` obligations still open at sim_finish() are reported as
- *     pending.  past(x, n) reads a history buffer (0 before n cycles exist).
+ *     pending.  past(x, n) reads a history buffer (0 before n cycles exist);
+ *     the history restarts (reads 0) while the domain is in reset, so a
+ *     property never compares with values sampled during reset.
  *   - Coverage: every block entry (process bodies, then/else branches, case
  *     arms) is counted; sim_coverage() lists statements, branches, arms and
  *     cover properties keyed by span, summed over instances.
@@ -83,8 +85,9 @@ void sim_free(SimModel *m);
 /* ------------------------------------------------------------ signals -- */
 
 int sim_find(SimModel *m, const char *path);    /* handle or -1 */
-/* Handles of all signals whose path starts with `prefix` + "." (the
- * flattened fields of a bundle port "tx" -> "tx.valid", "tx.data", ...), in
+/* Handles of all signals whose path starts with `prefix` + "." or "[" (the
+ * flattened fields of a bundle port "tx" -> "tx.valid", "tx.data", ...; the
+ * elements of an array of bundles "out" -> "out[0].valid", ...), in
  * declaration order. Returns the total count (may exceed max). */
 int sim_find_prefix(SimModel *m, const char *prefix, int *out, int max);
 int sim_signal_count(const SimModel *m);         /* handles are 0..count-1 */

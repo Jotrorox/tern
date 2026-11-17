@@ -1,0 +1,85 @@
+// Assertions inside the design (§11.3) and properties (§11.4) are checked
+// every cycle while a test runs.
+
+module Gate {
+    in clk: clock
+    in rst: reset
+    in push: Stream<u8>
+    out pop: Stream<u8>
+    out count: uint<3>
+
+    reg n: uint<3> = 0
+    reg held: bool = false
+    reg data: u8 = 0
+
+    push.ready = !held or pop.ready
+    pop.valid = held
+    pop.data = data
+    count = n
+
+    on clk {
+        if pop.fire() {
+            held = false
+        }
+        if push.fire() {
+            held = true
+            data = push.data
+            n = n +% 1
+        }
+        assert n != 7, "counter about to wrap"
+    }
+
+    property data_stable {
+        always (pop.valid and !pop.ready) |=> pop.valid and stable(pop.data)
+    }
+    property short_stalls {
+        always (pop.valid and !pop.ready) |-> eventually[..3] pop.ready
+    }
+    assume property no_push_after_five { always count >= 5 |-> !push.valid }
+    cover property two_in_a_row { push.fire() ##1 push.fire() }
+}
+
+test "a clean run" {
+    let dut = sim Gate()
+    dut.reset()
+    dut.pop.ready = true
+    for v in [1, 2, 3] {
+        dut.push = Stream { valid: true, data: v }
+        dut.step()
+    }
+    dut.push.valid = false
+    dut.step(2)
+    expect dut.count == 3
+}
+
+test "a property fails and stops the test" {
+    let dut = sim Gate()
+    dut.reset()
+    dut.pop.ready = false
+    dut.push = Stream { valid: true, data: 1 }
+    dut.step()
+    dut.push.valid = false
+    dut.step(10)
+    log("not reached")
+}
+
+test "an assumption violation is reported, the test goes on" {
+    let dut = sim Gate()
+    dut.reset()
+    dut.pop.ready = true
+    dut.push = Stream { valid: true, data: 5 }
+    dut.step(5)
+    dut.step()                      // pushes while count == 5
+    dut.push.valid = false
+    dut.step()
+    log("still running, count = {}", dut.count)
+}
+
+test "a design assertion stops the test" {
+    let dut = sim Gate()
+    dut.reset()
+    dut.pop.ready = true
+    dut.push = Stream { valid: true, data: 5 }
+    dut.step(12)
+    log("not reached")
+}

@@ -1441,6 +1441,35 @@ static IrSeq *elb_seq(Elab *el, Expr *e, Env *env, int depth)
     }
 }
 
+/* domains of the signals a property reads: *dom gets the only one, or
+ * IR_NONE + 1 once two different domains were seen */
+static void elb_expr_domain(const IrModule *m, const IrExpr *e, uint32_t *dom)
+{
+    uint32_t i;
+    if (!e)
+        return;
+    if ((e->kind == IRE_SIG || e->kind == IRE_MEMREAD) && e->sig < m->nsigs) {
+        uint32_t d = m->sigs[e->sig].domain;
+        if (d != IR_NONE && m->sigs[e->sig].type->kind != IRT_CLOCK && m->sigs[e->sig].type->kind != IRT_RESET) {
+            if (*dom == IR_NONE)
+                *dom = d;
+            else if (*dom != d)
+                *dom = IR_NONE - 1;
+        }
+    }
+    for (i = 0; i < e->nargs; i++)
+        elb_expr_domain(m, e->args[i], dom);
+}
+
+static void elb_seq_domain(const IrModule *m, const IrSeq *q, uint32_t *dom)
+{
+    if (!q)
+        return;
+    elb_expr_domain(m, q->expr, dom);
+    elb_seq_domain(m, q->a, dom);
+    elb_seq_domain(m, q->b, dom);
+}
+
 static void elb_property(Elab *el, Item *it, Env *env)
 {
     IrModule *m = el->mod->ir;
@@ -2012,6 +2041,8 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
     el->undo_depth = 0;
     body = it->kind == ITEM_MODULE ? it->u.module.body : it->u.extern_mod.body;
     nbody = it->kind == ITEM_MODULE ? it->u.module.nbody : it->u.extern_mod.nbody;
+    if (it->kind == ITEM_MODULE && el_regfile_wants(el, vm))
+        el_regfile_body(el, vm, &body, &nbody);
     elb_module_attrs(el, &mc);
     elb_params(el, &mc);
     if (!mc.is_extern)
@@ -2058,6 +2089,15 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
         if (!mi->ports[i].is_clock)
             elb_set_domain_tree(mi->ir, mi->ports[i].place, d);
     }
+    /* a property is checked in the domain of the signals it reads (when they
+     * agree), not always in the default domain */
+    if (mi->ir->ndomains > 1)
+        for (i = 0; i < mi->ir->nprops; i++) {
+            uint32_t d = IR_NONE;
+            elb_seq_domain(mi->ir, mi->ir->props[i].seq, &d);
+            if (d < mi->ir->ndomains)
+                mi->ir->props[i].domain = d;
+        }
     elb_finish(el, &mc);
     elb_free_ctx(&mc);
     scope->mod = NULL;

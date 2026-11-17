@@ -1,0 +1,37 @@
+// args: --waves
+// --waves keeps a VCD of every failing test in build/waves/ (passing tests
+// leave none); dump() records one explicitly.
+
+module Blink {
+    in clk: clock
+    in rst: reset
+    out led: bool
+
+    reg q: bool = false
+    on clk {
+        q = !q
+    }
+    led = q
+}
+
+test "blinks" {
+    let dut = sim Blink()
+    dut.reset()
+    dut.step()
+    expect dut.led
+}
+
+test "blinks twice as fast" {
+    let dut = sim Blink()
+    dut.reset()
+    dut.step(2)
+    expect dut.led
+}
+
+test "explicit dump" {
+    let dut = sim Blink()
+    dut.dump("build/waves/explicit.vcd")
+    dut.reset()
+    dut.step(4)
+    dut.dump("no/such/dir/x.vcd")
+}

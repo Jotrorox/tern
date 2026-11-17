@@ -1,0 +1,10 @@
+running 5 tests
+test fifo preserves order ... ok
+test alu ops ... ok
+test random adds ... ok
+test rand is reproducible per seed ... ok
+    log: x = 401 (0x191), flag = true, op = .And
+test step_until and cycles ... ok
+    log: waited 1 cycles, now at cycle 4
+
+ok: 5 passed, 0 failed

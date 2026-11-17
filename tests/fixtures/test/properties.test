@@ -1,0 +1,13 @@
+running 4 tests
+test a clean run ... ok
+test a property fails and stops the test ... FAILED
+    properties.tern:35:5: property `short_stalls` failed at cycle 6 (attempt started at cycle 3)
+test an assumption violation is reported, the test goes on ... FAILED
+    properties.tern:38:5: assumption violated: property `no_push_after_five` at cycle 7
+    log: still running, count = 6
+test a design assertion stops the test ... FAILED
+    properties.tern:38:5: assumption violated: property `no_push_after_five` at cycle 7
+    properties.tern:29:9: assertion failed: counter about to wrap at cycle 9
+
+FAILED: 1 passed, 3 failed
+replay a failing test with: tern test --seed 1 "<name>"

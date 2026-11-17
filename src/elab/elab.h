@@ -234,6 +234,11 @@ struct Elab {
     int check_strict;
     const char *root_frame;   /* elaboration path of the current root */
     void *user;
+    /* method call on a VAL_OPAQUE being dispatched (set just before
+     * ValOpaqueOps.call_method): lets a host re-evaluate an argument lazily,
+     * e.g. the condition of `dut.step_until(cond)` */
+    Expr *opq_call;
+    struct Env *opq_env;
 };
 
 typedef struct UndoEntry {

@@ -671,6 +671,8 @@ Ty *elab_eval_type(Elab *el, Type *t, Env *env)
                 Ty *r = el_type_item(el, it, v.u.fn->file, v.u.fn->ctx, NULL, 0, env, t->span, NULL);
                 return r;
             }
+            if (it->kind == ITEM_REGMAP)   /* as a type: its `Regs` bundle (RegisterFile<Map>) */
+                return el_regmap_type(el, it, v.u.fn->file, "Regs", t->span);
         }
         el_error(el, t->span, "`%s` is not a type", el_span_text(t->span));
         return S->t_error;
@@ -1044,6 +1046,11 @@ Value el_member(Elab *el, Value base, const char *name, Span at, Env *env)
             el_error(el, at, "`::%s` on an enum variant", name);
             return val_error();
         }
+        if (t->kind == TY_BUNDLE && t->def && t->def->kind == ITEM_REGMAP) {
+            /* a regmap passed as a type generic (`Map::Ctrl` in RegisterFile<Map>) */
+            Ty *rt = el_regmap_type(el, t->def, t->file, name, at);
+            return rt->kind == TY_ERROR ? val_error() : val_type(S, rt);
+        }
         if (strcmp(name, "WIDTH") == 0) {
             if (!t->hw) {
                 el_error(el, at, "`%s` has no fixed width", ty_str(t));
@@ -1347,6 +1354,18 @@ Value elab_convert(Elab *el, Value v, Ty *to, Expr *src, const char *what, Span 
         return v.kind == VAL_ERROR ? v : val_error();
     if (from == to)
         return v;
+    if (v.kind == VAL_STRING && (v.flags & VAL_F_VARIANT) && to->kind == TY_ENUM) {
+        int k = ty_variant_index(to, intern(v.u.s, v.aux));
+        if (k < 0) {
+            el_error(el, at, "enum `%s` has no variant `%.*s`", ty_str(to), (int)v.aux, v.u.s);
+            return val_error();
+        }
+        if (to->variants[k].payload && to->variants[k].payload->nfields) {
+            el_error(el, at, "variant `%.*s` needs its fields", (int)v.aux, v.u.s);
+            return val_error();
+        }
+        return val_enum(&el->arena, to, (uint32_t)k, NULL);
+    }
     switch (to->kind) {
     case TY_BIT: case TY_UINT: case TY_SINT:
         if (v.kind == VAL_INT && from && from->kind == TY_INT) {
@@ -2969,6 +2988,12 @@ static Value ce_variant_literal(Elab *el, Expr *e, Env *env, Ty *expect)
 {
     const char *name = e->u.variant.name.name;
     int k;
+    if (!expect && el->hooks.sim && name && !e->u.variant.has_fields) {
+        /* tests: typed when it is converted (assigned to a signal, ...) */
+        Value v = val_string(el->S, name, (uint32_t)strlen(name));
+        v.flags |= VAL_F_VARIANT;
+        return v;
+    }
     if (!expect || expect->kind != TY_ENUM) {
         if (expect && expect->kind == TY_ERROR)
             return val_error();
@@ -3696,9 +3721,13 @@ static Value ce_method(Elab *el, Expr *call, Env *env, Ty *expect)
             if (vals[i].kind == VAL_ERROR)
                 return val_error();
         }
+        el->opq_call = call;
+        el->opq_env = env;
         r = base.u.opq->ops->call_method
                 ? base.u.opq->ops->call_method(el, base.u.opq->obj, name, vals, names, n, at, &out)
                 : 0;
+        el->opq_call = NULL;
+        el->opq_env = NULL;
         if (r == 0)
             el_error(el, callee->u.field.name.span, "%s has no method `%s`", base.u.opq->ops->type_name, name);
         return r > 0 ? out : val_error();
@@ -4815,7 +4844,14 @@ static Place *ce_local_place(Elab *el, Expr *e, Env *env, Binding *root)
         if (!base)
             return NULL;
         memset(&sel, 0, sizeof sel);
-        cur = el_read_place(el, base);
+        if (root->val.kind == VAL_OPAQUE) {
+            int quiet = el->quiet;
+            el->quiet = 1;
+            cur = el_read_place(el, base);
+            el->quiet = quiet;
+        } else {
+            cur = el_read_place(el, base);
+        }
         if (e->kind == EXPR_FIELD) {
             int k;
             if (cur.kind == VAL_OPAQUE) {
@@ -5012,8 +5048,13 @@ static Value ce_sel_update(Elab *el, Value cur, const PlaceSel *sels, uint32_t n
             return val_error();
         if (n > 1) {
             Value sub = ce_sel_read(el, cur, s, at);
-            ce_sel_update(el, sub, sels + 1, n - 1, nv, at);
-            return cur;
+            if (sub.kind == VAL_ERROR)
+                return val_error();
+            sub = ce_sel_update(el, sub, sels + 1, n - 1, nv, at);
+            if (sub.kind == VAL_OPAQUE || sub.kind == VAL_ERROR)
+                return cur;
+            /* a plain value (struct, array) read from the handle: write it back whole */
+            nv = sub;
         }
         if (s->kind == 3)
             r = o->ops->set_field ? o->ops->set_field(el, o->obj, s->idx.u.s, nv, at) : 0;
@@ -5341,7 +5382,14 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
             return;
         }
         if (p->kind == PL_LOCAL) {
-            Value cur = el_read_place(el, p);
+            /* the current value only gives the expected type; reading through a
+             * host handle may fail where the write reports a better error */
+            int quiet = el->quiet;
+            Value cur;
+            if (p->bind->val.kind == VAL_OPAQUE)
+                el->quiet = 1;
+            cur = el_read_place(el, p);
+            el->quiet = quiet;
             hint = cur.ty;
         } else {
             hint = p->ty;
@@ -5602,21 +5650,40 @@ Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
     case EXPR_UNARY: {
         Expr *o = e->u.unary.operand;
         Value v;
-        if (e->u.unary.op == UN_NEG && o->kind == EXPR_INT && o->u.int_lit.suffix) {
-            Value lit = ce_int_literal(el, o, env, NULL);
+        if (e->u.unary.op == UN_NEG && o->kind == EXPR_INT && o->u.int_lit.suffix == 's') {
+            /* -128s8: the range check applies to the negated value */
+            uint32_t w = ce_width_arg(el, o->u.int_lit.width, env);
             BigInt b = {0};
+            Ty *t;
             Value r;
-            if (lit.kind == VAL_ERROR)
-                return lit;
-            if (lit.ty->kind != TY_SINT) {
-                el_error(el, e->span, "negative unsigned literal `%s`", el_text(e));
+            if (!w)
+                return val_error();
+            t = ty_scalar(S, TY_SINT, w);
+            if (o->u.int_lit.overflow)
+                bn_parse(&b, o->u.int_lit.text, strlen(o->u.int_lit.text), 0);
+            else
+                bn_set_u64(&b, o->u.int_lit.value);
+            bn_neg(&b, &b);
+            if (!el_fits(&b, t)) {
+                StrBuf sb = {0}, rs = {0};
+                bn_to_sb(&sb, &b, 10);
+                el_range_text(t, &rs);
+                el_error(el, e->span, "literal %s does not fit in %s (%s)", sb_cstr(&sb), ty_str(t), sb_cstr(&rs));
+                sb_free(&sb);
+                sb_free(&rs);
+                bn_free(&b);
                 return val_error();
             }
-            val_get_bn(&lit, &b);
-            bn_neg(&b, &b);
-            r = val_int_bn(&el->arena, lit.ty, &b);
+            r = val_int_bn(&el->arena, t, &b);
             bn_free(&b);
             return r;
+        }
+        if (e->u.unary.op == UN_NEG && o->kind == EXPR_INT && o->u.int_lit.suffix) {
+            Value lit = ce_int_literal(el, o, env, NULL);
+            if (lit.kind == VAL_ERROR)
+                return lit;
+            el_error(el, e->span, "negative unsigned literal `%s`", el_text(e));
+            return val_error();
         }
         v = elab_eval(el, o, env, e->u.unary.op == UN_NOT ? S->t_bool
                                   : (e->u.unary.op == UN_BITNOT && expect && ty_is_sized_int(expect)) ? expect : NULL);

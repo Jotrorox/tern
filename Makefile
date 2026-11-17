@@ -2,6 +2,8 @@
 #
 #   make                  build ./tern (per-file objects in build/obj/)
 #   make test             build and run the unit tests and the golden tests
+#                         (including `tern test std`, about 3 s)
+#   make test-std         only `tern test std`
 #   make unity            one-command build: $(CC) ... -o tern src/unity.c
 #   make check-warnings   -Werror builds of everything as C99 and as C11
 #   make fuzz             libFuzzer parser harness build/fuzz_parser (clang;
@@ -44,7 +46,7 @@ HDRS = \
 	src/syntax/token.h src/syntax/lexer.h src/syntax/ast.h src/syntax/parser.h \
 	src/ir/ir.h \
 	src/emit/emit.h \
-	src/sim/sim.h src/sim/sim_impl.h \
+	src/sim/sim.h src/sim/sim_impl.h src/sim/testrun.h \
 	src/pkg/pkg.h \
 	src/tools/tools.h \
 	src/sema/sema.h \
@@ -145,12 +147,14 @@ ELAB_SRCS = \
 	src/elab/value.c \
 	src/elab/consteval.c \
 	src/elab/mono.c \
-	src/elab/elab.c
+	src/elab/elab.c \
+	src/elab/regfile.c
 ELAB_OBJS = \
 	$(OBJ)/elab_value.o \
 	$(OBJ)/elab_consteval.o \
 	$(OBJ)/elab_mono.o \
-	$(OBJ)/elab_elab.o
+	$(OBJ)/elab_elab.o \
+	$(OBJ)/elab_regfile.o
 $(OBJ)/elab_value.o: src/elab/value.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/elab/value.c -o $@
 $(OBJ)/elab_consteval.o: src/elab/consteval.c $(HDRS) $(OBJ)/.dir
@@ -159,6 +163,8 @@ $(OBJ)/elab_mono.o: src/elab/mono.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/elab/mono.c -o $@
 $(OBJ)/elab_elab.o: src/elab/elab.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/elab/elab.c -o $@
+$(OBJ)/elab_regfile.o: src/elab/regfile.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/elab/regfile.c -o $@
 
 # --- ir/
 IR_SRCS = \
@@ -205,12 +211,18 @@ SIM_SRCS = \
 	src/sim/bitvec.c \
 	src/sim/netlist.c \
 	src/sim/eval.c \
-	src/sim/vcd.c
+	src/sim/vcd.c \
+	src/sim/testrun.c \
+	src/sim/cmd_test.c \
+	src/sim/cmd_sim.c
 SIM_OBJS = \
 	$(OBJ)/sim_bitvec.o \
 	$(OBJ)/sim_netlist.o \
 	$(OBJ)/sim_eval.o \
-	$(OBJ)/sim_vcd.o
+	$(OBJ)/sim_vcd.o \
+	$(OBJ)/sim_testrun.o \
+	$(OBJ)/sim_cmd_test.o \
+	$(OBJ)/sim_cmd_sim.o
 $(OBJ)/sim_bitvec.o: src/sim/bitvec.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/bitvec.c -o $@
 $(OBJ)/sim_netlist.o: src/sim/netlist.c $(HDRS) $(OBJ)/.dir
@@ -219,6 +231,12 @@ $(OBJ)/sim_eval.o: src/sim/eval.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/eval.c -o $@
 $(OBJ)/sim_vcd.o: src/sim/vcd.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/vcd.c -o $@
+$(OBJ)/sim_testrun.o: src/sim/testrun.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/testrun.c -o $@
+$(OBJ)/sim_cmd_test.o: src/sim/cmd_test.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/cmd_test.c -o $@
+$(OBJ)/sim_cmd_sim.o: src/sim/cmd_sim.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/cmd_sim.c -o $@
 
 # --- backend/
 BACKEND_SRCS =
@@ -392,6 +410,10 @@ test: $(BIN) tests/run $(UNIT_TESTS)
 	./$(BIN) fmt --check std
 	./tests/run --tern ./$(BIN)
 
+# `tern test std` (also run by tests/run as part of `make test`)
+test-std: $(BIN)
+	./$(BIN) test --diag-format=short std
+
 # ----------------------------------------------------------------- fuzz ---
 # Not part of `all`/`test`: needs clang with libFuzzer. Run it with e.g.
 #   ./build/fuzz_parser -max_total_time=120 build/fuzz-corpus tests/fixtures/parse std
@@ -427,4 +449,4 @@ clean:
 	rm -rf build tests/out
 	rm -f tern tern.exe tools/embed tools/embed.exe tests/run tests/run.exe
 
-.PHONY: all test unity check-warnings fuzz install clean FORCE
+.PHONY: all test test-std unity check-warnings fuzz install clean FORCE

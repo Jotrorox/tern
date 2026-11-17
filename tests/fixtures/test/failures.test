@@ -1,0 +1,26 @@
+running 5 tests
+test expect continues after a failure ... FAILED
+    failures.tern:31:5: expect failed at cycle 5: dut.count == want
+        dut.count = 3
+        want = 4
+    failures.tern:32:5: expect failed at cycle 5: dut.count + 2 == want
+        message: count is off
+        dut.count = 3
+        want = 4
+    log: still running at cycle 5
+test assert stops the test ... FAILED
+    failures.tern:39:5: assert failed: dut.y > dut.a
+        dut.y = 44 (0x2c)
+        dut.a = 200 (0xc8)
+test step_until gives up at max ... FAILED
+    failures.tern:47:5: step_until failed at cycle 7: `dut.count == 3` did not hold within 5 cycles
+test only inputs and test ports can be driven ... FAILED
+    failures.tern:53:5: error: cannot drive internal signal `n` from a test
+    failures.tern:54:5: error: cannot drive `count`: it is an output of `Counter`
+    failures.tern:55:5: error: `clk` is driven by the test harness
+    failures.tern:56:5: error: `Counter` has no signal `cuont`
+test values that do not fit ... FAILED
+    failures.tern:61:13: error: literal 300 does not fit in uint<8> (0..=255)
+
+FAILED: 0 passed, 5 failed
+replay a failing test with: tern test --seed 1 "<name>"

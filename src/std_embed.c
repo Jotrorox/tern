@@ -3151,13 +3151,14 @@ static const char *const tern_std_chunks_6[] = {
     "        dut.settle()\n"
     "        if dut.in.valid and dut.in.ready { sent = sent + 1 }\n"
     "        dut.src.step()\n"
-    "        dut.settle()\n"
-    "        if dut.out.valid and dut.out.ready {\n"
-    "            expect dut.out.data == values[got]\n"
-    "            got = got + 1\n"
+    "        for _ in 0..2 {            // destination runs twice as fast\n"
+    "            dut.settle()\n"
+    "            if dut.out.valid and dut.out.ready {\n"
+    "                expect dut.out.data == values[got]\n"
+    "                got = got + 1\n"
+    "            }\n"
+    "            dut.dst.step()\n"
     "        }\n"
-    "        dut.dst.step()\n"
-    "        dut.dst.step()             // destination runs twice as fast\n"
     "    }\n"
     "    expect sent == 4 and got == 4\n"
     "}\n"
@@ -8206,7 +8207,7 @@ static const char *const tern_std_chunks_23[] = {
     "    in hold_scl: bool\n"
     "    /// Master busy.\n"
     "    out busy: bool\n"
-    "    /// Last master result.\n"
+    "    /// Last master result (including the one being delivered this cycle).\n"
     "    out res_last: I2cResult\n"
     "    /// Last byte the slave received.\n"
     "    out rx_last: u8\n"
@@ -8246,7 +8247,8 @@ static const char *const tern_std_chunks_23[] = {
     "        if s.out.valid { rx_q = s.out.data; rx_n = rx_n +% 1 }\n"
     "    }\n"
     "    busy = m.busy\n"
-    "    res_last = res_q\n"
+    "    // the result is visible in the cycle `busy` drops\n"
+    "    res_last = if m.out.valid { m.out.data } else { res_q }\n"
     "    rx_last = rx_q\n"
     "    rx_count = rx_n\n"
     "    starts = starts_q\n"
@@ -8270,11 +8272,11 @@ static const char *const tern_std_chunks_23[] = {
     "        dut.cmd.valid = false\n"
     "        dut.step_until(!dut.busy, max: 4000)\n"
     "        expect dut.res_last.ack                       // every byte was ACKed\n"
-    "    }\n"
+    "    }\n",
     "    dut.cmd = Stream { valid: true, data: I2cCmd::Stop }\n"
     "    dut.step()\n"
     "    dut.cmd.valid = false\n"
-    "    dut.step_until(!dut.busy, max: 4000)\n",
+    "    dut.step_until(!dut.busy, max: 4000)\n"
     "    dut.step(50)\n"
     "    expect dut.rx_count == 2\n"
     "    expect dut.rx_last == 0xC3\n"
@@ -8391,11 +8393,11 @@ static const char *const tern_std_chunks_23[] = {
     "    dut.scl_i = true\n"
     "    dut.sda_i = true\n"
     "    var prev_scl = true\n"
-    "    var prev_sda = true\n"
+    "    var prev_sda = true\n",
     "    var starts: u8 = 0\n"
     "    var stops: u8 = 0\n"
     "    var result_seen = false\n"
-    "    var acked = true\n",
+    "    var acked = true\n"
     "    let cmds = [I2cCmd::Start, I2cCmd::Write { byte: 0xA0 }, I2cCmd::Stop]\n"
     "    var k: u8 = 0\n"
     "    for _ in 0..2000 {\n"
@@ -20438,7 +20440,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/bus/interconnect.tern", tern_std_chunks_3, 6, 20125},
     {"std/bus/lite.tern", tern_std_chunks_4, 4, 12539},
     {"std/bus/regfile.tern", tern_std_chunks_5, 4, 13799},
-    {"std/cdc/cdc.tern", tern_std_chunks_6, 5, 16812},
+    {"std/cdc/cdc.tern", tern_std_chunks_6, 5, 16846},
     {"std/clk/clk.tern", tern_std_chunks_7, 2, 7369},
     {"std/crc/crc.tern", tern_std_chunks_8, 4, 14734},
     {"std/debug/debug.tern", tern_std_chunks_9, 3, 9994},
@@ -20455,7 +20457,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/fifo/async.tern", tern_std_chunks_20, 2, 6357},
     {"std/fifo/fifo.tern", tern_std_chunks_21, 4, 15117},
     {"std/fifo/packet.tern", tern_std_chunks_22, 2, 6372},
-    {"std/io/i2c.tern", tern_std_chunks_23, 6, 20803},
+    {"std/io/i2c.tern", tern_std_chunks_23, 6, 20944},
     {"std/io/io.tern", tern_std_chunks_24, 2, 5514},
     {"std/io/onewire.tern", tern_std_chunks_25, 3, 10605},
     {"std/io/ps2.tern", tern_std_chunks_26, 3, 10921},

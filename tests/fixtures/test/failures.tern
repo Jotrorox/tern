@@ -1,0 +1,62 @@
+// Failing checks: expect records and continues, assert stops the test; both
+// print the expression, its operand values and the cycle.
+
+module Counter {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out count: u8
+
+    reg n: u8 = 0
+    let next = n +% 1
+    on clk {
+        if en { n = next }
+    }
+    count = n
+}
+
+module Adder {
+    in a: u8
+    in b: u8
+    out y: u8
+    y = a +% b
+}
+
+test "expect continues after a failure" {
+    let dut = sim Counter()
+    dut.reset()
+    dut.en = true
+    dut.step(3)
+    let want = 4
+    expect dut.count == want
+    expect dut.count + 2 == want, "count is off"
+    log("still running at cycle {}", dut.cycle())
+}
+
+test "assert stops the test" {
+    let dut = sim Adder(a: 200, b: 100)
+    dut.settle()
+    assert dut.y > dut.a
+    log("not reached")
+}
+
+test "step_until gives up at max" {
+    let dut = sim Counter()
+    dut.reset()
+    dut.en = false
+    dut.step_until(dut.count == 3, max: 5)
+    log("not reached")
+}
+
+test "only inputs and test ports can be driven" {
+    let dut = sim Counter()
+    dut.n = 3
+    dut.count = 1
+    dut.clk = true
+    dut.cuont = 1
+}
+
+test "values that do not fit" {
+    let dut = sim Adder()
+    dut.a = 300
+}

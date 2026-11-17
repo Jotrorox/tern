@@ -131,6 +131,11 @@ Value el_maybe_temp(Elab *el, Value v, Span at);
 Value el_eval_path(Elab *el, Path *p, Env *env, Ty *expect, int type_ctx);
 Binding *ce_lookup_local_binding(Env *e, const char *name);   /* this scope only */
 
+/* regfile.c: std::bus::RegisterFile<Map, Bus> (compiler-assisted) */
+int el_regfile_wants(Elab *el, ValModule *vm);
+/* Appends the generated ports and decode to the module body (in el->arena). */
+int el_regfile_body(Elab *el, ValModule *vm, Stmt ***body, uint32_t *nbody);
+
 /* mono.c */
 ValModule *el_bind_module_ast(Elab *el, Item *item, FileUnit *file, GenericArg *args, uint32_t nargs, Env *argenv,
                               Span at);

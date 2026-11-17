@@ -1,0 +1,80 @@
+// The examples of spec §11.1 and §11.2.
+use std::fifo::Fifo
+
+enum Op { Add, Sub, And }
+
+module Alu<W: uint> {
+    in op: Op
+    in a: uint<W>
+    in b: uint<W>
+    out y: uint<W>
+
+    y = match op {
+        .Add => a +% b,
+        .Sub => a -% b,
+        .And => a & b,
+    }
+}
+
+test "fifo preserves order" {
+    let dut = sim Fifo<u8, 4>()     // harness owns clk/rst of the default domain
+    dut.reset()                     // asserts reset for 2 cycles, then releases
+    for v in [1, 2, 3, 4] {
+        dut.push = Stream { valid: true, data: v }
+        dut.step()                  // one clock edge; combinational logic settles after it
+    }
+    dut.push.valid = false
+    expect dut.count == 4
+    dut.pop.ready = true
+    for v in [1, 2, 3, 4] {
+        expect dut.pop.valid and dut.pop.data == v
+        dut.step()
+    }
+    expect !dut.pop.valid
+}
+
+test "alu ops" {
+    let dut = sim Alu<32>()
+    for (op, a, b, want) in [(.Add, 1, 2, 3), (.Sub, 5, 7, 0xFFFF_FFFE), (.And, 0xF0, 0x3C, 0x30)] {
+        dut.op = op; dut.a = a; dut.b = b
+        dut.settle()
+        expect dut.y == want
+    }
+    dut.op = .Sub
+    dut.a = 1
+    dut.b = 2
+    expect dut.y == 0xFFFF_FFFF
+}
+
+test "random adds" {
+    let dut = sim Alu<32>()
+    var small = 0
+    for _ in 0..1000 {
+        let a = rand<u32>()
+        let b = rand<u32>() where b <= 0x1000   // rejection constraint
+        dut.op = .Add; dut.a = a; dut.b = b
+        dut.settle()
+        expect dut.y == (a + b) as u32
+        if b <= 0x1000 { small = small + 1 }
+    }
+    expect small == 1000
+}
+
+test "rand is reproducible per seed" {
+    let x = rand<u16>()
+    let flag = rand<bool>()
+    let op = rand<Op>()
+    log("x = {}, flag = {}, op = {}", x, flag, op)
+}
+
+test "step_until and cycles" {
+    let dut = sim Fifo<u8, 4>()
+    dut.reset()
+    dut.pop.ready = false
+    dut.push = Stream { valid: true, data: 9 }
+    dut.step()
+    dut.push.valid = false
+    let waited = dut.step_until(dut.pop.valid, max: 10)
+    log("waited {} cycles, now at cycle {}", waited, dut.cycle())
+    expect dut.pop.data == 9 and dut.rd_ptr == 0 and dut.used == 1
+}

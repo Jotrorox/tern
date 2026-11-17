@@ -17,7 +17,8 @@
  *
  * Output and expectation are compared after normalization (CRLF -> LF,
  * trailing whitespace and trailing blank lines removed). A fixture whose
- * first line starts with `// skip` is skipped. A crash (signal / abnormal
+ * first line starts with `// skip` is skipped; a first line `// args: <a> <b>`
+ * adds those arguments before the file name. A crash (signal / abnormal
  * exit) fails the case even when the output matches. With UPDATE=1 in the
  * environment (or --update) mismatching expectations are rewritten.
  *
@@ -59,6 +60,7 @@ typedef struct RunJob {
     char *expect;          /* expectation file, or NULL for the std job */
     const RunKind *kind;   /* NULL for the std job */
     int skipped;
+    char *extra;           /* `// args: ...` of the fixture's first line, or NULL */
     OsProc *proc;
     uint64_t start;
 } RunJob;
@@ -234,12 +236,14 @@ done:
     free(b.n);
 }
 
-static int run_first_line_is_skip(const char *path)
+/* `// skip` → 1; `// args: --cover` → 0 and *extra = "--cover" (heap) */
+static int run_first_line_is_skip(const char *path, char **extra)
 {
     char *data;
     size_t len;
     const char *p;
     int skip;
+    *extra = NULL;
     if (os_read_file(path, &data, &len) != 0)
         return 0;
     p = data;
@@ -248,6 +252,12 @@ static int run_first_line_is_skip(const char *path)
     while (*p == ' ' || *p == '\t')
         p++;
     skip = strncmp(p, "// skip", 7) == 0;
+    if (strncmp(p, "// args:", 8) == 0) {
+        const char *e = p + 8;
+        while (*e && *e != '\n' && *e != '\r')
+            e++;
+        *extra = xstrndup(p + 8, (size_t)(e - p - 8));
+    }
     free(data);
     return skip;
 }
@@ -297,7 +307,8 @@ static void run_discover(const char *dir, RunJobs *jobs, char **filters, int nfi
             run_discover(path, jobs, filters, nfilters);
         } else if (strcmp(os_path_ext(name), ".tern") == 0 && run_matches(path, filters, nfilters)) {
             size_t stem = strlen(path) - 5;
-            int skip = run_first_line_is_skip(path);
+            char *extra = NULL;
+            int skip = run_first_line_is_skip(path, &extra);
             for (k = 0; k < TERN_ARRAY_LEN(run_kinds); k++) {
                 StrBuf e = {0};
                 RunJob *j;
@@ -314,7 +325,9 @@ static void run_discover(const char *dir, RunJobs *jobs, char **filters, int nfi
                 j->expect = sb_take(&e);
                 j->kind = &run_kinds[k];
                 j->skipped = skip;
+                j->extra = extra ? xstrdup(extra) : NULL;
             }
+            free(extra);
         }
         free(path);
     }
@@ -325,7 +338,7 @@ static void run_discover(const char *dir, RunJobs *jobs, char **filters, int nfi
 
 static OsProc *run_start(RunState *st, RunJob *j, char **err)
 {
-    char *argv[8];
+    char *argv[24];
     int n = 0, k;
     OsSpawnOpts o;
     memset(&o, 0, sizeof o);
@@ -336,6 +349,19 @@ static OsProc *run_start(RunState *st, RunJob *j, char **err)
     if (j->kind) {
         for (k = 0; j->kind->args[k]; k++)
             argv[n++] = (char *)j->kind->args[k];
+        if (j->extra) {
+            /* space-separated extra arguments (the string is split in place) */
+            char *q = j->extra;
+            while (*q && n < 20) {
+                while (*q == ' ')
+                    *q++ = 0;
+                if (!*q)
+                    break;
+                argv[n++] = q;
+                while (*q && *q != ' ')
+                    q++;
+            }
+        }
         argv[n++] = (char *)j->base;
         o.cwd = j->dir;
     } else {
@@ -607,6 +633,7 @@ int main(int argc, char **argv)
         free(jobs.items[k].tern);
         free(jobs.items[k].dir);
         free(jobs.items[k].expect);
+        free(jobs.items[k].extra);
     }
     free(jobs.items);
     free(filters);

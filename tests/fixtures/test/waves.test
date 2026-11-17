@@ -1,0 +1,12 @@
+running 3 tests
+test blinks ... ok
+test blinks twice as fast ... FAILED
+    waves.tern:28:5: expect failed at cycle 4: dut.led
+        dut.led = false
+    waveform: build/waves/waves-blinks_twice_as_fast.vcd
+test explicit dump ... FAILED
+    waves.tern:36:5: error: cannot write waveform file `no/such/dir/x.vcd`
+    waveform: build/waves/waves-explicit_dump.vcd
+
+FAILED: 1 passed, 2 failed
+replay a failing test with: tern test --seed 1 "<name>"
