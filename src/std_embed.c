@@ -3880,8 +3880,9 @@ static const char *const tern_std_chunks_8[] = {
     "    in rst: reset\n"
     "    /// Message words. Always ready.\n"
     "    in in: Stream<T>\n"
-    "    /// Start a new message (with the word on `in`, if any).\n"
-    "    in clear: bool\n"
+    "    /// Start a new message (with the word on `in`, if any); never when\n"
+    "    /// left unconnected (one running CRC since reset).\n"
+    "    in clear: bool = false\n"
     "    /// The finished CRC of the message so far.\n"
     "    out crc: uint<W>\n"
     "    /// The raw CRC register (unreflected, before XorOut), for chaining.\n"
@@ -3898,11 +3899,11 @@ static const char *const tern_std_chunks_8[] = {
     "    let base = if clear { INIT } else { r }\n"
     "\n"
     "    on clk {\n"
-    "        if in.fire() {\n"
+    "        if in.fire() {\n",
     "            r = crc_update<Poly, RefIn>(base, bits(in.data))\n"
     "        } else if clear {\n"
     "            r = INIT\n"
-    "        }\n",
+    "        }\n"
     "    }\n"
     "\n"
     "    let fin = if RefOut { reverse_bits(r) } else { r }\n"
@@ -3933,8 +3934,9 @@ static const char *const tern_std_chunks_8[] = {
     "    in rst: reset\n"
     "    /// Message words. Always ready.\n"
     "    in in: Stream<T>\n"
-    "    /// Start a new message (with the word on `in`, if any).\n"
-    "    in clear: bool\n"
+    "    /// Start a new message (with the word on `in`, if any); never when\n"
+    "    /// left unconnected (one running CRC since reset).\n"
+    "    in clear: bool = false\n"
     "    /// The finished CRC of the message so far.\n"
     "    out crc: u8\n"
     "\n"
@@ -3956,8 +3958,9 @@ static const char *const tern_std_chunks_8[] = {
     "    in rst: reset\n"
     "    /// Message words. Always ready.\n"
     "    in in: Stream<T>\n"
-    "    /// Start a new message (with the word on `in`, if any).\n"
-    "    in clear: bool\n"
+    "    /// Start a new message (with the word on `in`, if any); never when\n"
+    "    /// left unconnected (one running CRC since reset).\n"
+    "    in clear: bool = false\n"
     "    /// The finished CRC of the message so far.\n"
     "    out crc: u16\n"
     "\n"
@@ -3979,8 +3982,9 @@ static const char *const tern_std_chunks_8[] = {
     "    in rst: reset\n"
     "    /// Message words. Always ready.\n"
     "    in in: Stream<T>\n"
-    "    /// Start a new message (with the word on `in`, if any).\n"
-    "    in clear: bool\n"
+    "    /// Start a new message (with the word on `in`, if any); never when\n"
+    "    /// left unconnected (one running CRC since reset).\n"
+    "    in clear: bool = false\n"
     "    /// The finished CRC of the message so far.\n"
     "    out crc: u16\n"
     "\n"
@@ -4002,8 +4006,9 @@ static const char *const tern_std_chunks_8[] = {
     "    in rst: reset\n"
     "    /// Message words. Always ready.\n"
     "    in in: Stream<T>\n"
-    "    /// Start a new message (with the word on `in`, if any).\n"
-    "    in clear: bool\n"
+    "    /// Start a new message (with the word on `in`, if any); never when\n"
+    "    /// left unconnected (one running CRC since reset).\n"
+    "    in clear: bool = false\n"
     "    /// The finished CRC of the message so far.\n"
     "    out crc: u32\n"
     "\n"
@@ -4021,13 +4026,14 @@ static const char *const tern_std_chunks_8[] = {
     "/// 0xE3069283.\n"
     "pub module Crc32C<T: type = u8> {\n"
     "    /// Clock.\n"
-    "    in clk: clock\n"
+    "    in clk: clock\n",
     "    /// Reset; starts a new message.\n"
     "    in rst: reset\n"
     "    /// Message words. Always ready.\n"
     "    in in: Stream<T>\n"
-    "    /// Start a new message (with the word on `in`, if any).\n"
-    "    in clear: bool\n"
+    "    /// Start a new message (with the word on `in`, if any); never when\n"
+    "    /// left unconnected (one running CRC since reset).\n"
+    "    in clear: bool = false\n"
     "    /// The finished CRC of the message so far.\n"
     "    out crc: u32\n"
     "\n"
@@ -4035,7 +4041,7 @@ static const char *const tern_std_chunks_8[] = {
     "    pub const LATENCY: uint = 1\n"
     "    /// CRC of \"123456789\".\n"
     "    pub const CHECK: uint = 0xE306_9283\n"
-    "\n",
+    "\n"
     "    let c = Crc<32, 0x1EDC_6F41, 0xFFFF_FFFF, true, true, 0xFFFF_FFFF, T>(in: in, clear: clear)\n"
     "    crc = c.crc\n"
     "}\n"
@@ -4175,7 +4181,7 @@ static const char *const tern_std_chunks_8[] = {
     "    var c: bit<32> = all1\n"
     "    for b in CHECK_MSG {\n"
     "        c = crc_update<0x04C1_1DB7, true>(c, bits(b))\n"
-    "    }\n"
+    "    }\n",
     "    expect (reverse_bits(c) ^ 0xFFFF_FFFF) == 0xCBF4_3926\n"
     "}\n"
     "\n"
@@ -4185,7 +4191,7 @@ static const char *const tern_std_chunks_8[] = {
     "\n"
     "/// Multiplicative (self-synchronizing) scrambler / descrambler over a\n"
     "/// stream, `T::WIDTH` bits per beat, bit 0 first. Each output bit is the\n"
-    "/// input bit XORed with the tapped history bits; the scrambler's history is\n",
+    "/// input bit XORed with the tapped history bits; the scrambler's history is\n"
     "/// its own output, the descrambler's (`Descramble = true`) is its input, so\n"
     "/// a descrambler locks to any scrambler after W bits regardless of the\n"
     "/// starting states. Taps use the `lfsr_taps` convention (bit k-1 set for\n"
@@ -21159,7 +21165,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/bus/regfile.tern", tern_std_chunks_5, 4, 14464},
     {"std/cdc/cdc.tern", tern_std_chunks_6, 5, 17298},
     {"std/clk/clk.tern", tern_std_chunks_7, 3, 10349},
-    {"std/crc/crc.tern", tern_std_chunks_8, 4, 15089},
+    {"std/crc/crc.tern", tern_std_chunks_8, 4, 15539},
     {"std/debug/debug.tern", tern_std_chunks_9, 5, 19406},
     {"std/dsp/average.tern", tern_std_chunks_10, 2, 7474},
     {"std/dsp/cic.tern", tern_std_chunks_11, 2, 6781},

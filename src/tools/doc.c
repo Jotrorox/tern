@@ -1752,7 +1752,8 @@ static void doc_text_item(DocSet *ds, const DocItem *d, int width, StrBuf *out)
             any = 1;
             w[1] = TERN_MAX(w[1], doc_cols(s->u.port.name.name));
             w[2] = TERN_MAX(w[2], doc_cols(doc_src(ds, f, s->u.port.type->span)) +
-                                      (s->u.port.domain ? 3 + doc_cols(doc_src(ds, f, s->u.port.domain->span)) : 0));
+                                      (s->u.port.domain ? 3 + doc_cols(doc_src(ds, f, s->u.port.domain->span)) : 0) +
+                                      (s->u.port.deflt ? 3 + doc_cols(doc_src(ds, f, s->u.port.deflt->span)) : 0));
         }
         w[2] = TERN_MIN(w[2], 28);
         if (any) {
@@ -1766,6 +1767,8 @@ static void doc_text_item(DocSet *ds, const DocItem *d, int width, StrBuf *out)
                 sb_puts(&ty, doc_src(ds, f, s->u.port.type->span));
                 if (s->u.port.domain)
                     sb_printf(&ty, " @ %s", doc_src(ds, f, s->u.port.domain->span));
+                if (s->u.port.deflt)
+                    sb_printf(&ty, " = %s", doc_src(ds, f, s->u.port.deflt->span));
                 cells[0] = s->u.port.dir == PORT_IN ? "in" : "out";
                 cells[1] = s->u.port.name.name;
                 cells[2] = ty.data;
@@ -2234,6 +2237,10 @@ static void doc_html_item(DocSet *ds, const DocItem *d, StrBuf *out)
             sb_printf(out, "</code></td><td class=\"dir %s\">%s</td><td><code>",
                       s->u.port.dir == PORT_IN ? "in" : "out", s->u.port.dir == PORT_IN ? "in" : "out");
             doc_html_code(ds, f, doc_src(ds, f, s->u.port.type->span), out);
+            if (s->u.port.deflt) {
+                sb_puts(out, " = ");
+                doc_html_code(ds, f, doc_src(ds, f, s->u.port.deflt->span), out);
+            }
             sb_puts(out, "</code></td><td>");
             if (s->u.port.domain) {
                 sb_puts(out, "<code>");
