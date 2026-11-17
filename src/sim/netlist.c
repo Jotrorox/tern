@@ -77,14 +77,26 @@ static void nl_flatten(SimModel *m, const IrModule *mod, uint32_t parent, const 
             s.mem = (uint32_t)m->mems.len;
             vec_push(m->mems, mm);
         }
+        s.force = IR_NONE;
         if (is->test_port && is->kind != IRS_MEM)
             s.writable = 1;
         if (parent == IR_NONE && is->kind == IRS_IN && is->type->kind != IRT_CLOCK &&
             is->type->kind != IRT_RESET)
             s.writable = 1;
+        else if (s.writable) {
+            /* driven by the design too: the test's value overrides it */
+            SimForce f;
+            f.sig = h;
+            f.active = 0;
+            f.val = (uint64_t *)xcalloc(s.limbs + 1, sizeof(uint64_t));
+            s.force = (uint32_t)m->forces.len;
+            vec_push(m->forces, f);
+        }
         vec_push(m->sigs, s);
         slot = map_ref(&m->by_path, hash_bytes(s.path, strlen(s.path)), &inserted);
-        if (inserted)
+        /* a child's #[test_port] input shares its path with the parent's
+         * connection wire ("i.inject"): the port is what a test drives */
+        if (inserted || (is->test_port && is->kind == IRS_IN))
             *slot = h + 1;
         slot = map_ref(&m->by_path, hash_bytes(s.svpath, strlen(s.svpath)), &inserted);
         if (inserted)
@@ -1251,6 +1263,11 @@ static void nl_assign(NlComp *c, uint32_t lhs_inst, const IrLvalue *lv, uint32_t
         in->mask = nl_mask(lv->width);
         /* elements of the indexed array: an index past the last one writes nothing */
         in->c = lv->len ? lv->len : (lv->lo < sw ? (sw - lv->lo) / lv->width : 0);
+    }
+    if (s->force != IR_NONE) {
+        in = nl_emit(c, SOP_FORCE, sw);
+        in->d = base;
+        in->p = s->force;
     }
     c->tmp = saved;
     c->inst = saved_inst;

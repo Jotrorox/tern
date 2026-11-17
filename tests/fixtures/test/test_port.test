@@ -1,0 +1,10 @@
+running 5 tests
+test a test_port var overrides its default ... ok
+test a test_port written and read by one block ... ok
+test a test_port register holds the test's value ... ok
+test a test_port input of a nested instance ... ok
+test other internal signals stay read-only ... FAILED
+    test_port.tern:91:5: error: cannot drive internal signal `i.seen` from a test
+
+FAILED: 4 passed, 1 failed
+replay a failing test with: tern test --seed 1 "<name>"

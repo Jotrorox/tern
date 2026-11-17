@@ -35,9 +35,12 @@ test "fifo preserves order" {
   (`dut.push = ...`, `dut.pop.ready = true`).
 * Outputs, registers and any internal signal are readable by path:
   `dut.count`, `dut.rd_ptr`, `dut.rx_fifo.count`. Only inputs can be
-  written, and Tern has no `force`. The spec exposes an internal signal to
-  tests with `#[test_port]`. This release accepts the attribute, but driving
-  such a signal from a test does not work yet.
+  written, and Tern has no `force`. A signal a test must drive is exposed
+  with `#[test_port]` (a `var`, `reg` or wire, or an input of a nested
+  instance: `dut.i.inject = true`). Once a test assigns it, the test's
+  value overrides whatever the design drives (a default, a register update,
+  the parent's connection) for the rest of the test. In the emitted
+  SystemVerilog it is an ordinary signal.
 * `dut.reset()` asserts reset for two cycles. `dut.step(n = 1)` advances
   `n` cycles of the default domain. `dut.settle()` evaluates combinational
   logic without a clock edge. `dut.step_until(cond, max: 1000)` steps until

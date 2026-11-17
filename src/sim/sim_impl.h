@@ -55,7 +55,8 @@ typedef enum SimOp {
     SOP_JZ,          /* if !a: pc = p */
     SOP_SWITCH,      /* switches[p] on a */
     SOP_ASSERT,      /* asserts[p] with condition a */
-    SOP_COV          /* cov[p]++ */
+    SOP_COV,         /* cov[p]++ */
+    SOP_FORCE        /* if forces[p] is active: d (w bits) = its value (#[test_port] driven by a test) */
 } SimOp;
 
 typedef struct SimInsn {
@@ -98,10 +99,20 @@ typedef struct SimSig {
     uint32_t group;          /* edge group of a state signal, else IR_NONE */
     uint32_t mem;            /* memory index or IR_NONE */
     uint32_t clock;          /* top clock index if this is a root clock input */
+    uint32_t force;          /* SimForce index (#[test_port] below the top inputs), else IR_NONE */
     uint8_t writable;
     uint8_t is_state;
     const char *vcd_id;
 } SimSig;
+
+/* A #[test_port] signal that a test drives: while `active`, every write of
+ * the design to it is overridden by `val` (comb stores, register commits,
+ * instance connections), so the test's value wins until released. */
+typedef struct SimForce {
+    uint32_t sig;
+    int active;
+    uint64_t *val;
+} SimForce;
 
 typedef struct SimMem {
     uint32_t sig, width, limbs, depth;
@@ -235,6 +246,8 @@ struct SimModel {
     VEC(SimInst) insts;
     VEC(SimSig) sigs;
     VEC(SimMem) mems;
+    VEC(SimForce) forces;
+    uint32_t nforced;        /* active forces */
     VEC(SimDom) doms;
     VEC(SimGroup) groups;
     VEC(SimClock) clocks;
@@ -295,6 +308,7 @@ void sim_exec(SimModel *m, uint32_t pc, uint32_t end);
 void sim_settle_now(SimModel *m);
 void sim_assert_hit(SimModel *m, uint32_t id, uint64_t val);
 void sim_mon_reset_all(SimModel *m);
+void sim_apply_forces(SimModel *m);
 
 /* vcd.c */
 void sim_vcd_sample(SimModel *m);

@@ -1,0 +1,92 @@
+// #[test_port] (spec §11.1): a test drives the signal and its value
+// overrides the design's own driver (a default, a register update, the
+// parent's connection of a child input) until the end of the test. In the
+// emitted SystemVerilog it is an ordinary signal.
+
+module Inner {
+    in clk: clock
+    in rst: reset
+    #[test_port] in inject: bool
+    out err: bool
+    reg seen: bool = false
+    on clk {
+        if inject { seen = true }
+    }
+    err = seen
+}
+
+#[top]
+module Dut {
+    in clk: clock
+    in rst: reset
+    in a: u8
+    out y: u8
+    out z: u8
+    out err: bool
+    out cnt: u8
+    #[test_port] var inject: bool = false
+    #[test_port] reg count: u8 = 0
+    comb {
+        if inject { y = a +% 1 } else { y = a }
+    }
+    // a block that writes the port and reads it back
+    #[test_port] var mode: u8
+    comb {
+        mode = 0
+        z = mode
+    }
+    on clk {
+        count = count +% 1
+    }
+    cnt = count
+    let i = Inner(inject: false)
+    err = i.err
+}
+
+test "a test_port var overrides its default" {
+    let dut = sim Dut()
+    dut.reset()
+    dut.a = 5
+    dut.settle()
+    expect dut.y == 5
+    dut.inject = true
+    dut.settle()
+    expect dut.y == 6
+    dut.step(3)
+    expect dut.y == 6 and dut.inject
+}
+
+test "a test_port written and read by one block" {
+    let dut = sim Dut()
+    dut.reset()
+    expect dut.z == 0
+    dut.mode = 7
+    expect dut.z == 7
+    dut.step()
+    expect dut.z == 7
+}
+
+test "a test_port register holds the test's value" {
+    let dut = sim Dut()
+    dut.reset()
+    dut.step(2)
+    expect dut.cnt == 2
+    dut.count = 40
+    dut.step(3)
+    expect dut.cnt == 40
+}
+
+test "a test_port input of a nested instance" {
+    let dut = sim Dut()
+    dut.reset()
+    dut.step()
+    expect !dut.err
+    dut.i.inject = true
+    dut.step()
+    expect dut.err and dut.i.inject
+}
+
+test "other internal signals stay read-only" {
+    let dut = sim Dut()
+    dut.i.seen = true
+}

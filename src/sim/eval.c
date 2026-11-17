@@ -275,6 +275,12 @@ void sim_exec(SimModel *m, uint32_t pc, uint32_t end)
         }
         case SOP_ASSERT: sim_assert_hit(m, in->p, v[in->a]); break;
         case SOP_COV: m->cov[in->p]++; break;
+        case SOP_FORCE: {
+            const SimForce *f = &m->forces.data[in->p];
+            if (f->active)
+                memcpy(v + in->d, f->val, sizeof(uint64_t) * EV_LIMBS(in->w));
+            break;
+        }
         }
     }
 }
@@ -805,6 +811,23 @@ static int ev_apply_async(SimModel *m)
 
 static void ev_fire(SimModel *m, const uint32_t *gs, uint32_t ng);
 
+/* #[test_port] signals driven by the test keep the test's value */
+void sim_apply_forces(SimModel *m)
+{
+    uint32_t i;
+    if (!m->nforced)
+        return;
+    for (i = 0; i < m->forces.len; i++) {
+        const SimForce *f = &m->forces.data[i];
+        const SimSig *s = &m->sigs.data[f->sig];
+        if (!f->active)
+            continue;
+        memcpy(m->v + s->off, f->val, sizeof(uint64_t) * s->limbs);
+        if (s->next != IR_NONE)
+            memcpy(m->v + s->next, f->val, sizeof(uint64_t) * s->limbs);
+    }
+}
+
 void sim_settle_now(SimModel *m)
 {
     int iter;
@@ -813,6 +836,7 @@ void sim_settle_now(SimModel *m)
         return;
     for (iter = 0; iter < 32; iter++) {
         m->dirty = 0;
+        sim_apply_forces(m);
         sim_exec(m, 0, m->comb_end);
         if (!ev_apply_async(m))
             break;
@@ -895,6 +919,7 @@ static void ev_fire(SimModel *m, const uint32_t *gs, uint32_t ng)
         SimGroup *g = &m->groups.data[gs[i]];
         memcpy(v + g->cur_lo, v + g->next_lo, sizeof(uint64_t) * g->nlimbs);
         g->edges++;
+        sim_apply_forces(m);
         for (j = 0; j < g->doms.len; j++)
             m->doms.data[g->doms.data[j]].in_reset = 0;
     }
@@ -1000,6 +1025,9 @@ void sim_free(SimModel *m)
         vec_free(m->clocks.data[i].copies);
     for (i = 0; i < m->mems.len; i++)
         free(m->mems.data[i].data);
+    for (i = 0; i < m->forces.len; i++)
+        free(m->forces.data[i].val);
+    vec_free(m->forces);
     for (i = 0; i < m->mons.len; i++)
         vec_free(m->mons.data[i].att);
     vec_free(m->insts);
@@ -1146,6 +1174,28 @@ int sim_poke(SimModel *m, int h, const IrBits *val)
         bv_zero(m->v + s->off, s->width);
     else
         bv_resize(m->v + s->off, s->width, val->w, val->width, 0);
+    if (s->force != IR_NONE) {
+        SimForce *f = &m->forces.data[s->force];
+        memcpy(f->val, m->v + s->off, sizeof(uint64_t) * s->limbs);
+        if (!f->active)
+            m->nforced++;
+        f->active = 1;
+        sim_apply_forces(m);
+    }
+    m->dirty = 1;
+    return SIM_OK;
+}
+
+int sim_release(SimModel *m, int h)
+{
+    const SimSig *s = ev_sig(m, h);
+    if (!s)
+        return SIM_ERR_HANDLE;
+    if (s->force == IR_NONE)
+        return s->writable ? SIM_OK : SIM_ERR_NOT_WRITABLE;
+    if (m->forces.data[s->force].active)
+        m->nforced--;
+    m->forces.data[s->force].active = 0;
     m->dirty = 1;
     return SIM_OK;
 }

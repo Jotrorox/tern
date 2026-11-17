@@ -105,6 +105,10 @@ int sim_is_writable(const SimModel *m, int h);
  * writes IR_LIMBS(width) limbs to out->w and sets out->width; peeks return
  * the current values (call sim_settle first after pokes). */
 int sim_poke(SimModel *m, int h, const IrBits *v);
+/* A #[test_port] that the design drives too (a var with a default, a
+ * register, a child's input port) is overridden by sim_poke: the poked
+ * value wins over every write of the design until sim_release(). */
+int sim_release(SimModel *m, int h);
 int sim_poke_u64(SimModel *m, int h, uint64_t v);
 int sim_peek(SimModel *m, int h, IrBits *out);
 IrBits sim_peek_bits(SimModel *m, int h, Arena *a);     /* width 0 on error */

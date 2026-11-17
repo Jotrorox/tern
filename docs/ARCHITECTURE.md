@@ -442,6 +442,22 @@ and `lsp_nav.c` (definition, hover, references, symbols, completion,
   re-evaluated each cycle through `Elab.opq_call`), `settle()`,
   `run(ns: n)`, `dump(file)`, `cycle()`, `time_ns()`; `dut.<domain or clock
   port>.step(n)` steps one domain.
+* **`#[test_port]`** (spec §11.1, "a signal a test must drive is exposed
+  with #[test_port]"; the spec has no `force`). Semantics: a test_port may
+  be driven by a test; once the test assigns it, the test's value wins
+  over the design's own driver (a `var` default or comb assignment, a
+  register update or reset, the parent's connection of a child's input)
+  for the rest of the test. The design may leave it undriven (the drivers
+  check exempts it) or drive a default. Implementation: the elaborator
+  sets `IrSignal.test_port` (ports, vars, wires, regs); the simulator
+  gives every test_port below the top inputs a `SimForce` slot, compiles
+  an `SOP_FORCE` after each store to it (so even a block that writes the
+  signal and reads it back sees the test's value) and re-applies active
+  forces after register commits and async resets; `sim_poke` activates
+  the override and `sim_release` ends it. A child's test_port input owns
+  the path `inst.port` (the parent's connection wire of the same path is
+  shadowed). The emitters print a test_port as an ordinary signal; nothing
+  test-related is synthesized.
 * `expect`/`assert` failures print `file:line:col: expect failed at cycle N:
   <expr>` plus `operand = value` lines (operands are re-evaluated quietly;
   impure calls are skipped). `assert`, a failing design assertion or assert
