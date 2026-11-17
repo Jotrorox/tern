@@ -26,6 +26,11 @@ AstFile *parse_file(Arena *a, uint32_t src_id);
  * and the LSP. If `src_out` is non-NULL it receives the source id. */
 Expr *parse_expr_string(Arena *a, const char *text, size_t len, const char *name, uint32_t *src_out);
 
+/* Parses source `src` as a statement list (the body of a block without its
+ * braces), e.g. a `tern sim` script line. *nerrors (may be NULL) gets the
+ * number of syntax errors. Never NULL. */
+Block *parse_block_string(Arena *a, uint32_t src, int *nerrors);
+
 /* Parses one type the same way. Never NULL. */
 Type *parse_type_string(Arena *a, const char *text, size_t len, const char *name, uint32_t *src_out);
 

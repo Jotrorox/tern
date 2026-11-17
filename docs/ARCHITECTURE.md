@@ -490,8 +490,9 @@ and `lsp_nav.c` (definition, hover, references, symbols, completion,
   `tests/fixtures/test/` (a fixture's first line `// args: --cover` adds
   arguments). Timing is printed only on a terminal.
 * `tern sim` is a session (`testrun_session_*`) with the design bound to
-  `dut`; command lines are rewritten to Tern statements and parsed as a test
-  body.
+  `dut`; command lines are rewritten to Tern statements and parsed as a
+  block body (`parse_block_string`, preceded by newlines so that a script
+  line keeps its line and column in diagnostics).
 * `std::bus::RegisterFile<Map, Bus>` is generated in `src/elab/regfile.c`:
   Tern statements (ports per regmap entry, front-end instance, decode) are
   appended to the std module's body before it is elaborated. A regmap used
