@@ -263,12 +263,40 @@ test "join3: waits for all three inputs" {
 // ---------------------------------------------------------------------------
 
 /// How `Arbiter` chooses between simultaneous requests.
-pub enum ArbPolicy {
+pub enum ArbPolicy<N: uint = 2> {
     /// The input after the last granted one wins; every requester is served
     /// within N grants.
     RoundRobin,
     /// The lowest-numbered valid input always wins.
     Fixed,
+    /// Weighted round-robin: input `i` keeps the grant for up to
+    /// `Weights[i]` consecutive beats while it has data, then the grant
+    /// moves on as with `.RoundRobin`. Written `.Weighted<[3, 1, 2]>`.
+    Weighted<Weights: [uint; N]>,
+}
+
+/// The weights of a policy (all 1, plain round-robin, unless `.Weighted`).
+pub const fn arb_weights<N: uint>(p: ArbPolicy<N>) -> [uint; N] {
+    var w: [uint; N] = all0
+    for i in 0..N {
+        w[i] = 1
+    }
+    match p {
+        .Weighted { Weights } => Weights,
+        _ => w,
+    }
+}
+
+/// The largest weight of a policy.
+pub const fn arb_max_weight<N: uint>(p: ArbPolicy<N>) -> uint {
+    let w = arb_weights<N>(p)
+    var m = 1
+    for i in 0..N {
+        if w[i] > m {
+            m = w[i]
+        }
+    }
+    m
 }
 
 /// Merge `N` streams into one. A grant is locked while the output is
@@ -276,7 +304,7 @@ pub enum ArbPolicy {
 /// `index`) until it fires, as the Stream rules require. Arbitration itself
 /// is combinational (no added latency); put a `Skid` behind it to register
 /// the output.
-pub module Arbiter<T: type, N: uint = 2, Policy: ArbPolicy = .RoundRobin>
+pub module Arbiter<T: type, N: uint = 2, Policy: ArbPolicy<N> = .RoundRobin>
 where N >= 2
 {
     /// Clock.
@@ -295,16 +323,63 @@ where N >= 2
 
     type Idx = uint<clog2(N)>
 
+    /// Per-input weights (all 1 unless `.Weighted`).
+    const W: [uint; N] = arb_weights<N>(Policy)
+    const WEIGHTED: bool = Policy != .RoundRobin and Policy != .Fixed
+    for i in 0..N {
+        static_assert(W[i] >= 1, "Arbiter: every weight must be at least 1")
+    }
+
     reg last: Idx = N - 1
     reg locked: bool = false
     reg lock_idx: Idx = 0
+
+    // .Weighted: the input granted last keeps the grant while it has data
+    // and has used fewer than its weight in consecutive beats
+    var stay: bool
+    var full: bool
+    if WEIGHTED {
+        // reset to "used up", so no input holds the grant after reset
+        reg used: uint<clog2(arb_max_weight<N>(Policy) + 1)> = arb_max_weight<N>(Policy)
+        comb {
+            stay = false
+            full = false
+            for i in 0..N {
+                if last == i {
+                    full = used >= W[i]
+                    stay = in[i].valid and used < W[i]
+                }
+            }
+        }
+        on clk {
+            if out.fire() {
+                if sel == last and !full {
+                    used = used +% 1
+                } else {
+                    used = 1
+                }
+            }
+        }
+
+        /// A turn never runs past the largest weight.
+        property turn_bounded {
+            always used <= arb_max_weight<N>(Policy)
+        }
+    } else {
+        stay = false
+        full = false
+    }
 
     var found: bool
     var pick: Idx
     comb {
         found = false
         pick = 0
-        if Policy == .RoundRobin {
+        if stay {
+            found = true
+            pick = last
+        }
+        if Policy != .Fixed {
             // first pass: requesters after the last grant
             for i in 0..N {
                 if !found and in[i].valid and i > last {
@@ -410,6 +485,60 @@ test "arbiter keeps a stalled grant" {
     dut.in[1].valid = false
     dut.settle()
     expect dut.index == 0 and dut.out.data == 1
+}
+
+test "arbiter weighted: each busy input keeps the grant for its weight" {
+    let dut = sim Arbiter<u8, 3, .Weighted<[3, 1, 2]>>()
+    dut.reset()
+    dut.out.ready = true
+    for i in 0..3 {
+        dut.in[i] = Stream { valid: true, data: (10 + i) as u8 }
+    }
+    let order = [0, 0, 0, 1, 2, 2, 0, 0, 0, 1, 2, 2]
+    for k in 0..12 {
+        dut.settle()
+        expect dut.out.valid
+        expect dut.index == order[k] as uint<2>
+        dut.step()
+    }
+}
+
+test "arbiter weighted: the grant moves on when the holder runs dry" {
+    let dut = sim Arbiter<u8, 2, .Weighted<[4, 1]>>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in[0] = Stream { valid: true, data: 1 }
+    dut.in[1] = Stream { valid: true, data: 2 }
+    dut.settle()
+    expect dut.index == 0
+    dut.step()
+    dut.in[0].valid = false        // input 0 has used 1 of 4
+    dut.settle()
+    expect dut.index == 1
+    dut.step()
+    dut.in[0].valid = true
+    dut.settle()
+    expect dut.index == 0          // a fresh turn of 4 beats
+    for _ in 0..4 {
+        dut.settle()
+        expect dut.index == 0
+        dut.step()
+    }
+    dut.settle()
+    expect dut.index == 1
+}
+
+test "arbiter weighted: a lone requester is served every cycle" {
+    let dut = sim Arbiter<u8, 2, ArbPolicy::Weighted<Weights: [2, 3]>>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in[0] = Stream { valid: false, data: 1 }
+    dut.in[1] = Stream { valid: true, data: 2 }
+    for _ in 0..10 {
+        dut.settle()
+        expect dut.out.valid and dut.index == 1
+        dut.step()
+    }
 }
 
 test "arbiter idle output is not valid" {

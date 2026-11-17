@@ -567,6 +567,8 @@ Value el_fill(Elab *el, Ty *t, int ones, Span at)
     IrBits b;
     if (!t || t->kind == TY_ERROR)
         return val_error();
+    if (!ones && !t->hw && (t->kind == TY_ARRAY || t->kind == TY_STRUCT))
+        return el_zero(el, t); /* compile-time aggregate of widthless integers: `[uint; N] = all0` */
     if (t->kind == TY_INT || !t->hw) {
         el_error(el, at, "`%s` needs a type from its context (a sized integer, array or struct)",
                  ones ? "all1" : "all0");

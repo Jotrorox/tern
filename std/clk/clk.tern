@@ -202,12 +202,14 @@ test "gate: enable is latched once per cycle" {
 // Strobe
 // ---------------------------------------------------------------------------
 
-/// Enable pulse at `Hz` from a clock of `ClkHz` (pass the frequency given
-/// by the clock's #[clock(hz: ..)] attribute). A phase accumulator adds Hz
-/// every cycle and ticks when it passes ClkHz, so the average rate is
-/// exactly Hz even when ClkHz / Hz is not an integer (the spacing then
-/// varies by one cycle).
-pub module Strobe<Hz: uint, ClkHz: uint>
+/// Enable pulse at `Hz` (the output rate). The input clock's rate `ClkHz`
+/// is its nominal frequency, the `#[clock(hz: ..)]` of the top's clock
+/// port passed down through the instance connections (`clock_hz(clk)`);
+/// give it explicitly to override. A phase accumulator adds Hz every cycle
+/// and ticks when it passes ClkHz, so the average rate is exactly Hz even
+/// when ClkHz / Hz is not an integer (the spacing then varies by one
+/// cycle).
+pub module Strobe<Hz: uint, ClkHz: uint = clock_hz(clk)>
 where Hz >= 1, Hz <= ClkHz
 {
     /// Clock running at ClkHz.
@@ -262,4 +264,32 @@ test "strobe: fractional ratio keeps the average exact" {
         if dut.tick { ticks = ticks + 1 }
     }
     expect ticks == 300
+}
+
+/// Test bench: a top whose clock records its frequency.
+module StrobeBench {
+    #[clock(hz: 1_000)]
+    in clk: clock
+    in rst: reset
+    /// 50 Hz from the 1 kHz clock.
+    out tick: bool
+    /// 250 Hz, with the clock rate overridden (500 Hz).
+    out fast: bool
+
+    tick = Strobe<50>().tick
+    fast = Strobe<250, ClkHz: 500>().tick
+}
+
+test "strobe: the clock rate comes from #[clock(hz)]" {
+    let dut = sim StrobeBench()
+    dut.reset()
+    var ticks: uint = 0
+    var fast: uint = 0
+    for _ in 0..1000 {
+        dut.step()
+        if dut.tick { ticks = ticks + 1 }
+        if dut.fast { fast = fast + 1 }
+    }
+    expect ticks == 50
+    expect fast == 500
 }

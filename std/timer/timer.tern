@@ -359,10 +359,11 @@ pub struct RtcTime {
 }
 
 /// Real-time clock: counts seconds, minutes, hours and days from a clock of
-/// `ClkHz` (pass the frequency given by the clock's #[clock(hz: ..)]
-/// attribute). `pps` pulses once per second. `set` loads a new time and
-/// restarts the current second.
-pub module Rtc<ClkHz: uint>
+/// `ClkHz`, by default the clock's nominal frequency (the top's
+/// `#[clock(hz: ..)]`, passed down through the instance connections; give
+/// it explicitly to override). `pps` pulses once per second. `set` loads a
+/// new time and restarts the current second.
+pub module Rtc<ClkHz: uint = clock_hz(clk)>
 where ClkHz >= 1
 {
     /// Clock running at ClkHz.
@@ -533,4 +534,28 @@ test "watchdog: regular kicks keep it quiet" {
         dut.step()
         expect !dut.bite
     }
+}
+
+/// Test bench: an Rtc under a top clock that records its frequency.
+module RtcBench {
+    #[clock(hz: 8)]
+    in clk: clock
+    in rst: reset
+    /// Seconds of the Rtc.
+    out seconds: uint<6>
+
+    let rtc = Rtc(set: Valid {
+        valid: false,
+        data: RtcTime { days: 0, hours: 0, minutes: 0, seconds: 0 },
+    })
+    seconds = rtc.time.seconds
+}
+
+test "rtc: the clock rate comes from #[clock(hz)]" {
+    let dut = sim RtcBench()
+    dut.reset()
+    dut.step(39)
+    expect dut.seconds == 4
+    dut.step(1)
+    expect dut.seconds == 5
 }

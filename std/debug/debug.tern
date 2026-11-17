@@ -195,9 +195,11 @@ test "ila: trigger is ignored until the pre-trigger window is full" {
 // Heartbeat
 // ---------------------------------------------------------------------------
 
-/// Blinks an LED at `Hz` (50 % duty) from a clock of `ClkHz`: the simplest
-/// proof that a bitstream is loaded, the clock runs and reset is released.
-pub module Heartbeat<ClkHz: uint, Hz: uint = 1>
+/// Blinks an LED at `Hz` (50 % duty): the simplest proof that a bitstream
+/// is loaded, the clock runs and reset is released. `ClkHz` is the clock's
+/// nominal frequency (the top's `#[clock(hz: ..)]`, passed down through the
+/// instance connections); give it explicitly to override.
+pub module Heartbeat<Hz: uint = 1, ClkHz: uint = clock_hz(clk)>
 where Hz >= 1, ClkHz >= 2 * Hz
 {
     /// Clock running at ClkHz.
@@ -238,7 +240,7 @@ where Hz >= 1, ClkHz >= 2 * Hz
 }
 
 test "heartbeat: toggles every half period" {
-    let dut = sim Heartbeat<20, 2>()  // half period = 5 cycles
+    let dut = sim Heartbeat<2, ClkHz: 20>()  // half period = 5 cycles
     dut.reset()
     var toggles: uint = 0
     var prev: bool = false
