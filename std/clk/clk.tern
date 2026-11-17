@@ -1,6 +1,6 @@
 package std::clk
 
-// std::clk — clock dividers, enables and gating.
+// std::clk — clock dividers, enables, gating, Strobe and Watchdog.
 //
 // Prefer clock *enables* (Enable, Strobe, Divider::tick) over derived
 // clocks: an enable keeps logic in one domain, needs no extra clock buffer
@@ -264,6 +264,89 @@ test "strobe: fractional ratio keeps the average exact" {
         if dut.tick { ticks = ticks + 1 }
     }
     expect ticks == 300
+}
+
+// ---------------------------------------------------------------------------
+// Watchdog
+// ---------------------------------------------------------------------------
+
+/// Watchdog timer: if `timeout` consecutive enabled cycles pass without a
+/// `kick`, `bite` goes high and stays high until the next kick, a disable
+/// or reset. With a kick in cycle t and none after, `bite` is high from
+/// cycle t + timeout + 1.
+pub module Watchdog<W: uint = 24>
+where W >= 1
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; the watchdog restarts its count.
+    in rst: reset
+    /// Watch (when low, the count is held at zero and `bite` is low).
+    in enable: bool
+    /// Restart the count.
+    in kick: bool
+    /// Cycles allowed between kicks.
+    in timeout: uint<W>
+    /// The watchdog expired (sticky until a kick).
+    out bite: bool
+    /// Cycles since the last kick.
+    out elapsed: uint<W>
+
+    /// Cycles from the expiry to `bite`.
+    pub const LATENCY: uint = 1
+
+    reg cnt: uint<W> = 0
+    reg bitten: bool = false
+
+    on clk {
+        if !enable or kick {
+            cnt = 0
+            bitten = false
+        } else if !bitten {
+            let nxt = cnt +% 1
+            cnt = nxt
+            if nxt >= timeout { bitten = true }
+        }
+    }
+
+    bite = bitten
+    elapsed = cnt
+
+    /// Once bitten, only a kick (or disabling) clears it.
+    property sticky {
+        always (bitten and enable and !kick) |=> bitten
+    }
+}
+
+test "watchdog: bites after the timeout, kick clears" {
+    let dut = sim Watchdog<8>()
+    dut.reset()
+    dut.enable = true
+    dut.timeout = 10
+    dut.kick = true
+    dut.step()                        // kick in cycle t
+    dut.kick = false
+    dut.step(9)
+    expect !dut.bite
+    dut.step()
+    expect dut.bite                   // cycle t + 11
+    dut.step(20)
+    expect dut.bite
+    dut.kick = true
+    dut.step()
+    expect !dut.bite
+}
+
+test "watchdog: regular kicks keep it quiet" {
+    let dut = sim Watchdog<8>()
+    dut.reset()
+    dut.enable = true
+    dut.timeout = 5
+    for c in 0..100 {
+        dut.kick = (c & 3) == 0
+        dut.step()
+        expect !dut.bite
+    }
 }
 
 /// Test bench: a top whose clock records its frequency.

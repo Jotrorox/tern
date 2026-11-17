@@ -215,7 +215,7 @@ module AsyncFifo_u32_512 "AsyncFifo<uint<32>, 512>" in std::fifo cdc(async_fifo)
   assert property pop_stable @1: always ((pop_valid && !pop_ready) |=> (pop_valid && (pop_data == past(pop_data, 1))))
   cover property fills_up @0: !push_ready
 end
-module Crc_u32_32_79764919_4294967295_1_1_4294967295 "Crc<uint<32>, 32, 79764919, 4294967295, true, true, 4294967295>" in std::crc
+module Crc_32_79764919_4294967295_1_1_4294967295_u32 "Crc<32, 79764919, 4294967295, true, true, 4294967295, uint<32>>" in std::crc
   param W = 32'h20
   param Poly = 32'h4c11db7
   param Init = 32'hffffffff
@@ -365,7 +365,7 @@ module Crc32_u32 "Crc32<uint<32>>" in std::crc
   assign in_ready = c_in_ready
   assign c_clear = clear
   assign crc = c_crc
-  inst c: Crc_u32_32_79764919_4294967295_1_1_4294967295 (clk = clk, rst = rst, in_valid = c_in_valid, in_data = c_in_data, in_ready -> c_in_ready, clear = c_clear, crc -> c_crc, state -> c_state)
+  inst c: Crc_32_79764919_4294967295_1_1_4294967295_u32 (clk = clk, rst = rst, in_valid = c_in_valid, in_data = c_in_data, in_ready -> c_in_ready, clear = c_clear, crc -> c_crc, state -> c_state)
 end
 module Soc top
   domain 0 "io" clock=io_clk reset=io_rst
