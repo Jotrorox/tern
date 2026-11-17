@@ -1,0 +1,30 @@
+// #[probe] (std::debug): the probed signals of a module become the struct
+// type `Probes` and the value `probes`, ready for an Ila.
+use std::debug::Ila
+use std::stream::Beat
+
+#[top]
+module Probed {
+    in clk: clock
+    in rst: reset
+    #[probe]
+    in start: bool
+    in arm: bool
+    out dump: Stream<Beat<Probes>>
+
+    #[probe]
+    reg count: u8 = 0
+    #[probe]
+    let wrap = count == 255
+    var mode: uint<2>
+
+    comb {
+        mode = if wrap { 2 } else { 1 }
+    }
+    on clk {
+        if start or count != 0 { count = count +% 1 }
+    }
+
+    let ila = Ila<Probes, 16, 4>(probes: probes, trigger: wrap, arm: arm)
+    dump = ila.out
+}

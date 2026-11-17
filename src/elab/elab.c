@@ -14,6 +14,7 @@
  *     reset inputs are connected directly to the parent's signal.
  */
 #include "elab_impl.h"
+#include "../syntax/parser.h"
 
 /* deepest chain of module instances (stack depth of elab_module) */
 #define EL_MAX_MOD_DEPTH 128
@@ -2549,6 +2550,109 @@ static int elb_name_taken(Elab *el, const char *nm)
     return map_has(&el->modtypes, MAP_PTR(nm) ^ 2u);
 }
 
+/* a port declared `clock`, `clock<..>`, `reset` or `reset<..>` */
+static int elb_port_is_clock_or_reset(const Stmt *s)
+{
+    const Type *t = s->u.port.type;
+    const char *n;
+    if (!t || t->kind != TYPE_PATH || t->u.path.nsegs != 1)
+        return 0;
+    n = t->u.path.segs[0].name.name;
+    return n && (strcmp(n, "clock") == 0 || strcmp(n, "reset") == 0);
+}
+
+/* the implicit default domain of a module with one clock port */
+static void elb_default_domain_setup(Elab *el, ModCtx *mc, Stmt **body, uint32_t nbody)
+{
+    if (mc->clock_ports.len == 1) {
+        uint32_t ck = mc->clock_ports.data[0];
+        uint32_t rs = mc->reset_ports.len == 1 ? mc->reset_ports.data[0] : IR_NONE;
+        uint32_t d = ir_add_domain(el->design, mc->ir, "", ck, rs, elb_clock_hz(el, ck, body, nbody));
+        mc->ir->default_domain = d;
+    }
+}
+
+/* #[probe] (std::debug, spec §12.2): the probed signals of a module body
+ * (ports, `let`, `var`, `reg` at module level) become the struct type
+ * `Probes` (one field per signal, named after it, in declaration order) and
+ * the module-level value `probes` of that type, so a debug core takes them
+ * all at once: `Ila<Probes>(probes: probes, ..)`. The two declarations are
+ * generated as Tern text and appended to the body. */
+static int elb_probe_body(Elab *el, Item *it, Stmt **body, uint32_t n, Stmt ***out, uint32_t *nout)
+{
+    StrBuf fields = {0}, inits = {0}, text = {0};
+    uint32_t i, count = 0, src;
+    const char *name;
+    AstFile *af;
+    for (i = 0; i < n; i++) {
+        Stmt *s = body[i];
+        Attr *a = elb_find_attr(&s->attrs, "probe");
+        const char *sn = NULL;
+        if (s->kind == STMT_PORT)
+            sn = s->u.port.name.name;
+        else if (s->kind == STMT_VAR)
+            sn = s->u.var.name.name;
+        else if (s->kind == STMT_REG)
+            sn = s->u.reg.name.name;
+        else if (s->kind == STMT_LET && s->u.let.pat->kind == PAT_BIND)
+            sn = s->u.let.pat->u.bind.name;
+        if (!a)
+            continue;
+        if (a->nargs)
+            el_error(el, a->span, "#[probe] takes no arguments");
+        if (!sn) {
+            el_error(el, a->span, "#[probe] marks a port or a module-level `let`, `var` or `reg` signal");
+            continue;
+        }
+        sb_printf(&fields, "%s%s: typeof(%s)", count ? ", " : "", sn, sn);
+        sb_printf(&inits, "%s%s: %s", count ? ", " : "", sn, sn);
+        count++;
+    }
+    if (!count) {
+        sb_free(&fields);
+        sb_free(&inits);
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        Stmt *s = body[i];
+        const char *dn = s->kind == STMT_PORT ? s->u.port.name.name
+                       : s->kind == STMT_VAR ? s->u.var.name.name
+                       : s->kind == STMT_REG ? s->u.reg.name.name
+                       : s->kind == STMT_LET && s->u.let.pat->kind == PAT_BIND ? s->u.let.pat->u.bind.name
+                       : s->kind == STMT_ITEM ? s->u.item->name.name
+                       : NULL;
+        if (dn && (strcmp(dn, "Probes") == 0 || strcmp(dn, "probes") == 0)) {
+            el_error(el, s->span, "`%s` is declared by #[probe] in this module", dn);
+            el_help(el, "#[probe] defines the type `Probes` and the value `probes`; rename this declaration");
+            sb_free(&fields);
+            sb_free(&inits);
+            return -1;
+        }
+    }
+    sb_printf(&text, "module %s {\n    type Probes = struct { %s }\n    let probes = Probes { %s }\n}\n",
+              it->name.name, sb_cstr(&fields), sb_cstr(&inits));
+    sb_free(&fields);
+    sb_free(&inits);
+    name = arena_printf(&el->arena, "<#[probe] signals of %s>", it->name.name);
+    src = src_find(name);
+    if (src)
+        src_update(src, text.data, text.len);
+    else
+        src = src_add(name, text.data, text.len);
+    sb_free(&text);
+    af = parse_file(&el->S->arena, src);
+    if (af->nerrors || af->nitems != 1 || af->items[0]->kind != ITEM_MODULE) {
+        el_error(el, it->name.span, "internal error: the #[probe] declarations of `%s` do not parse", it->name.name);
+        return -1;
+    }
+    *out = ANEWN(&el->arena, Stmt *, n + af->items[0]->u.module.nbody);
+    if (n)
+        memcpy(*out, body, n * sizeof(Stmt *));
+    memcpy(*out + n, af->items[0]->u.module.body, af->items[0]->u.module.nbody * sizeof(Stmt *));
+    *nout = n + af->items[0]->u.module.nbody;
+    return 1;
+}
+
 ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
 {
     uint64_t v;
@@ -2563,6 +2667,7 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
     uint32_t nbody, i;
     Env *scope;
     int errs0 = diag_error_count();
+    int has_probes = 0;
     if (map_get(&el->modules, MAP_PTR(vm->cache_key), &v)) {
         mi = (ModInfo *)(uintptr_t)v;
         if (mi->state == 1) {
@@ -2641,20 +2746,37 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
             mi->failed = 1;
         }
     }
+    if (it->kind == ITEM_MODULE) {
+        /* #[probe] signals: `Probes` and `probes` */
+        Stmt **all = NULL;
+        uint32_t nall = 0;
+        int r = elb_probe_body(el, it, body, nbody, &all, &nall);
+        if (r > 0) {
+            body = all;
+            nbody = nall;
+            has_probes = 1;
+        } else if (r < 0) {
+            mi->failed = 1;
+        }
+    }
     elb_module_attrs(el, &mc);
     elb_params(el, &mc);
     if (!mc.is_extern)
         elb_bind_decls(el, body, nbody, scope);
-    /* ports first: they define the default domain */
-    for (i = 0; i < nbody; i++)
-        if (body[i]->kind == STMT_PORT)
-            elb_declare_port(el, body[i], scope);
-    if (mc.clock_ports.len == 1) {
-        uint32_t ck = mc.clock_ports.data[0];
-        uint32_t rs = mc.reset_ports.len == 1 ? mc.reset_ports.data[0] : IR_NONE;
-        uint32_t d = ir_add_domain(el->design, mi->ir, "", ck, rs, elb_clock_hz(el, ck, body, nbody));
-        mi->ir->default_domain = d;
+    /* ports first: they define the default domain. With #[probe] a port
+     * type may name `Probes`, whose fields can be registers that need the
+     * domain: then the clock and reset ports go first. */
+    if (has_probes) {
+        for (i = 0; i < nbody; i++)
+            if (body[i]->kind == STMT_PORT && elb_port_is_clock_or_reset(body[i]))
+                elb_declare_port(el, body[i], scope);
+        elb_default_domain_setup(el, &mc, body, nbody);
     }
+    for (i = 0; i < nbody; i++)
+        if (body[i]->kind == STMT_PORT && (!has_probes || !elb_port_is_clock_or_reset(body[i])))
+            elb_declare_port(el, body[i], scope);
+    if (!has_probes)
+        elb_default_domain_setup(el, &mc, body, nbody);
     mi->nclocks = (uint32_t)mc.clock_ports.len;
     if (mc.is_extern) {
         for (i = 0; i < nbody; i++)

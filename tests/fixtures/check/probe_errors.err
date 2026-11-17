@@ -1,0 +1,3 @@
+probe_errors.tern:5:5: error: #[probe] takes no arguments
+probe_errors.tern:8:5: error: #[probe] marks a port or a module-level `let`, `var` or `reg` signal
+probe_errors.tern:17:5: error: `probes` is declared by #[probe] in this module
