@@ -1,0 +1,1 @@
+tour_examples.tern:103:21: warning: unchecked clock-domain crossing (`unsafe_cross`)

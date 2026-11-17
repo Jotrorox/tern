@@ -49,7 +49,7 @@ HDRS = \
 	src/tools/tools.h \
 	src/sema/sema.h \
 	src/elab/value.h src/elab/elab.h src/elab/elab_impl.h \
-	src/check/check.h \
+	src/check/check.h src/check/check_impl.h \
 	src/cmds.h src/std_embed.h src/driver.h
 
 # --- os/
@@ -174,11 +174,27 @@ $(OBJ)/ir_json.o: src/ir/ir_json.c $(HDRS) $(OBJ)/.dir
 
 # --- check/
 CHECK_SRCS = \
-	src/check/check.c
+	src/check/check.c \
+	src/check/drivers.c \
+	src/check/assign.c \
+	src/check/cdc.c \
+	src/check/unused.c
 CHECK_OBJS = \
-	$(OBJ)/check_check.o
+	$(OBJ)/check_check.o \
+	$(OBJ)/check_drivers.o \
+	$(OBJ)/check_assign.o \
+	$(OBJ)/check_cdc.o \
+	$(OBJ)/check_unused.o
 $(OBJ)/check_check.o: src/check/check.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/check/check.c -o $@
+$(OBJ)/check_drivers.o: src/check/drivers.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/check/drivers.c -o $@
+$(OBJ)/check_assign.o: src/check/assign.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/check/assign.c -o $@
+$(OBJ)/check_cdc.o: src/check/cdc.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/check/cdc.c -o $@
+$(OBJ)/check_unused.o: src/check/unused.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/check/unused.c -o $@
 
 # --- emit/
 EMIT_SRCS = \

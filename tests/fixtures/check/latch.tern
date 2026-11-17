@@ -1,0 +1,109 @@
+// §6.2: every path through a comb block assigns every var and output it
+// drives, unless the var has a default; the error names the path
+
+enum Op { Nop, Add, Sub, And }
+
+struct Flags {
+    carry: bool,
+    zero: bool,
+}
+
+// the §6.2 example with the `.Nop` arm not assigning `alu_out`
+module Alu {
+    in op: Op
+    in a: u32
+    in b: u32
+    out y: u32
+    var alu_out: u32
+    comb {
+        match op {
+            .Add => alu_out = a +% b,
+            .Sub => alu_out = a -% b,
+            .And => alu_out = a & b,
+            .Nop => {},
+        }
+    }
+    y = alu_out
+}
+
+// an `if` without `else` driving an output
+module MissingElse {
+    in en: bool
+    in a: u8
+    out y: u8
+    comb {
+        if en { y = a }
+    }
+}
+
+// nested conditions: the message gives the whole path
+module Nested {
+    in a: bool
+    in b: bool
+    in x: u8
+    out y: u8
+    comb {
+        if a {
+            if b { y = x } else { y = 0 }
+        } else if b {
+            y = 1
+        }
+    }
+}
+
+// one struct field is only assigned on some paths
+module PartialField {
+    in op: Op
+    out flags: Flags
+    var f: Flags
+    comb {
+        f.zero = op == .Nop
+        if op == .Add { f.carry = true }
+    }
+    flags = f
+}
+
+// a loop that misses one bit
+module PartialBits {
+    in a: bit<8>
+    out y: bit<8>
+    var v: bit<8>
+    comb {
+        for i in 0..7 { v[i] = a[7 - i] }
+    }
+    y = v
+}
+
+// every bit is assigned, but only under a condition
+module CondBits {
+    in a: bit<4>
+    out y: bit<4>
+    comb {
+        for i in 0..4 {
+            if a[i] { y[i] = true }
+        }
+    }
+}
+
+// a dynamic index assigns one element, not the whole array
+module DynamicIndex {
+    in i: uint<2>
+    in d: u8
+    out y: [u8; 4]
+    var arr: [u8; 4]
+    comb {
+        arr[i] = d
+    }
+    y = arr
+}
+
+// reading a var before the block assigns it
+module ReadBeforeAssign {
+    in a: u8
+    out y: u8
+    var t: u8
+    comb {
+        y = t +% 1
+        t = a
+    }
+}

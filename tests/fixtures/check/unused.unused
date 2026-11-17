@@ -1,0 +1,6 @@
+unused.tern:22:8: warning: input `b` is never read
+unused.tern:25:9: warning: `doubled` is never read
+unused.tern:26:9: warning: var `tmp` is assigned but never read
+unused.tern:28:9: warning: register `hist` is assigned but never read
+unused.tern:33:9: warning: memory `log` is written but never read
+unused.tern:35:5: warning: output `wrapped` of instance `cnt` is never read

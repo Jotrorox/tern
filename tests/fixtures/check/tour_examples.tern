@@ -1,0 +1,166 @@
+// Examples from the spec (§6.3, §7, §8.2, §10, §12.3): the design checks
+// report nothing for them (only the CDC report lists the crossings)
+
+use std::stream::Stream
+use std::fifo::{Fifo, AsyncFifo}
+use std::io::UartRx
+use std::stream::Gearbox
+use std::crc::Crc32
+use std::cdc::Sync2
+
+// §6.3: registers with and without reset, an inferred enable
+module Counting {
+    in clk: clock
+    in rst: reset
+    in clk_io: clock
+    in load: bool
+    in en: bool
+    in din: u8
+    in next_data: u32
+    out count_q: u8
+    out data_q: u32
+    domain sys = (clk, rst)
+    domain io = (clk_io)
+    reg count: u8 = 0 @ sys
+    reg data: u32 @ sys
+    reg tx_q: u8 = 0 @ io
+    on sys {
+        if load { count = din } else if en { count = count +% 1 }
+        data = next_data
+    }
+    on io { tx_q = tx_q +% 1 }
+    count_q = count
+    data_q = data
+}
+
+// §7.3: one register per unrolled iteration, chained through a var array
+module Pipeline<T: type, Stages: uint> {
+    in clk: clock
+    in d: T
+    out q: T
+    var stage: [T; Stages + 1]
+    stage[0] = d
+    for i in 0..Stages {
+        reg r: T @ clk
+        on clk { r = stage[i] }
+        stage[i + 1] = r
+    }
+    q = stage[Stages]
+}
+
+// §7.2: instantiation, inherited clocks, destructuring
+module Instances {
+    in clk: clock
+    in rst: reset
+    in clk_io: clock
+    in rst_io: reset
+    in rx: Stream<u8>
+    in dma_out: Stream<u8>
+    out rx_pop: Stream<u8>
+    out tx_pop: Stream<u8> @ io
+    out fifo_full: bool
+    out piped: u8
+    domain sys = (clk, rst)
+    domain io = (clk_io, rst_io)
+    let rx_fifo = Fifo<u8, 64>(push: rx) @ sys
+    let tx_fifo = Fifo<u8, Depth: 64>(clk: clk_io, rst: rst_io, push: dma_out) @ io
+    rx_pop = rx_fifo.pop
+    tx_pop = tx_fifo.pop
+    fifo_full = rx_fifo.count == 64
+    let p = Pipeline<u8, 3>(clk, d: rx.data)
+    piped = p.q
+}
+
+// §8.2: two domains, a synchronizer connected by name
+module Dma {
+    in clk: clock
+    in rst: reset<async, low>
+    out fb: u16
+    reg addr: u16 = 0
+    on clk { addr = addr +% 1 }
+    fb = addr
+}
+
+module Scanout {
+    in clk: clock
+    in fb: u16
+    out line: u16
+    reg l: u16 = 0
+    on clk { l = fb }
+    line = l
+}
+
+module Video {
+    in sys_clk: clock
+    in sys_rst: reset<async, low>
+    in pix_clk: clock
+    out line: u16 @ pix
+    out flag_pix: bool @ pix
+    domain sys = (sys_clk, sys_rst)
+    domain pix = (pix_clk)
+    let dma = Dma() @ sys
+    reg fb_q: u16 = 0 @ pix
+    on pix { fb_q = unsafe_cross(dma.fb) }
+    let video = Scanout(fb: fb_q) @ pix
+    line = video.line
+    reg flag: bool = false @ sys
+    on sys { flag = dma.fb == 0 }
+    let s = Sync2(src: sys.clock, dst: pix.clock, d: flag)
+    flag_pix = s.q
+}
+
+// §10.1 / §10.2: memories and a state machine with tuple matching
+enum State { Idle, Run, Finish }
+enum Event { Start, Done, Abort, Nothing }
+
+module Memories {
+    in clk: clock
+    in rst: reset
+    in we: bool
+    in wr_addr: uint<10>
+    in wr_data: u32
+    in rd_addr: uint<10>
+    in idx: uint<6>
+    in event: Event
+    out rd: u32
+    out async_rd: u8
+    out busy: bool
+    mem buf: [u32; 1024]
+    #[ram(distributed)]
+    mem lut: [u8; 64]
+    rd = buf.read(rd_addr)
+    on clk {
+        if we { buf[wr_addr] = wr_data }
+        if we { lut[idx] = wr_data[7:0] }
+    }
+    async_rd = lut[idx]
+    reg state: State = .Idle
+    on clk {
+        state = match (state, event) {
+            (.Idle, .Start) => .Run,
+            (.Run, .Done) => .Finish,
+            (.Run, .Abort) => .Idle,
+            (.Finish, _) => .Idle,
+            (s, _) => s,
+        }
+    }
+    busy = state in [.Run, .Finish]
+}
+
+// §12.3: four domain-checked components, no glue signals
+module Composition {
+    in io_clk: clock
+    in io_rst: reset
+    in sys_clk: clock
+    in sys_rst: reset
+    in rxd: bool @ io
+    out crc: u32 @ sys
+    domain io = (io_clk, io_rst)
+    domain sys = (sys_clk, sys_rst)
+    let rx = UartRx<ClkHz: 100_000_000, Baud: 3_000_000>(rxd) @ io
+    let words = Gearbox<u8, u32>(in: rx.out) @ io
+    let xfifo = AsyncFifo<u32, 512>(push: words.out, src: io.clock, src_rst: io.reset, dst: sys.clock,
+                                    dst_rst: sys.reset)
+    let c = Crc32<u32>(in: xfifo.pop, clear: false) @ sys
+    crc = c.crc
+}

@@ -1,0 +1,106 @@
+// §8.3: crossings through std::cdc primitives (and unsafe_cross, which
+// warns) are accepted and listed in the CDC report
+
+use std::cdc::{Sync2, PulseSync, HandshakeSync, AsyncFifo, ResetSync, ResetBridge}
+use std::stream::Stream
+
+// a level through Sync2; the synchronized value is in the destination domain
+module Level {
+    in sys_clk: clock
+    in pix_clk: clock
+    out seen: bool @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg flag: bool = false @ sys
+    on sys { flag = !flag }
+    let s = Sync2(src: sys.clock, dst: pix.clock, d: flag)
+    reg q: bool = false @ pix
+    on pix { q = s.q }
+    seen = q and s.q
+}
+
+// streams through an AsyncFifo, pulses and values through PulseSync and
+// HandshakeSync, resets derived per domain
+module Bridge {
+    in a_clk: clock
+    in a_rst: reset
+    in b_clk: clock
+    in b_rst: reset
+    in push: Stream<u8> @ a
+    out pop: Stream<u8> @ b
+    out tick: bool @ b
+    out value: Stream<u16> @ b
+    domain a = (a_clk, a_rst)
+    domain b = (b_clk, b_rst)
+    let f = AsyncFifo<u8, 16>(src: a.clock, src_rst: a.reset, dst: b.clock, dst_rst: b.reset, push)
+    pop = f.pop
+    reg pulse: bool = false @ a
+    on a { pulse = push.valid and push.ready }
+    let p = PulseSync(src: a.clock, src_rst: a.reset, dst: b.clock, dst_rst: b.reset, d: pulse)
+    tick = p.q
+    reg cnt: u16 = 0 @ a
+    on a { cnt = cnt +% 1 }
+    let h = HandshakeSync<u16>(src: a.clock, src_rst: a.reset, dst: b.clock, dst_rst: b.reset,
+                               in: Stream { valid: true, data: cnt })
+    value = h.out
+}
+
+// a raw reset synchronized into each domain
+module Resets {
+    in sys_clk: clock
+    in pix_clk: clock
+    in ext_rst: reset<async>
+    out y: u8 @ pix
+    let rs = ResetSync(clk: sys_clk, rst_in: ext_rst)
+    domain sys = (sys_clk, rs.rst_out)
+    let rp = ResetSync(clk: pix_clk, rst_in: ext_rst)
+    domain pix = (pix_clk, rp.rst_out)
+    reg a: u8 = 0 @ sys
+    on sys { a = a +% 1 }
+    reg c: u8 = 0 @ pix
+    on pix { c = c +% 1 }
+    y = c
+}
+
+// a synchronous reset of one domain bridged into another
+module Bridged {
+    in sys_clk: clock
+    in sys_rst: reset
+    in pix_clk: clock
+    out y: u8 @ pix
+    domain sys = (sys_clk, sys_rst)
+    let rb = ResetBridge(src: sys.clock, src_rst: sys.reset, dst: pix_clk)
+    domain pix = (pix_clk, rb.dst_rst)
+    reg c: u8 = 0 @ pix
+    on pix { c = c +% 1 }
+    y = c
+}
+
+// a quasi-static configuration value crossing unchecked
+module Config {
+    in sys_clk: clock
+    in pix_clk: clock
+    in mode: uint<2> @ sys
+    out y: uint<2> @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg m: uint<2> = 0 @ sys
+    on sys { m = mode }
+    reg q: uint<2> = 0 @ pix
+    on pix { q = unsafe_cross(m) }
+    y = q
+}
+
+// clocks given as domain fields, constants and domain-free logic
+module Mixed {
+    in sys_clk: clock
+    in pix_clk: clock
+    in sel: bool
+    out y: u8 @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    let k = if sel { 3u8 } else { 4u8 }
+    reg c: u8 = 0 @ pix
+    on pix { c = c +% k }
+    y = c
+}

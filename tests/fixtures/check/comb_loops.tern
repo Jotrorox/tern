@@ -1,0 +1,66 @@
+// combinational loops: through assignments, comb blocks and instances
+
+// a var that reads itself
+module SelfLoop {
+    in a: u8
+    out y: u8
+    var v: u8
+    v = v ^ a
+    y = v
+}
+
+// two continuous assignments feeding each other
+module AssignLoop {
+    in a: u8
+    out y: u8
+    var p: u8
+    var q: u8
+    p = q +% a
+    q = p ^ 1
+    y = q
+}
+
+// two comb blocks feeding each other
+module CombLoop {
+    in en: bool
+    out y: bool
+    var x: bool
+    var z: bool
+    comb {
+        if en { x = z } else { x = false }
+    }
+    comb { z = !x }
+    y = z
+}
+
+// through an instance whose output depends combinationally on its input
+module Inv {
+    in a: bool
+    out y: bool
+    y = !a
+}
+
+module InstLoop {
+    out y: bool
+    var x: bool
+    let i = Inv(a: x)
+    x = i.y
+    y = x
+}
+
+// through two levels of instances
+module Buf {
+    in a: bool
+    out y: bool
+    let i = Inv(a)
+    y = !i.y
+}
+
+module DeepLoop {
+    in en: bool
+    out y: bool
+    var x: bool
+    let b = Buf(a: x and en)
+    x = b.y
+    y = x
+}

@@ -1,0 +1,8 @@
+latch.tern:19:9: error: `alu_out` may be unassigned when op == Nop
+latch.tern:35:9: error: `y` may be unassigned when en is false
+latch.tern:46:9: error: `y` may be unassigned when a is false and b is false
+latch.tern:61:9: error: `f.carry` may be unassigned when op == .Add is false
+latch.tern:70:9: error: bit 7 of var `v` is never assigned
+latch.tern:83:13: error: `y` may be unassigned when a[i] is false
+latch.tern:94:5: error: `arr` may be unassigned: an assignment with a dynamic index does not assign every element
+latch.tern:106:13: error: `t` is read before it is assigned in this `comb` block

@@ -237,6 +237,58 @@ comments. Key points:
   bindings/tuples/wildcards are lowered to `if` chains; match/if *expressions*
   become `IRE_MUX` chains.
 
+## Design checks (`src/check/`)
+
+`check_design(IrDesign*, const CheckOptions*)` (`check.h`) runs after
+elaboration when there were no errors (`tern check`; `tern build` and the LSP
+should call it too; `CheckOptions.cdc_report` = 0, the zero default, prints
+nothing, which the LSP needs since stdout carries JSON-RPC). It fills `IrDesign.crossings` (the emitter prints them in the
+constraint files' CDC report comment) and returns the error count.
+
+* `check.c` builds a model per module (`check_impl.h`): *nodes* are the units
+  that drive signals — one per continuous assign, one per (comb or `on`
+  block, target signal), one per instance output, plus read-only nodes for
+  instance inputs, assertions and properties. Each node has the bit ranges it
+  drives and the signal bits it reads (conditions included). Drivers are
+  sorted per signal, so lookups are binary searches; the combinational edges
+  (driver node → reader node, by overlapping bits) give strongly connected
+  components in topological order (iterative Tarjan). Modules are processed
+  children first, and each records a *port summary* (which inputs every
+  output depends on combinationally) that its parents use for instance
+  outputs. Extern modules have no combinational paths.
+* `drivers.c`: two nodes driving overlapping bits ("multiple drivers", both
+  sites, bit-accurate so element-wise array assigns are fine; memories are
+  exempt: multi-port RAMs), and outputs/wires/vars/registers with undriven
+  bits (#[test_port] exempt).
+* `assign.c`: definite assignment over each comb block with one bitset per
+  block (every bit of every target on every path; a `case` without default
+  whose values do not cover the subject has an empty path); the message names
+  one failing path (`` `alu_out` may be unassigned when op == Nop ``). Reads
+  of bits the block drives before they are assigned are errors. SCCs of size
+  > 1 (or self-reading assigns) are combinational loops, reported with the
+  cycle (`combinational loop: a -> b -> a`). The elaborator lowers the last
+  arm of an exhaustive `match` to the final `else`.
+* `cdc.c`: a domain is identified by its clock signal (through `let`
+  aliases). Signals with `IrSignal.domain` (or instance wires whose child
+  port has a domain) are fixed; others take the domain of the first domain
+  they read, in topological order. Reads of another domain in an `on` block,
+  in logic driving a fixed-domain signal, or mixed with another domain are
+  errors (`pix-domain signal `line` used in sys-domain logic; cross with
+  std::cdc`), except inside `#[cdc]` modules; `unsafe_cross` wires are
+  domain-free. A domain (or an instance's reset port) whose reset comes from
+  another domain warns. Crossings (every `#[cdc]` instance and
+  `unsafe_cross`) are expanded along the instance paths from the roots.
+* `unused.c` (`--unused`): unread inputs (a bundle port counts as read when
+  any field is), wires, vars, registers (self-feeding only counts as
+  unread), memories, and instance outputs (one warning per instance).
+  Aggregated over all elaborations of a declaration; generic modules
+  elaborated only as default roots are skipped; `_`-prefixed names,
+  #[test_port], #[keep] and non-user files (`CheckOptions.is_user_file`) are
+  exempt.
+
+Diagnostics go through `chk_error`/`chk_warning`, which drop duplicates (the
+same message at the same span from monomorphized copies of a module).
+
 ## Simulator contract (`src/sim/sim.h`, defined by the simulator)
 
 `sim.h` is the reference (its header comment states the semantics: two-phase
@@ -290,6 +342,11 @@ directory and the bare file name as argument:
   `tern test --diag-format=short foo.tern` (stdout)
 * `foo.tern` + `foo.fmt` — expected canonical formatting (docs/style.md):
   `tern fmt --stdout foo.tern` (stdout)
+* `foo.tern` + `foo.ir` — expected elaborated IR: `tern ir foo.tern` (stdout)
+* `foo.tern` + `foo.unused` — expected `--unused` warnings:
+  `tern check --unused --diag-format=short foo.tern` (stderr)
+* `foo.tern` + `foo.cdc` — expected CDC report:
+  `tern check --cdc-report --diag-format=short foo.tern` (stdout)
 
 So these commands must accept a single `.tern` file outside a project, and
 `build` must support `--stdout` (all emitted modules to stdout). Output and

@@ -1,8 +1,10 @@
-/* cmd_check.c — `tern check [paths] [--strict] [--unused] [--top M]
- * [--const-eval-limit N] [--features a,-b]`: parse, resolve, elaborate every
+/* cmd_check.c — `tern check [paths] [--strict] [--unused] [--cdc-report]
+ * [--top M] [--const-eval-limit N] [--features a,-b]`: parse, resolve, elaborate every
  * root (the given --top, else every #[top], else every module that needs
  * no generic arguments, plus the modules the tests instantiate with
  * `sim`), run the IR checks (src/check/check.h) and report diagnostics.
+ * The CDC report (every clock-domain crossing with its primitive) goes to
+ * stdout when the design has crossings, or always with --cdc-report.
  * Exit status 1 when there are errors.
  *
  *     tern ir [--json] [--top M] [paths]     (internal, for the golden tests)
@@ -101,6 +103,17 @@ static void cmd_check_hover(Driver *dr, const char *spec)
     }
 }
 
+/* --unused reports only signals declared in the user's files */
+static int cmd_check_is_user_file(uint32_t file, void *user)
+{
+    Sema *S = driver_sema((Driver *)user);
+    size_t i;
+    for (i = 0; i < S->files.len; i++)
+        if (S->files.data[i]->ast && S->files.data[i]->ast->src == file)
+            return S->files.data[i]->is_user;
+    return 0;
+}
+
 static int cmd_check_common(int argc, char **argv, int ir_mode)
 {
     ArgParser ap;
@@ -114,6 +127,7 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
     Arena ira = {0};
     memset(&o, 0, sizeof o);
     memset(&co, 0, sizeof co);
+    co.cdc_report = 1; /* the CDC report whenever the design has crossings */
     args_init(&ap, argc, argv);
     while (args_next(&ap)) {
         if (args_flag(&ap, "help|h")) {
@@ -122,6 +136,8 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
             return TERN_EXIT_OK;
         } else if (args_flag(&ap, "unused"))
             co.unused = 1;
+        else if (!ir_mode && args_flag(&ap, "cdc-report"))
+            co.cdc_report = 2;
         else if (args_flag(&ap, "strict"))
             co.strict = 1;
         else if (args_flag(&ap, "verbose|v"))
@@ -171,6 +187,8 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
             }
         } else {
             IrDesign *d = driver_elaborate_all(dr, top, &ira);
+            co.is_user_file = cmd_check_is_user_file;
+            co.user = dr;
             if (diag_error_count() == 0)
                 check_design(d, &co);
             if (verbose)

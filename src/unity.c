@@ -40,6 +40,10 @@
 #include "elab/mono.c"
 #include "elab/elab.c"
 #include "check/check.c"
+#include "check/drivers.c"
+#include "check/assign.c"
+#include "check/cdc.c"
+#include "check/unused.c"
 
 #include "sim/bitvec.c"
 #include "sim/netlist.c"

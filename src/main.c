@@ -25,11 +25,13 @@ static const MainCmd main_cmds[] = {
      "elaborate, check and emit build/<target>/*.sv, constraints, regmaps",
      "  --target <t>        build target from tern.toml ([target.<t>])\n"
      "  --std <s>           output dialect: sv (default) or verilog2005\n"},
-    {"check", cmd_check, "Project", "[<file.tern>...] [--top <m>] [--unused] [--strict]",
+    {"check", cmd_check, "Project", "[<file.tern>...] [--top <m>] [--unused] [--cdc-report] [--strict]",
      "run every compile-time check without emitting; CDC report, unused signals",
      "  --top <m>           elaborate only module m (default: every #[top], else every\n"
      "                      module without required generics, and the modules tests simulate)\n"
-     "  --unused            report unused signals\n"
+     "  --unused            report unused signals, inputs and instance outputs\n"
+     "  --cdc-report        print the CDC report even when there are no crossings\n"
+     "                      (it is printed whenever the design has crossings)\n"
      "  --const-eval-limit <n>  compile-time evaluation step limit (default 10000000)\n"
      "  --features <list>   enable/disable features: a,b,-c\n"},
     {"fmt", cmd_fmt, "Project", "[<file.tern|dir>...] [--check] [--stdout]",

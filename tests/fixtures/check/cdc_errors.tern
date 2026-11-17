@@ -1,0 +1,129 @@
+// §5.6, §8.2: reading a signal of one clock domain in logic of another
+// without a std::cdc primitive is an error
+
+use std::cdc::Sync2
+use std::cdc::ResetSync
+
+// an `on` block of one domain reads a register of another
+module RegAcross {
+    in sys_clk: clock
+    in pix_clk: clock
+    out y: u8 @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg a: u8 = 0 @ sys
+    reg b: u8 = 0 @ pix
+    on sys { a = a +% 1 }
+    on pix { b = a }
+    y = b
+}
+
+// a wire mixing two domains: the error is at the point of mixing
+module MixedWire {
+    in sys_clk: clock
+    in pix_clk: clock
+    out y: u8 @ sys
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg line: u8 = 0 @ pix
+    reg count: u8 = 0 @ sys
+    on pix { line = line +% 1 }
+    on sys { count = count +% 1 }
+    let both = count ^ line
+    y = both
+}
+
+// an output of one domain driven from another, through a var
+module OutputAcross {
+    in sys_clk: clock
+    in pix_clk: clock
+    out y: bool @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg flag: bool = false @ sys
+    on sys { flag = !flag }
+    var t: bool
+    comb { t = !flag }
+    y = t
+}
+
+// the synchronizer's input must come from its source domain
+module WrongSource {
+    in sys_clk: clock
+    in pix_clk: clock
+    out y: bool @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg p: bool = false @ pix
+    on pix { p = !p }
+    let s = Sync2(src: sys.clock, dst: pix.clock, d: p)
+    y = s.q
+}
+
+// a comb block whose condition comes from another domain
+module CondAcross {
+    in sys_clk: clock
+    in pix_clk: clock
+    out y: u8 @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg en: bool = false @ sys
+    reg v: u8 = 0 @ pix
+    on sys { en = !en }
+    on pix { v = v +% 1 }
+    var w: u8
+    comb {
+        if en { w = v } else { w = 0 }
+    }
+    y = w
+}
+
+// through a combinational instance
+module Xor {
+    in a: u8
+    in b: u8
+    out y: u8
+    y = a ^ b
+}
+
+module InstMix {
+    in sys_clk: clock
+    in pix_clk: clock
+    out y: u8 @ sys
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg a: u8 = 0 @ sys
+    reg b: u8 = 0 @ pix
+    on sys { a = a +% 1 }
+    on pix { b = b +% 1 }
+    let x = Xor(a, b)
+    y = x.y
+}
+
+// a reset synchronized into one domain used as the reset of another
+// (a warning)
+module ResetAcross {
+    in sys_clk: clock
+    in pix_clk: clock
+    in ext_rst: reset<async>
+    out y: u8 @ pix
+    let rs = ResetSync(clk: sys_clk, rst_in: ext_rst)
+    domain pix = (pix_clk, rs.rst_out)
+    reg c: u8 = 0 @ pix
+    on pix { c = c +% 1 }
+    y = c
+}
+
+// logic in front of a synchronizer can glitch (a warning)
+module GlitchySync {
+    in sys_clk: clock
+    in pix_clk: clock
+    out y: bool @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg a: bool = false @ sys
+    reg b: bool = false @ sys
+    on sys { a = !a; b = a }
+    let s = Sync2(src: sys.clock, dst: pix.clock, d: a and b)
+    y = s.q
+}
