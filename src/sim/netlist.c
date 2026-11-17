@@ -6,7 +6,9 @@
  *      (a top clock input or a derived clock) -> edge groups
  *   3. classify state (targets of clocked processes) and lay out values
  *      (state grouped per edge group so hold/commit are two memcpys)
- *   4. order the combinational nodes topologically (loops are errors)
+ *   4. order the combinational nodes topologically (loops are errors; a
+ *      comb process caught in a loop is first split into one node per
+ *      target, since a block-level loop need not be a signal-level one)
  *   5. compile everything to SimInsn (comb segment, one segment per domain,
  *      one property segment per group), relocate, initialize values.
  */

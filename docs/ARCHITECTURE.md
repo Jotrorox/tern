@@ -59,6 +59,7 @@ spaces — the real syntax is ASCII).
 | `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>/`) |
 | `tools/` | `embed.c` | embeds `std/**/*.tern` into `src/std_embed.c` (committed) |
 | `tests/` | `run.c`, `unit/test_{base,sim,pkg,tools,fmt,emit,lsp}.c`, `fixtures/**`, `lsp/*.session`, `fuzz/fuzz_parser.c` | golden-file test runner, unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
+| `examples/` | `uart_loopback/ sensor_bridge/ smoother/` (tern.toml, src/, tests/, sim/tb_*.sv) | example projects; `make examples` (part of `make test`) runs check, test, build and fmt --check in each, and their iverilog benches against the emitted RTL when iverilog is installed |
 
 ## Pipeline
 
@@ -383,6 +384,13 @@ void sim_set_fail_handler(SimModel*, SimFailFn, void *user); uint32_t sim_finish
 size_t sim_coverage(SimModel*, const SimCovPoint **out);
 int  sim_vcd_open(SimModel*, const char *path); void sim_vcd_close(SimModel*);
 ```
+
+Combinational nodes are scheduled once per settle in topological order. A
+`comb` process is one node; when that leaves a cycle, the processes in it
+are split into one node per target (reading only what that target's
+assignments and conditions read), so a block that drives `s.valid` from one
+input and its source's `ready` from `s.ready` is not a loop. Only a cycle
+that remains is reported.
 
 ## Language server (`src/lsp/`, spec §13.2)
 

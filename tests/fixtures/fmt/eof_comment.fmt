@@ -1,3 +1,5 @@
+/// A doc comment with trailing spaces
+/// on two lines	
 module M {
     in a: bool
     out y: bool
