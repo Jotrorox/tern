@@ -32,7 +32,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           make test
-          cc -std=c11 -O2 -static -o tern src/unity.c || cc -std=c11 -O2 -o tern src/unity.c
+          # dynamically linked: the compiled simulator loads models with dlopen
+          cc -std=c11 -O2 -o tern src/unity.c
           strip tern
           ./tern --version
           mkdir -p dist && cp tern dist/${{ matrix.asset }}
