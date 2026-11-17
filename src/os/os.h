@@ -177,4 +177,15 @@ typedef struct OsRunResult {
 int os_run(char *const argv[], const OsSpawnOpts *opts, OsRunResult *res);
 void os_run_result_free(OsRunResult *res);
 
+/* ------------------------------------------------------ shared libraries --- */
+
+/* Load a shared library (dlopen / LoadLibrary). Returns NULL on failure
+ * (*err_out, if non-NULL, gets a heap message). */
+typedef void (*OsDlFn)(void);
+void *os_dl_open(const char *path, char **err_out);
+OsDlFn os_dl_sym(void *lib, const char *name);     /* NULL if absent */
+void os_dl_close(void *lib);
+const char *os_dl_ext(void);          /* ".so", ".dylib" or ".dll" */
+uint64_t os_process_id(void);
+
 #endif /* TERN_OS_H */

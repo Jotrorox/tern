@@ -79,6 +79,15 @@ void testcov_report(TestCov *c, StrBuf *out);
 void testcov_serialize(const TestCov *c, StrBuf *out);
 int testcov_parse_line(TestCov *c, const char *line);  /* 1 if it was a coverage line */
 
+/* Compiled-simulation cache of a run: $TERN_SIMCACHE, else
+ * <project>/build/simcache, else NULL (sim.h's default, <temp>/tern-simcache). */
+char *testrun_simcache_dir(Driver *dr);
+/* Applies `--sim <engine>` (NULL: auto) for `tern <cmd>` with the cache
+ * directory above. Prints an error and returns -1 for an unknown engine, or
+ * for `compiled` without a host C compiler; with `verbose`, notes that
+ * `auto` found no compiler. */
+int testrun_set_engine(Driver *dr, const char *cmd, const char *engine, int verbose);
+
 /* Per-test seed derived from the run's base seed and the test name. */
 uint64_t testrun_test_seed(uint64_t base, const char *name);
 

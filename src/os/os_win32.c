@@ -1083,6 +1083,49 @@ void os_proc_free(OsProc *p)
     free(p);
 }
 
+/* ----------------------------------------------------- shared libraries --- */
+
+void *os_dl_open(const char *path, char **err_out)
+{
+    wchar_t *w = osw_path(path);
+    HMODULE h = LoadLibraryW(w);
+    free(w);
+    if (!h && err_out) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "LoadLibrary failed (error %lu)", (unsigned long)GetLastError());
+        *err_out = xstrdup(buf);
+    }
+    return (void *)h;
+}
+
+OsDlFn os_dl_sym(void *lib, const char *name)
+{
+    OsDlFn f = NULL;
+    FARPROC p;
+    if (!lib)
+        return NULL;
+    p = GetProcAddress((HMODULE)lib, name);
+    if (p)
+        memcpy(&f, &p, sizeof f < sizeof p ? sizeof f : sizeof p);
+    return f;
+}
+
+void os_dl_close(void *lib)
+{
+    if (lib)
+        FreeLibrary((HMODULE)lib);
+}
+
+const char *os_dl_ext(void)
+{
+    return ".dll";
+}
+
+uint64_t os_process_id(void)
+{
+    return (uint64_t)GetCurrentProcessId();
+}
+
 #undef OSW_EPOCH_DIFF
 
 /* windows.h defines macros with ordinary names. In the unity build every

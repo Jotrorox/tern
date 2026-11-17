@@ -65,6 +65,38 @@ static uint64_t tr_splitmix(uint64_t *s)
     return z ^ (z >> 31);
 }
 
+char *testrun_simcache_dir(Driver *dr)
+{
+    char *env = os_getenv("TERN_SIMCACHE");
+    if (env && *env)
+        return env;
+    free(env);
+    if (dr && dr->has_project)
+        return os_path_join(dr->prj.manifest.root, "build/simcache");
+    return NULL;
+}
+
+int testrun_set_engine(Driver *dr, const char *cmd, const char *engine, int verbose)
+{
+    SimEngine e = SIM_ENGINE_AUTO;
+    char *cache;
+    if (engine && !sim_parse_engine(engine, &e)) {
+        fprintf(stderr, "tern %s: error: unknown --sim `%s` (auto, interp or compiled)\n", cmd, engine);
+        return -1;
+    }
+    if (e == SIM_ENGINE_COMPILED && !sim_host_cc()) {
+        fprintf(stderr, "tern %s: error: --sim compiled needs a host C compiler ($CC, cc, gcc, clang or cl)\n", cmd);
+        return -1;
+    }
+    if (verbose && e == SIM_ENGINE_AUTO && !sim_host_cc())
+        fprintf(stderr, "tern %s: note: no host C compiler found ($CC, cc, gcc, clang, cl); simulating with the "
+                        "interpreter\n", cmd);
+    cache = testrun_simcache_dir(dr);
+    sim_set_engine_defaults(e, cache);
+    free(cache);
+    return 0;
+}
+
 uint64_t testrun_test_seed(uint64_t base, const char *name)
 {
     uint64_t s = base ^ hash_bytes(name ? name : "", name ? strlen(name) : 0);

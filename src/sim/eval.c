@@ -680,7 +680,7 @@ static void ev_props_tick(SimModel *m, uint32_t gi)
     uint32_t i, j;
     if (!g->mons.len)
         return;
-    sim_exec(m, g->pcode_lo, g->pcode_hi);
+    sim_exec_region(m, 1u + (uint32_t)m->doms.len + gi, g->pcode_lo, g->pcode_hi);
     p.m = m;
     p.g = g;
     p.old = &g->pool[g->cur_pool];
@@ -688,9 +688,10 @@ static void ev_props_tick(SimModel *m, uint32_t gi)
     ev_pool_clear(p.nw);
     for (i = 0; i < g->mons.len; i++) {
         SimMon *mon = &m->mons.data[g->mons.data[i]];
-        SimAttemptVec next = {0};
+        SimAttemptVec next = mon->spare; /* reuse last tick's buffer */
         uint64_t cyc = ev_dom_cycle(m, mon->fd);
         int cover = mon->prop->kind == IRA_COVER;
+        next.len = 0;
         if (m->doms.data[mon->fd].in_reset) {
             mon->att.len = 0;
             mon->started = 0;
@@ -730,7 +731,7 @@ static void ev_props_tick(SimModel *m, uint32_t gi)
                 ev_push_attempt(&p, &next, r, ref, st, spawn ? cyc : st);
             }
         }
-        vec_free(mon->att);
+        mon->spare = mon->att;
         mon->att = next;
     }
     g->cur_pool = 1 - g->cur_pool;
@@ -839,7 +840,7 @@ void sim_settle_now(SimModel *m)
     for (iter = 0; iter < 32; iter++) {
         m->dirty = 0;
         sim_apply_forces(m);
-        sim_exec(m, 0, m->comb_end);
+        sim_exec_region(m, 0, 0, m->comb_end);
         if (!ev_apply_async(m))
             break;
     }
@@ -908,7 +909,7 @@ static void ev_fire(SimModel *m, const uint32_t *gs, uint32_t ng)
         SimGroup *g = &m->groups.data[gs[i]];
         for (j = 0; j < g->doms.len; j++) {
             SimDom *d = &m->doms.data[g->doms.data[j]];
-            sim_exec(m, d->code_lo, d->code_hi);
+            sim_exec_region(m, 1u + g->doms.data[j], d->code_lo, d->code_hi);
             if (d->in_reset)
                 for (k = 0; k < d->init_n; k++) {
                     const SimInitReg *r = &m->initregs.data[d->init_lo + k];
@@ -993,7 +994,7 @@ SimModel *sim_new(const IrDesign *d, const IrModule *top, uint64_t seed)
     m->design = d;
     m->top = top;
     m->seed = seed;
-    if (!sim_build(m)) {
+    if (!sim_build(m) || !simc_setup(m)) {
         sim_free(m);
         return NULL;
     }
@@ -1015,6 +1016,7 @@ void sim_free(SimModel *m)
         return;
     if (m->rops)
         m->rops->destroy(m);
+    simc_free(m);
     sim_vcd_close(m);
     for (i = 0; i < m->groups.len; i++) {
         SimGroup *g = &m->groups.data[i];
@@ -1032,8 +1034,10 @@ void sim_free(SimModel *m)
     for (i = 0; i < m->forces.len; i++)
         free(m->forces.data[i].val);
     vec_free(m->forces);
-    for (i = 0; i < m->mons.len; i++)
+    for (i = 0; i < m->mons.len; i++) {
         vec_free(m->mons.data[i].att);
+        vec_free(m->mons.data[i].spare);
+    }
     vec_free(m->insts);
     vec_free(m->sigs);
     vec_free(m->mems);

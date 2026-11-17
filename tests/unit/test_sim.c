@@ -23,6 +23,7 @@
 #include "../../src/sim/netlist.c"
 #include "../../src/sim/eval.c"
 #include "../../src/sim/vcd.c"
+#include "../../src/sim/simc.c"
 #include "../../src/sim/remote.c"
 #include "../../src/os/os.h"
 

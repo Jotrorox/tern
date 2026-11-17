@@ -24,7 +24,11 @@
  * M<..>()`; without it, designs that contain an extern module run on
  * Verilator when it is installed (src/backend/vlsim.c) and are an error
  * otherwise. With --backend verilator the tests run one at a time in this
- * process. */
+ * process.
+ *
+ * --sim auto|interp|compiled picks the built-in simulator's engine
+ * (src/sim/simc.c; passed on to the workers): compiled models are cached in
+ * <project>/build/simcache ($TERN_SIMCACHE overrides it). */
 #include "../base/common.h"
 #include "../base/args.h"
 #include "../base/str.h"
@@ -61,6 +65,8 @@ typedef struct TestCmd {
     const char *features;
     const char *worker;       /* --worker index list */
     const char *backend;      /* --backend as given, or NULL */
+    const char *engine;       /* --sim as given, or NULL */
+    int verbose;
     TestRunBackend be;
     int have_verilator;
     TestStrVec paths;
@@ -236,6 +242,10 @@ static OsProc *test_spawn(TestCmd *t, const TestChunk *ch, char **err)
     if (t->backend) {
         vec_push(argv, (char *)"--backend");
         vec_push(argv, (char *)t->backend);
+    }
+    if (t->engine) {
+        vec_push(argv, (char *)"--sim");
+        vec_push(argv, (char *)t->engine);
     }
     if (t->features) {
         vec_push(argv, (char *)"--features");
@@ -442,6 +452,7 @@ int cmd_test(int argc, char **argv)
     const char *val;
     size_t i;
     uint64_t jobs = 0;
+    SimEngine engine = SIM_ENGINE_AUTO;
     int rc = TERN_EXIT_OK;
     uint64_t start = os_time_ns();
     memset(&t, 0, sizeof t);
@@ -480,7 +491,15 @@ int cmd_test(int argc, char **argv)
                 fprintf(stderr, "tern test: error: unknown backend `%s` (builtin or verilator)\n", val);
                 ap.errors++;
             }
-        } else if (args_positional(&ap)) {
+        } else if (args_opt(&ap, "sim", &val)) {
+            t.engine = val;
+            if (!sim_parse_engine(val, &engine)) {
+                fprintf(stderr, "tern test: error: unknown --sim `%s` (auto, interp or compiled)\n", val);
+                ap.errors++;
+            }
+        } else if (args_flag(&ap, "verbose|v"))
+            t.verbose = 1;
+        else if (args_positional(&ap)) {
             if (t.worker || os_exists(ap.arg))
                 vec_push(t.paths, ap.arg);
             else
@@ -491,6 +510,10 @@ int cmd_test(int argc, char **argv)
     t.have_verilator = t.be != TR_BACKEND_BUILTIN && vls_available();
     if (!ap.errors && t.be == TR_BACKEND_VERILATOR && !t.have_verilator) {
         fprintf(stderr, "tern test: error: --backend verilator needs Verilator on PATH (https://verilator.org)\n");
+        ap.errors++;
+    }
+    if (!ap.errors && engine == SIM_ENGINE_COMPILED && !sim_host_cc()) {
+        fprintf(stderr, "tern test: error: --sim compiled needs a host C compiler ($CC, cc, gcc, clang or cl)\n");
         ap.errors++;
     }
     if (ap.errors) {
@@ -526,6 +549,7 @@ int cmd_test(int argc, char **argv)
         return TERN_EXIT_FAIL;
     }
     driver_sema(dr)->record_info = 0;   /* no hover/definition info needed */
+    testrun_set_engine(dr, "test", t.engine, t.verbose && !t.worker);
     if (!t.worker) {
         driver_check_items(dr); /* file-level consts and static_asserts */
         if (diag_error_count()) {

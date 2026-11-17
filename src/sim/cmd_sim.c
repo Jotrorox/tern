@@ -243,6 +243,7 @@ int cmd_sim(int argc, char **argv)
     int rc = TERN_EXIT_OK;
     char *script_text = NULL;
     size_t script_len = 0;
+    const char *engine = NULL;
     memset(&o, 0, sizeof o);
     memset(&c, 0, sizeof c);
     memset(&to, 0, sizeof to);
@@ -260,6 +261,8 @@ int cmd_sim(int argc, char **argv)
             ;
         else if (args_opt(&ap, "features", &val))
             o.features = val;
+        else if (args_opt(&ap, "sim", &val))
+            engine = val;
         else if (args_opt(&ap, "backend", &val)) {
             if (strcmp(val, "builtin") == 0)
                 to.backend = TR_BACKEND_BUILTIN;
@@ -313,6 +316,10 @@ int cmd_sim(int argc, char **argv)
         goto done;
     }
     driver_sema(c.dr)->record_info = 0;   /* no hover/definition info needed */
+    if (testrun_set_engine(c.dr, "sim", engine, 0) != 0) {
+        rc = TERN_EXIT_USAGE;
+        goto done;
+    }
     if (!top) {
         DriverItemVec v = {0};
         driver_tops(c.dr, &v);
