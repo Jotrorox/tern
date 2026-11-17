@@ -121,6 +121,12 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: TEMP list all /W4 warnings
+        shell: cmd
+        continue-on-error: true
+        run: |
+          mkdir build
+          for %%f in (src\unity.c tools\embed.c tests\run.c tests\doc_snippets.c tests\unit\test_base.c tests\unit\test_sim.c tests\unit\test_pkg.c tests\unit\test_tools.c tests\unit\test_fmt.c tests\unit\test_emit.c tests\unit\test_backend.c tests\unit\test_lsp.c tests\unit\test_elab.c tests\fuzz\fuzz_parser.c tests\fuzz\fuzz_check.c tests\fuzz\fuzz_toml.c tests\fuzz\fuzz_json.c) do cl /nologo /std:%TERN_MSVC_STD% /W4 /O2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DFUZZ_STANDALONE /c %%f /Fo:build\tmp.obj
       - name: build.bat test
         shell: cmd
         run: build.bat test

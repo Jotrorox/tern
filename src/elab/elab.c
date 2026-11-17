@@ -1774,7 +1774,7 @@ static void elb_bind_decls(Elab *el, Stmt **stmts, uint32_t n, Env *env)
     for (i = 0; i < n; i++) {
         Stmt *s = stmts[i];
         const char *nm = NULL;
-        Span def;
+        Span def = span_none();
         Binding *b;
         switch (s->kind) {
         case STMT_DOMAIN: nm = s->u.domain.name.name; def = s->u.domain.name.span; break;
