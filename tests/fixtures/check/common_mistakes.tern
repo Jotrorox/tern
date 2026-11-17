@@ -126,3 +126,14 @@ module IfArmWidth {
     }
     y = c
 }
+
+module MatchArmWidth {
+    in op: Op
+    in a: u8
+    in b: u8
+    out y: u8
+    y = match op {
+        .Add => a + b,
+        .Sub => a,
+    }
+}

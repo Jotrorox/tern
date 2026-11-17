@@ -5217,6 +5217,19 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
         uint32_t last = n;
         while (last > 0 && arms[last - 1].returned)
             last--;
+        if (expect && expect->kind != TY_ERROR && expect->hw && !el->quiet) {
+            /* convert each arm with its own expression, so a width error
+             * names the arm (`a + b` is uint<9>) instead of the whole match */
+            for (a = 0; a < last; a++) {
+                Stmt *bs = e->u.match.arms[a].body;
+                Expr *ae = bs && bs->kind == STMT_EXPR ? bs->u.expr : NULL;
+                if (ae && ae->kind == EXPR_BLOCK)
+                    ae = ae->u.block ? ae->u.block->tail : NULL;
+                if (!arms[a].returned && arms[a].cond.kind != VAL_BOOL && arms[a].val.kind != VAL_ERROR &&
+                    arms[a].val.kind != VAL_VOID && ae)
+                    arms[a].val = elab_convert(el, arms[a].val, expect, ae, NULL, ae->span);
+            }
+        }
         r = last ? arms[last - 1].val : val_void(el->S);
         for (a = last ? last - 1 : 0; a-- > 0;)
             if (!arms[a].returned)

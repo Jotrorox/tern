@@ -95,3 +95,10 @@ common_mistakes.tern:125:44: error: width mismatch: `c + 1` is uint<5>, expected
     = help: use `+%` for a wrapping add, or truncate with `as uint<4>`
   in: IfArmWidth
 
+common_mistakes.tern:136:17: error: width mismatch: `a + b` is uint<9>, expected uint<8>
+    |
+136 |         .Add => a + b,
+    |                 ^^^^^
+    = help: use `+%` for a wrapping add, or truncate with `as uint<8>`
+  in: MatchArmWidth
+
