@@ -113,3 +113,17 @@ module ResetAcross {
     on pix { c = c +% 1 }
     y = c
 }
+
+// logic in front of a synchronizer can glitch (a warning)
+module GlitchySync {
+    in sys_clk: clock
+    in pix_clk: clock
+    out y: bool @ pix
+    domain sys = (sys_clk)
+    domain pix = (pix_clk)
+    reg a: bool = false @ sys
+    reg b: bool = false @ sys
+    on sys { a = !a; b = a }
+    let s = Sync2(src: sys.clock, dst: pix.clock, d: a and b)
+    y = s.q
+}

@@ -211,6 +211,48 @@ static const char *cdc_source_text(CdcCtx *c, uint32_t w)
     return c->m->sigs[w].path;
 }
 
+/* Level and pulse synchronizers sample `d` asynchronously: it must come
+   straight from a register (or an input port / instance output, whose
+   origin is not known here), never from combinational logic that can
+   glitch (std::cdc::Sync2 documents this). */
+static void cdc_sync_input(CdcCtx *c, const IrInstance *in)
+{
+    const IrModule *ch = in->module;
+    uint32_t k;
+    for (k = 0; k < in->nconns; k++) {
+        const IrConn *cn = &in->conns[k];
+        const IrSignal *ps;
+        uint32_t f, e, w, lo;
+        const ChkNode *n;
+        const IrExpr *x;
+        if (cn->port >= ch->nsigs || !cn->expr || cn->expr->kind != IRE_SIG || cn->expr->sig >= c->m->nsigs)
+            continue;
+        ps = &ch->sigs[cn->port];
+        if (ps->kind != IRS_IN || !ps->type || ps->type->kind == IRT_CLOCK || ps->type->kind == IRT_RESET)
+            continue;
+        w = cn->expr->sig;
+        chk_ranges_of(c->cm, w, &f, &e);
+        if (e - f != 1)
+            continue;
+        n = &c->cm->nodes.data[c->cm->ranges.data[f].node];
+        if (n->kind != CHK_N_ASSIGN)
+            continue;
+        x = c->m->assigns[n->idx].rhs;
+        if (x && x->kind == IRE_CONST)
+            continue;
+        if (x && chk_expr_base(x, &lo) != IR_NONE) {
+            const IrSignal *src = &c->m->sigs[chk_expr_base(x, &lo)];
+            if (src->kind == IRS_REG || src->kind == IRS_IN || c->cm->inst_wire_inst[chk_expr_base(x, &lo)] ||
+                chk_sig_attr(src, "unsafe_cross"))
+                continue;
+        }
+        if (chk_warning(c->cm->cx, x && x->loc.file ? x->loc : in->loc,
+                        "the input `%s` of synchronizer `%s` comes from combinational logic", ps->path, in->name))
+            diag_help("register the value in its source domain first: a glitch in front of a synchronizer can "
+                      "be captured");
+    }
+}
+
 static void cdc_instance_crossing(CdcCtx *c, uint32_t ii, CdcLocalVec *out)
 {
     const IrInstance *in = &c->m->insts[ii];
@@ -409,9 +451,14 @@ void chk_cdc(ChkMod *cm)
         cdc_resets(&c);
     }
     /* local crossings: primitive instances and unsafe_cross */
-    for (i = 0; i < m->ninsts; i++)
-        if (m->insts[i].module && m->insts[i].module->is_cdc)
-            cdc_instance_crossing(&c, i, &locals);
+    for (i = 0; i < m->ninsts; i++) {
+        const IrModule *ch = m->insts[i].module;
+        if (!ch || !ch->is_cdc)
+            continue;
+        cdc_instance_crossing(&c, i, &locals);
+        if (!m->is_cdc && (ch->cdc_kind == IRC_SYNC2 || ch->cdc_kind == IRC_SYNC3 || ch->cdc_kind == IRC_PULSE))
+            cdc_sync_input(&c, &m->insts[i]);
+    }
     for (i = 0; i < m->nsigs; i++) {
         CdcLocal l;
         uint64_t rn;
@@ -521,26 +568,21 @@ void check_print_cdc_report(const IrDesign *d, FILE *out)
 void chk_crossings(ChkCtx *cx)
 {
     IrDesign *d = cx->d;
-    Map inst = {0};
-    uint32_t i, k;
+    uint32_t i;
     StrBuf path = {0};
     if (map_len(&cx->cdc_mods)) {
         /* roots: modules nobody instantiates */
-        for (i = 0; i < d->nmodules; i++)
-            for (k = 0; d->modules[i] && k < d->modules[i]->ninsts; k++)
-                map_put(&inst, MAP_PTR(d->modules[i]->insts[k].module), 1);
         for (i = 0; i < d->nmodules; i++) {
             const IrModule *m = d->modules[i];
-            if (!m || map_has(&inst, MAP_PTR(m)))
+            if (!m || map_has(&cx->instantiated, MAP_PTR(m)))
                 continue;
             sb_reset(&path);
             sb_puts(&path, m->display ? m->display : m->name);
             cdc_walk(cx, m, &path, 0);
         }
     }
-    map_free(&inst);
     sb_free(&path);
-    if (!cx->opt->no_report && (d->ncrossings || cx->opt->cdc_report)) {
+    if (cx->opt->cdc_report >= 2 || (cx->opt->cdc_report == 1 && d->ncrossings)) {
         diag_flush();
         check_print_cdc_report(d, cx->opt->report_out);
     }

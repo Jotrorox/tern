@@ -5,3 +5,4 @@ cdc_errors.tern:59:54: error: pix-domain signal `p` used in sys-domain logic; cr
 cdc_errors.tern:76:12: error: sys-domain signal `en` used in pix-domain logic; cross with std::cdc
 cdc_errors.tern:99:5: error: pix-domain signal `x.b` used in sys-domain logic; cross with std::cdc
 cdc_errors.tern:110:5: warning: reset `rs.rst_out` of domain `pix` comes from domain `sys_clk`
+cdc_errors.tern:127:54: warning: the input `d` of synchronizer `s` comes from combinational logic

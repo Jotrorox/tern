@@ -272,7 +272,7 @@ static void chkb_read(ChkBuild *b, uint32_t sig, uint32_t lo, uint32_t hi, Span 
 
 /* the signal and bit offset an expression made of slices of one signal
    denotes; IR_NONE if it is something else */
-static uint32_t chk_expr_base(const IrExpr *e, uint32_t *lo)
+uint32_t chk_expr_base(const IrExpr *e, uint32_t *lo)
 {
     uint32_t off = 0;
     while (e && e->kind == IRE_SLICE && e->nargs == 1) {
@@ -836,6 +836,11 @@ int check_design(IrDesign *d, const CheckOptions *opt)
     cx.d = d;
     cx.opt = opt ? opt : &defaults;
     for (i = 0; i < d->nmodules; i++) {
+        uint32_t k;
+        for (k = 0; d->modules[i] && k < d->modules[i]->ninsts; k++)
+            map_put(&cx.instantiated, MAP_PTR(d->modules[i]->insts[k].module), 1);
+    }
+    for (i = 0; i < d->nmodules; i++) {
         IrModule *m = d->modules[i];
         ChkMod cm;
         if (!m)
@@ -865,10 +870,15 @@ int check_design(IrDesign *d, const CheckOptions *opt)
         vec_free(cm.reads);
         vec_free(cm.ranges);
     }
+    if (cx.opt->unused)
+        chk_unused_report(&cx);
     chk_crossings(&cx);
     map_free(&cx.summaries);
     map_free(&cx.seen);
     map_free(&cx.cdc_mods);
+    map_free(&cx.instantiated);
+    map_free(&cx.unused_idx);
+    vec_free(cx.unused);
     arena_release(&cx.arena);
     return cx.errors;
 }

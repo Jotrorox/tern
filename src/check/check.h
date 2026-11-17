@@ -45,9 +45,10 @@
 typedef struct CheckOptions {
     int strict;        /* --strict */
     int unused;        /* --unused: report unused signals and outputs */
-    int cdc_report;    /* print the CDC report even when there are no crossings */
-    int no_report;     /* never print the CDC report (crossings are still
-                          recorded in IrDesign.crossings) */
+    int cdc_report;    /* print the CDC report: 0 never (crossings are still
+                          recorded in IrDesign.crossings), 1 when the design
+                          has crossings (`tern check`), 2 always
+                          (`tern check --cdc-report`) */
     FILE *report_out;  /* where the CDC report goes (NULL: stdout) */
     /* --unused warnings are only reported for signals declared in files for
        which this returns nonzero (NULL: every file), so library modules
@@ -59,10 +60,9 @@ typedef struct CheckOptions {
 /* Runs every check over all modules of the design and records the
  * clock-domain crossings in d->crossings (one entry per instance of a
  * std::cdc primitive and per `unsafe_cross`, along every instance path
- * from the roots of the design). `tern check` prints them as the CDC
- * report (spec §8.3) when there is at least one crossing or when
- * opt->cdc_report is set. Returns the number of errors reported. opt may
- * be NULL (defaults). */
+ * from the roots of the design) and prints them as the CDC report (spec
+ * §8.3) as opt->cdc_report says. Returns the number of errors reported.
+ * opt may be NULL (defaults: no --unused, no report). */
 int check_design(IrDesign *d, const CheckOptions *opt);
 
 /* Prints the CDC report of d->crossings (as check_design does). */

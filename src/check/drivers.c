@@ -78,7 +78,15 @@ static void drv_undriven(ChkMod *cm, uint32_t sig, uint32_t lo, uint32_t hi, int
         return;
     switch (s->kind) {
     case IRS_OUT: diag_help("assign it at module level (`%s = ...`) or in a `comb` block", s->path); break;
-    case IRS_VAR: diag_help("assign it in a `comb` block, or give it a default (`var %s: T = ...`)", s->path); break;
+    case IRS_VAR: {
+        StrBuf ty = {0};
+        if (s->type)
+            ir_type_print(s->type, &ty);
+        diag_help("assign it in a `comb` block, or give it a default (`var %s: %s = ...`)", s->path,
+                  ty.len ? sb_cstr(&ty) : "T");
+        sb_free(&ty);
+        break;
+    }
     case IRS_REG: diag_help("assign it in an `on` block, or use a `const` if it never changes"); break;
     default: break;
     }
@@ -100,6 +108,21 @@ void chk_drivers(ChkMod *cm)
         }
         if (sg->kind == IRS_MEM)
             continue;
+        /* the block kind must match the signal kind (the elaborator rejects
+           this in source; designs read from IR JSON are checked here) */
+        for (i = f; i < e; i++) {
+            const ChkNode *n = &cm->nodes.data[cm->ranges.data[i].node];
+            if (sg->kind == IRS_REG && n->kind != CHK_N_CLOCKED) {
+                chk_error(cm->cx, cm->ranges.data[i].loc, "register `%s` can only be assigned in an `on` block",
+                          sg->path);
+                break;
+            }
+            if (sg->kind != IRS_REG && n->kind == CHK_N_CLOCKED) {
+                chk_error(cm->cx, cm->ranges.data[i].loc,
+                          "`%s` is not a register: assign it in a `comb` block or at module level", sg->path);
+                break;
+            }
+        }
         /* overlapping ranges of different drivers */
         if (f < e) {
             cov = f;

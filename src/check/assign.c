@@ -478,8 +478,14 @@ static void asg_process(ChkMod *cm, uint32_t pi, uint32_t nfirst, uint32_t nend)
                                "%s may be unassigned: an assignment with a dynamic index does not assign every element",
                                chk_bits_name(cx, cm->m, t->sig, clo, chi));
             if (ok) {
-                if (s->kind == IRS_VAR)
-                    diag_help("assign it on every path, or give it a default: `var %s: T = ...`", s->path);
+                if (s->kind == IRS_VAR) {
+                    StrBuf ty = {0};
+                    if (s->type)
+                        ir_type_print(s->type, &ty);
+                    diag_help("assign it on every path, or give it a default: `var %s: %s = ...`", s->path,
+                              ty.len ? sb_cstr(&ty) : "T");
+                    sb_free(&ty);
+                }
                 else
                     diag_help("assign it on every path (add the missing `else` or match arm), or assign a default at "
                               "the start of the block");

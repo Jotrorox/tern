@@ -77,6 +77,15 @@ typedef struct ChkSummary {
 
 typedef struct ChkCtx ChkCtx;
 
+/* unused.c: one --unused candidate, aggregated over every elaboration of
+   the declaration (reported only when unread in all of them) */
+typedef struct ChkUnused {
+    Span loc;
+    const char *msg;      /* arena */
+    const char *help;     /* arena or NULL */
+    uint32_t seen, unread;
+} ChkUnused;
+
 typedef struct ChkMod {
     ChkCtx *cx;
     IrModule *m;
@@ -104,6 +113,9 @@ struct ChkCtx {
     Map summaries;            /* IrModule* -> ChkSummary* */
     Map seen;                 /* reported diagnostics (hash of message + span) */
     Map cdc_mods;             /* IrModule* -> ChkCdcMod* (cdc.c: local crossings) */
+    Map instantiated;         /* IrModule* -> 1 when some module instantiates it */
+    Map unused_idx;           /* unused.c: candidate key -> index + 1 into unused */
+    VEC(struct ChkUnused) unused;
     int errors;
 };
 
@@ -127,6 +139,9 @@ const char *chk_span_text(ChkCtx *cx, Span s, size_t max);
 /* the width covered by the array that starts at bit lo of type t with
    elements of `ew` bits (an lvalue with a dynamic index) */
 uint32_t chk_array_extent(const IrType *t, uint32_t lo, uint32_t ew);
+/* the signal an expression made only of slices of one signal reads (and
+   the bit offset), IR_NONE otherwise */
+uint32_t chk_expr_base(const IrExpr *e, uint32_t *lo);
 /* first attribute named `name` (interned or not) */
 const IrAttr *chk_sig_attr(const IrSignal *s, const char *name);
 const char *chk_kind_word(IrSigKind k);   /* "input", "output", "wire", "var", "register", "memory" */
@@ -145,6 +160,7 @@ void chk_loops(ChkMod *cm);
 void chk_summary(ChkMod *cm);              /* records the module's port summary (check.c) */
 void chk_cdc(ChkMod *cm);
 void chk_unused(ChkMod *cm);
+void chk_unused_report(ChkCtx *cx);        /* after all modules */
 void chk_crossings(ChkCtx *cx);            /* fills d->crossings, prints the report */
 
 #endif /* TERN_CHECK_IMPL_H */

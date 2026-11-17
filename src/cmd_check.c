@@ -127,6 +127,7 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
     Arena ira = {0};
     memset(&o, 0, sizeof o);
     memset(&co, 0, sizeof co);
+    co.cdc_report = 1; /* the CDC report whenever the design has crossings */
     args_init(&ap, argc, argv);
     while (args_next(&ap)) {
         if (args_flag(&ap, "help|h")) {
@@ -136,7 +137,7 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
         } else if (args_flag(&ap, "unused"))
             co.unused = 1;
         else if (!ir_mode && args_flag(&ap, "cdc-report"))
-            co.cdc_report = 1;
+            co.cdc_report = 2;
         else if (args_flag(&ap, "strict"))
             co.strict = 1;
         else if (args_flag(&ap, "verbose|v"))

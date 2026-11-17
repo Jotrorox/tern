@@ -15,8 +15,62 @@
  * property reads any of its bits. Exempt: names with a `_`-prefixed
  * segment (`_spare`, an instance `_u`), #[test_port] and #[keep] signals,
  * unsafe_cross wires, output ports (read by the parent), and signals
- * declared outside the user's files (CheckOptions.is_user_file). */
+ * declared outside the user's files (CheckOptions.is_user_file).
+ *
+ * Generic modules depend on their arguments (an elaboration-time `if` may
+ * leave a `let` unread in one configuration), so a declaration is reported
+ * only when it is unread in every elaboration of its module, and modules
+ * elaborated only as roots with default generic arguments (`tern check` of
+ * a library) are not reported at all. */
 #include "check_impl.h"
+
+/* records one elaboration of a candidate; msg (printf-formatted) is only
+   used when unread */
+static void unu_candidate(ChkCtx *cx, uint64_t key, Span loc, int unread, const char *help, const char *fmt, ...)
+    TERN_PRINTF(6, 7);
+
+static void unu_candidate(ChkCtx *cx, uint64_t key, Span loc, int unread, const char *help, const char *fmt, ...)
+{
+    uint64_t v;
+    ChkUnused *u;
+    if (!map_get(&cx->unused_idx, key, &v)) {
+        ChkUnused n;
+        memset(&n, 0, sizeof n);
+        n.loc = loc;
+        vec_push(cx->unused, n);
+        v = cx->unused.len;
+        map_put(&cx->unused_idx, key, v);
+    }
+    u = &cx->unused.data[v - 1];
+    u->seen++;
+    if (!unread)
+        return;
+    u->unread++;
+    if (!u->msg) {
+        char buf[512];
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(buf, sizeof buf, fmt, ap);
+        va_end(ap);
+        u->msg = arena_strdup(&cx->arena, buf);
+        u->help = help ? arena_strdup(&cx->arena, help) : NULL;
+    }
+}
+
+static uint64_t unu_key(Span loc, const char *what)
+{
+    return hash_combine(hash_combine(hash_u64(loc.file), hash_u64(loc.off)), (uint64_t)(uintptr_t)what) | 1;
+}
+
+void chk_unused_report(ChkCtx *cx)
+{
+    size_t i;
+    for (i = 0; i < cx->unused.len; i++) {
+        const ChkUnused *u = &cx->unused.data[i];
+        if (u->msg && u->unread == u->seen && chk_warning(cx, u->loc, "%s", u->msg) && u->help)
+            diag_help("%s", u->help);
+    }
+}
 
 static int unu_exempt_name(const char *p)
 {
@@ -54,7 +108,12 @@ void chk_unused(ChkMod *cm)
     uint8_t *rd;
     uint32_t i, r;
     Map port_read = {0};   /* hash(instance + 1, interned port) -> 1 if any leaf is read */
+    Map port_done = {0};
     if (m->is_extern)
+        return;
+    /* a library module elaborated on its own with default generics */
+    if (!map_has(&cx->instantiated, MAP_PTR(m)) && !m->is_top &&
+        (m->nparams || (m->display && m->tern_name && strcmp(m->display, m->tern_name) != 0)))
         return;
     rd = (uint8_t *)xcalloc(m->nsigs + 1, 1);
     for (i = 0; i < cm->nodes.len; i++) {
@@ -82,7 +141,8 @@ void chk_unused(ChkMod *cm)
     }
     for (i = 0; i < m->nsigs; i++) {
         const IrSignal *s = &m->sigs[i];
-        if (rd[i] || s->kind == IRS_OUT || s->test_port || unu_exempt_name(s->path) || unu_exempt_name(s->name) ||
+        int un = !rd[i];
+        if (s->kind == IRS_OUT || s->test_port || unu_exempt_name(s->path) || unu_exempt_name(s->name) ||
             chk_sig_attr(s, "keep") || chk_sig_attr(s, "unsafe_cross") || cm->inst_wire_inst[i])
             continue;
         if (o->is_user_file && !o->is_user_file(s->loc.file, o->user))
@@ -90,20 +150,29 @@ void chk_unused(ChkMod *cm)
         switch (s->kind) {
         case IRS_IN: {
             const char *port = unu_port_of(s->path, 0);
-            uint64_t key = hash_combine(hash_u64(0), (uint64_t)(uintptr_t)port);
-            if (map_has(&port_read, key))
+            uint64_t key = (uint64_t)(uintptr_t)port;
+            if (map_has(&port_done, key))
                 break;
-            map_put(&port_read, key, 2); /* reported once per port */
+            map_put(&port_done, key, 1);
+            un = !map_has(&port_read, hash_combine(hash_u64(0), key));
             if (s->type && s->type->kind == IRT_CLOCK)
-                chk_warning(cx, s->loc, "clock input `%s` is never used", port);
+                unu_candidate(cx, unu_key(s->loc, port), s->loc, un, NULL, "clock input `%s` is never used", port);
             else
-                chk_warning(cx, s->loc, "input `%s` is never read", port);
+                unu_candidate(cx, unu_key(s->loc, port), s->loc, un, NULL, "input `%s` is never read", port);
             break;
         }
-        case IRS_WIRE: chk_warning(cx, s->loc, "`%s` is never read", s->path); break;
-        case IRS_VAR: chk_warning(cx, s->loc, "var `%s` is assigned but never read", s->path); break;
-        case IRS_REG: chk_warning(cx, s->loc, "register `%s` is assigned but never read", s->path); break;
-        case IRS_MEM: chk_warning(cx, s->loc, "memory `%s` is written but never read", s->path); break;
+        case IRS_WIRE: unu_candidate(cx, unu_key(s->loc, s->path), s->loc, un, NULL, "`%s` is never read", s->path); break;
+        case IRS_VAR:
+            unu_candidate(cx, unu_key(s->loc, s->path), s->loc, un, NULL, "var `%s` is assigned but never read", s->path);
+            break;
+        case IRS_REG:
+            unu_candidate(cx, unu_key(s->loc, s->path), s->loc, un, NULL, "register `%s` is assigned but never read",
+                          s->path);
+            break;
+        case IRS_MEM:
+            unu_candidate(cx, unu_key(s->loc, s->path), s->loc, un, NULL, "memory `%s` is written but never read",
+                          s->path);
+            break;
         default: break;
         }
     }
@@ -133,12 +202,17 @@ void chk_unused(ChkMod *cm)
             sb_printf(&sb, "%s`%s`", n ? ", " : "", port);
             n++;
         }
-        if (n && chk_warning(cx, in->loc, "%s %s of instance `%s` %s never read", n == 1 ? "output" : "outputs",
-                             sb_cstr(&sb), in->name, n == 1 ? "is" : "are"))
-            diag_help("name the instance `_%s` if its unused outputs are intended", in->name);
+        {
+            char help[160];
+            snprintf(help, sizeof help, "name the instance `_%s` if its unused outputs are intended", in->name);
+            unu_candidate(cx, unu_key(in->loc, intern_cstr(sb_cstr(&sb))), in->loc, n != 0, help,
+                          "%s %s of instance `%s` %s never read", n == 1 ? "output" : "outputs", sb_cstr(&sb), in->name,
+                          n == 1 ? "is" : "are");
+        }
         sb_free(&sb);
         map_free(&seen);
     }
     map_free(&port_read);
+    map_free(&port_done);
     free(rd);
 }
