@@ -101,9 +101,10 @@ module Top {
 ```
 
 * Every `in` port must be connected. The exceptions are `clock` and `reset`
-  ports that match the parent's default domain, which are inherited. An
-  unconnected input is an error. An unused output is fine, and
-  `tern check --unused` reports it.
+  ports that match the parent's default domain, which are inherited, and
+  data inputs that declare a default (`in clear: bool = false`), which take
+  it when left open. An unconnected input is an error. An unused output is
+  fine, and `tern check --unused` reports it.
 * Generic arguments can be positional or named (`Fifo<u8, Depth: 64>`), with
   types and values in one list. Generic arguments can also be inferred from
   the connected inputs.
@@ -153,6 +154,52 @@ top.tern:2:7: note: constraint declared here (with Depth = 6)
 
 With `Depth: 8`, the next error would be
 ``instance `x` of `Fifo<8>` has unconnected input `flush` ``.
+
+### Enum generics with a payload
+
+A generic of enum type selects a variant (`Policy: ArbPolicy = .Fixed`). A
+variant may also carry compile-time data, declared like generic
+parameters and written like generic arguments, so a policy can come with
+its parameters:
+
+```tern
+package policy
+
+pub enum Mode<N: uint> {
+    Plain,
+    Scaled<Gains: [uint; N]>,
+}
+
+const fn gain<N: uint>(m: Mode<N>, i: uint) -> uint {
+    match m {
+        .Scaled { Gains } => Gains[i],
+        _ => 1,
+    }
+}
+
+module Scale<N: uint, M: Mode<N> = .Plain> {
+    in x: [u8; N]
+    out y: [u16; N]
+    for i in 0..N {
+        y[i] = x[i] * gain<N>(M, i)
+    }
+}
+
+#[top]
+module Top {
+    in a: [u8; 3]
+    out b: [u16; 3]
+    out c: [u16; 3]
+    b = Scale<3>(x: a).y
+    c = Scale<3, .Scaled<[1, 2, 4]>>(x: a).y   // or .Scaled<Gains: [1, 2, 4]>
+}
+```
+
+The payload takes part in comparisons (`M == .Scaled<[1, 2, 4]>`), in
+`match` and in the module's emitted name (`Scale_3_Scaled_1_2_4`). A
+payload of widthless `uint`s has no bit representation, so such an enum is
+a compile-time value only. std's `Arbiter<T, N, .Weighted<[3, 1, 2]>>` is
+built this way.
 
 ## Elaboration-time code
 
@@ -319,8 +366,16 @@ module Board {
 }
 ```
 
+`clock_hz(clk)` reads that frequency at elaboration. Below the top, a
+module learns its clock's frequency through a generic declared
+`ClkHz: uint = clock_hz(clk)`: the default takes the frequency of whatever
+clock the instantiation connects, and inside the module `clk`'s frequency
+is then `ClkHz` (chapter 8 shows std's `Strobe<Hz>` and `Heartbeat` using
+it).
+
 Without a `#[top]`, `tern check` and `tern build` elaborate every module
-whose generics all have defaults, plus the modules the tests simulate.
+whose generics all have defaults (except defaults read from the clock),
+plus the modules the tests simulate.
 
 ## Extern modules
 
