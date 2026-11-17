@@ -114,6 +114,13 @@ IrDesign *driver_elaborate_module(Driver *dr, Item *item, FileUnit *file, const 
 /* By name (NULL: the --top / target top, else the first #[top], else the
  * first default root). */
 IrDesign *driver_elaborate_top(Driver *dr, const char *name, Arena *ir_arena);
+/* A module given on the command line, with generic arguments
+ * (`Fifo<u8, 4>`, `std::fifo::Fifo<u8, 4>`) or without (then as
+ * driver_elaborate_top). `tern prove` and `tern sim` share it. */
+IrDesign *driver_elaborate_spec(Driver *dr, const char *spec, Arena *ir_arena);
+/* The file in whose scope such a spec resolves: the one declaring its base
+ * name, else the first user file. */
+FileUnit *driver_module_scope(Driver *dr, const char *spec);
 /* `tern check`: elaborates every root (given top, #[top]s or default roots,
  * plus the modules that the user's tests instantiate with `sim`) into one
  * design. Returns the design (never NULL). */

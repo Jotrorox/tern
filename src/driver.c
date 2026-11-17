@@ -615,6 +615,68 @@ IrDesign *driver_elaborate_top(Driver *dr, const char *name, Arena *ir_arena)
     return driver_elaborate_module(dr, it, f, NULL, ir_arena);
 }
 
+FileUnit *driver_module_scope(Driver *dr, const char *spec)
+{
+    size_t n = 0, i;
+    char *base;
+    FileUnit *scope = NULL;
+    while (spec[n] && spec[n] != '<' && spec[n] != ' ' && spec[n] != '(')
+        n++;
+    base = xstrndup(spec, n);
+    driver_find_item(dr, base, &scope);
+    free(base);
+    for (i = 0; i < dr->S->files.len && !scope; i++)
+        if (dr->S->files.data[i]->is_user)
+            scope = dr->S->files.data[i];
+    return scope;
+}
+
+IrDesign *driver_elaborate_spec(Driver *dr, const char *spec, Arena *ir_arena)
+{
+    Arena *a;
+    Expr *e;
+    FileUnit *scope;
+    IrDesign *d;
+    Elab *el;
+    Env *env;
+    ValModule *vm;
+    ModInfo *mi = NULL;
+    int errs = diag_error_count();
+    if (!strchr(spec, '<'))
+        return driver_elaborate_top(dr, spec, ir_arena);
+    a = (Arena *)xcalloc(1, sizeof(Arena));
+    vec_push(dr->arenas, a);
+    {
+        /* parsed as a call so that `<` opens generic arguments */
+        char *text = arena_printf(a, "%s()", spec);
+        e = parse_expr_string(a, text, strlen(text), "<command line>", NULL);
+    }
+    if (diag_error_count() != errs)
+        return NULL;
+    scope = driver_module_scope(dr, spec);
+    if (!scope) {
+        diag_error(span_none(), "cannot find module `%s`", spec);
+        return NULL;
+    }
+    d = ir_design_new(ir_arena);
+    el = driver_elab_new(dr, d);
+    env = elab_env_new(el, NULL, scope);
+    vm = elab_eval_module(el, e, env);
+    if (vm) {
+        diag_push_path(vm->display);
+        mi = elab_module(el, vm, e->span);
+        diag_pop_path();
+    }
+    if (mi && mi->ir)
+        ir_design_set_top(d, mi->ir);
+    drv_add_regmaps(dr, el);
+    if (diag_error_count() == errs)
+        elab_ir_verify(d);
+    elab_env_free(env);
+    elab_free(el);
+    return mi && mi->ir && diag_error_count() == errs ? d : NULL;
+}
+
 /* `sim M<..>(..)` expressions in test bodies */
 typedef VEC(Expr *) DrvExprVec;
 static void drv_find_sims_expr(Expr *e, DrvExprVec *out);

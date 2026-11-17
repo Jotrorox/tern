@@ -802,6 +802,81 @@ static void tb_compile_goldens(void)
     os_dir_list_free(&list);
 }
 
+/* --------------------------------------- the tern binary: build, prove */
+
+static const char *tb_cli_src =
+    "use std::fifo::Fifo\n"
+    "module A {\n    in a: u8\n    out y: u8\n    y = a\n}\n"
+    "module B {\n    in a: u8\n    out y: u8\n    y = a\n}\n";
+
+static int tb_exists(const char *dir, const char *name)
+{
+    char *p = os_path_join(dir, name);
+    int r = os_is_file(p);
+    free(p);
+    return r;
+}
+
+static void tb_cli(void)
+{
+    char *cwd = os_getcwd(), *tern, *dir = xstrdup("build/backend_work/cli"), *log = NULL, *p;
+    char *argv[10];
+    int rc;
+    tern = os_path_join(cwd, "tern");
+    if (!os_is_file(tern)) {
+        tb_skips++;
+        free(cwd);
+        free(tern);
+        free(dir);
+        return;
+    }
+    os_mkdir_p(dir);
+    p = os_path_join(dir, "two.tern");
+    os_write_file(p, tb_cli_src, strlen(tb_cli_src));
+    free(p);
+    /* tern build removes the files the previous build generated, and only those */
+    argv[0] = tern;
+    argv[1] = (char *)"build";
+    argv[2] = (char *)"-q";
+    argv[3] = (char *)"-o";
+    argv[4] = (char *)"out";
+    argv[5] = (char *)"--top";
+    argv[6] = (char *)"A";
+    argv[7] = (char *)"two.tern";
+    argv[8] = NULL;
+    rc = tb_run(argv, dir, &log);
+    TB_CHECK(rc == 0);
+    free(log);
+    p = os_path_join(dir, "out/mine.txt");
+    os_write_file(p, "keep\n", 5);
+    free(p);
+    p = os_path_join(dir, "out");
+    TB_CHECK(tb_exists(p, "A.sv") && tb_exists(p, ".tern-build"));
+    argv[6] = (char *)"B";
+    rc = tb_run(argv, dir, &log);
+    TB_CHECK(rc == 0);
+    free(log);
+    TB_CHECK(!tb_exists(p, "A.sv") && !tb_exists(p, "A.f"));
+    TB_CHECK(tb_exists(p, "B.sv") && tb_exists(p, "B.f"));
+    TB_CHECK(tb_exists(p, "mine.txt"));
+    free(p);
+    /* tern prove takes a module with generic arguments, as tern sim does */
+    argv[1] = (char *)"prove";
+    argv[2] = (char *)"--no-run";
+    argv[3] = (char *)"Fifo<u8, 4>";
+    argv[4] = (char *)"two.tern";
+    argv[5] = NULL;
+    rc = tb_run(argv, dir, &log);
+    if (rc != 0)
+        fprintf(stderr, "tern prove 'Fifo<u8, 4>':\n%s\n", log);
+    TB_CHECK(rc == 0);
+    free(log);
+    TB_CHECK(tb_exists(dir, "build/formal/Fifo_u8_4_3/Fifo_u8_4_3.sby"));
+    free(cwd);
+    free(tern);
+    free(dir);
+}
+
 int main(void)
 {
     tb_iverilog = os_find_program("iverilog");
@@ -815,6 +890,7 @@ int main(void)
     tb_synth_scripts();
     tb_synth_reports();
     tb_compile_goldens();
+    tb_cli();
     arena_release(&tb_arena);
     printf("test_backend: %d checks, %d failed, %d skipped%s\n", tb_checks, tb_fails, tb_skips,
            tb_iverilog ? "" : " (no iverilog)");

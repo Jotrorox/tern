@@ -321,8 +321,75 @@ static const char *bk_kind_label(const SvOutput *out, const SvFile *f)
     return "other";
 }
 
+/* The manifest `.tern-build` in the output directory lists the files the
+ * last build wrote (one relative name per line). A new build removes the
+ * files of the previous one that it no longer generates, and nothing else. */
+#define BK_MANIFEST ".tern-build"
+
+static int bk_safe_name(const char *n)
+{
+    const char *p = n;
+    if (!*n || *n == '/' || *n == '\\' || strchr(n, ':'))
+        return 0;
+    while (*p) {
+        const char *e = p;
+        while (*e && *e != '/' && *e != '\\')
+            e++;
+        if ((e - p == 2 && p[0] == '.' && p[1] == '.') || (e - p == 1 && p[0] == '.') || e == p)
+            return 0;
+        p = *e ? e + 1 : e;
+    }
+    return 1;
+}
+
+static void bk_prune_stale(BkBuild *b, const StrBuf *written)
+{
+    char *mpath = os_path_join(b->out_dir, BK_MANIFEST);
+    char *old = NULL;
+    size_t len = 0;
+    if (os_read_file(mpath, &old, &len) == 0 && old) {
+        char *p = old;
+        while (*p) {
+            char *e = p;
+            char *full;
+            int keep = 0;
+            const char *w = written->data ? written->data : "";
+            size_t n;
+            while (*e && *e != '\n' && *e != '\r')
+                e++;
+            n = (size_t)(e - p);
+            if (*e)
+                *e++ = 0;
+            while (*e == '\n' || *e == '\r')
+                e++;
+            /* still generated? */
+            while (*w) {
+                const char *we = strchr(w, '\n');
+                size_t wn = we ? (size_t)(we - w) : strlen(w);
+                if (wn == n && memcmp(w, p, n) == 0) {
+                    keep = 1;
+                    break;
+                }
+                w += wn + (we ? 1 : 0);
+            }
+            if (!keep && n && bk_safe_name(p)) {
+                full = os_path_join(b->out_dir, p);
+                if (os_is_file(full))
+                    os_remove(full);
+                free(full);
+            }
+            p = e;
+        }
+    }
+    free(old);
+    if (os_write_file_if_changed(mpath, written->data ? written->data : "", written->len) < 0)
+        diag_warning(span_none(), "cannot write `%s`", mpath);
+    free(mpath);
+}
+
 int bk_build_write(BkBuild *b, int summary)
 {
+    StrBuf written = {0};
     static const char *const groups[] = {"package", "modules", "extern", "memory init", "constraints", "regmaps"};
     size_t i, g, changed = 0, nfiles = b->out.nfiles;
     StrBuf flname = {0};
@@ -337,9 +404,11 @@ int bk_build_write(BkBuild *b, int summary)
         if (r < 0) {
             diag_error(span_none(), "cannot write `%s`", p);
             free(p);
+            sb_free(&written);
             return -1;
         }
         changed += r == 1;
+        sb_printf(&written, "%s\n", f->name);
         free(p);
     }
     if (b->ndesigns) {
@@ -360,12 +429,16 @@ int bk_build_write(BkBuild *b, int summary)
         if (r < 0) {
             diag_error(span_none(), "cannot write `%s`", p);
             free(p);
+            sb_free(&written);
             return -1;
         }
         free(p);
         changed += r == 1;
+        sb_printf(&written, "%s\n", flname.data);
         nfiles++;
     }
+    bk_prune_stale(b, &written);
+    sb_free(&written);
     if (!summary) {
         sb_free(&flname);
         return 0;
@@ -487,3 +560,5 @@ int cmd_build(int argc, char **argv)
     vec_free(paths);
     return rc;
 }
+
+#undef BK_MANIFEST

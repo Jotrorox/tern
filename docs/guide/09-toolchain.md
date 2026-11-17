@@ -120,6 +120,9 @@ writes to `build/`.
 * Extern modules' SystemVerilog files, copied next to the output.
 
 Only changed files are rewritten, so downstream tools see stable timestamps.
+`.tern-build` in the output directory records what the build wrote; the
+next build deletes the files from that list it no longer generates (a
+renamed module's old `.sv`), and leaves every other file alone.
 `tern build --lint` runs `verilator --lint-only` on the result when Verilator
 is installed. [emitted-sv.md](../emitted-sv.md) describes the output in
 detail.

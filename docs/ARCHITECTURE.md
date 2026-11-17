@@ -581,13 +581,18 @@ development `std/` directory becomes `std/...`), so builds are
 reproducible across checkouts. Extern module sources are found relative to
 the project root (or the declaring file) and copied into the output.
 `bk_build_write` writes `build/<target>/` (or `build/` without a project;
-`-o` overrides) with `os_write_file_if_changed` and prints a summary;
+`-o` overrides) with `os_write_file_if_changed` and prints a summary; the
+manifest `.tern-build` in the output directory lists what it wrote, and the
+next build removes the files of that list it no longer generates (never
+anything else: other files in the directory stay);
 `--stdout` prints the `// ---- file: X ----` concatenation (the `.sv`
 golden fixtures in `tests/fixtures/build/` use it); `--lint` runs
 `verilator --lint-only` (`verilator.c`, the waivers of
 `tests/lint_emitted.sh`).
 
-**`tern prove`** (`formal.c`, `prove.c`). `fv_generate` restricts the
+**`tern prove`** (`formal.c`, `prove.c`). A module with generic arguments
+(`tern prove 'Fifo<u8, 4>'`) is elaborated by `driver_elaborate_spec`, the
+lookup `tern sim` uses too (`driver_module_scope`). `fv_generate` restricts the
 design to the module and its descendants and emits it as Verilog-2005
 (what open-source Yosys reads reliably), then appends a checker block under
 `` `ifdef FORMAL `` before each module's `endmodule`; the checks refer to

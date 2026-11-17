@@ -311,23 +311,8 @@ int cmd_sim(int argc, char **argv)
             goto done;
         }
     }
-    if (!scope) {
-        /* the file declaring the module (its generic arguments resolve there) */
-        size_t n = 0;
-        char *base;
-        while (top[n] && top[n] != '<' && top[n] != ' ')
-            n++;
-        base = xstrndup(top, n);
-        driver_find_item(c.dr, base, &scope);
-        free(base);
-        if (!scope) {
-            Sema *S = driver_sema(c.dr);
-            size_t i;
-            for (i = 0; i < S->files.len && !scope; i++)
-                if (S->files.data[i]->is_user)
-                    scope = S->files.data[i];
-        }
-    }
+    if (!scope)
+        scope = driver_module_scope(c.dr, top); /* its generic arguments resolve there */
     to.seed = testrun_test_seed(seed, "tern sim");
     c.ts = testrun_session_new(c.dr, scope, &to, &c.report);
     c.interactive = !script_text && os_isatty(0);
