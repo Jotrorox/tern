@@ -1,0 +1,12 @@
+// args: --diag-format=human
+// `=` where a comparison was meant
+module M {
+    in a: u8
+    in b: u8
+    out y: bool
+    var v: bool = false
+    comb {
+        if a = b { v = true }
+    }
+    y = v
+}
