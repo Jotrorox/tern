@@ -1085,6 +1085,8 @@ static void nl_assign(NlComp *c, uint32_t lhs_inst, const IrLvalue *lv, uint32_t
         in->bw = lv->index->width;
         in->p = lv->lo;
         in->mask = nl_mask(lv->width);
+        /* elements of the indexed array: an index past the last one writes nothing */
+        in->c = lv->len ? lv->len : (lv->lo < sw ? (sw - lv->lo) / lv->width : 0);
     }
     c->tmp = saved;
     c->inst = saved_inst;

@@ -1,0 +1,144 @@
+enum Op (2 bits, tag 2, binary) { Nop = 2'h0, Add = 2'h1, Sub = 2'h2, And = 2'h3 }
+struct Flags (2 bits) { carry: bool @1, zero: bool @0 }
+module Alu
+  0: in op: Op
+  1: in a: uint<32>
+  2: in b: uint<32>
+  3: out y: uint<32>
+  4: out carry: bool
+  5: var alu_out: uint<32>
+  6: var flags: Flags
+  assign y = alu_out
+  assign carry = flags.carry
+  comb {
+    flags = 2'h0
+    case op {
+      2'h1 => {
+        alu_out = zext32((zext33(a) + zext33(b)))
+        flags.carry = (zext33(a) + zext33(b))[32]
+      }
+      2'h2 => {
+        alu_out = (a - b)
+      }
+      2'h3 => {
+        alu_out = (a & b)
+      }
+      2'h0 => {
+        alu_out = 32'h0
+      }
+    }
+  }
+end
+module Counter
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in load: bool @0
+  3: in en: bool @0
+  4: in din: uint<8> @0
+  5: in next_data: uint<32> @0
+  6: out count_q: uint<8> @0
+  7: out data_q: uint<32> @0
+  8: reg count: uint<8> @0 = 8'h0
+  9: reg data: uint<32> @0
+  assign count_q = count
+  assign data_q = data
+  on 0 regs(count, data) {
+    if load {
+      count = din
+    } else {
+      if en {
+        count = (count + 8'h1)
+      }
+    }
+    data = next_data
+  }
+end
+module TwoClocks
+  domain 0 "clk_io" clock=clk_io reset=none
+  domain 1 "sys" clock=clk reset=rst
+  0: in clk: clock
+  1: in rst: reset<sync, high>
+  2: in clk_io: clock
+  3: in d: uint<8>
+  4: out q: uint<8>
+  5: out busy: bool
+  6: reg tx_q: uint<8> @0 = 8'h0
+  7: reg in_reset: bool @1 = 1'h1
+  assign q = tx_q
+  assign busy = in_reset
+  on 0 regs(tx_q) {
+    tx_q = d
+  }
+  on 1 regs(in_reset) {
+    in_reset = 1'h0
+  }
+end
+module Resets
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<async, low> @0
+  2: in d: bool @0
+  3: out q: bool @0
+  4: reg r: bool @0 = 1'h0
+  assign q = r
+  on 0 regs(r) {
+    r = d
+  }
+end
+module Signals top
+  domain 0 "sys" clock=clk reset=rst
+  0: in clk: clock
+  1: in rst: reset<sync, high>
+  2: in clk_io: clock
+  3: in rst_n: reset<async, low>
+  4: in op: Op
+  5: in a: uint<32>
+  6: in b: uint<32>
+  7: in load: bool
+  8: in en: bool
+  9: in din: uint<8>
+  10: out y: uint<32>
+  11: out carry: bool
+  12: out count: uint<8>
+  13: out data: uint<32>
+  14: out q: uint<8>
+  15: out busy: bool
+  16: out rq: bool
+  17: wire alu_op (alu.op): Op
+  18: wire alu_a (alu.a): uint<32>
+  19: wire alu_b (alu.b): uint<32>
+  20: wire alu_y (alu.y): uint<32>
+  21: wire alu_carry (alu.carry): bool
+  22: wire ctr_load (ctr.load): bool @0
+  23: wire ctr_en (ctr.en): bool @0
+  24: wire ctr_din (ctr.din): uint<8> @0
+  25: wire ctr_next_data (ctr.next_data): uint<32> @0
+  26: wire ctr_count_q (ctr.count_q): uint<8> @0
+  27: wire ctr_data_q (ctr.data_q): uint<32> @0
+  28: wire two_d (two.d): uint<8> @0
+  29: wire two_q (two.q): uint<8> @0
+  30: wire two_busy (two.busy): bool @0
+  31: wire res_d (res.d): bool @0
+  32: wire res_q (res.q): bool @0
+  assign alu_op = op
+  assign alu_a = a
+  assign alu_b = b
+  assign y = alu_y
+  assign carry = alu_carry
+  assign ctr_load = load
+  assign ctr_en = en
+  assign ctr_din = din
+  assign ctr_next_data = a
+  assign count = ctr_count_q
+  assign data = ctr_data_q
+  assign two_d = din
+  assign q = two_q
+  assign busy = two_busy
+  assign res_d = load
+  assign rq = res_q
+  inst alu: Alu (op = alu_op, a = alu_a, b = alu_b, y -> alu_y, carry -> alu_carry)
+  inst ctr: Counter (clk = clk, rst = rst, load = ctr_load, en = ctr_en, din = ctr_din, next_data = ctr_next_data, count_q -> ctr_count_q, data_q -> ctr_data_q)
+  inst two: TwoClocks (clk = clk, rst = rst, clk_io = clk_io, d = two_d, q -> two_q, busy -> two_busy)
+  inst res: Resets (clk = clk, rst = rst_n, d = res_d, q -> res_q)
+end

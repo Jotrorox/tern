@@ -1,0 +1,30 @@
+struct Pixel (24 bits) { r: uint<8> @16, g: uint<8> @8, b: uint<8> @0 }
+module Sized_Pixel "Sized<Pixel>"
+  0: in d: Pixel
+  1: out q: Pixel
+  2: out w: uint<5>
+  assign q = d
+  assign w = 5'h18
+end
+module TypeLevel top
+  0: in a: uint<8>
+  1: in s: sint<6>
+  2: in p: Pixel
+  3: out wa: uint<8>
+  4: out wide: uint<25>
+  5: out k: uint<5>
+  6: out lim: sint<6>
+  7: out ok: bool
+  8: wire same: uint<8>
+  9: wire sz_d (sz.d): Pixel
+  10: wire sz_q (sz.q): Pixel
+  11: wire sz_w (sz.w): uint<5>
+  assign same = a
+  assign sz_d = p
+  assign wa = same
+  assign wide = zext25(sz_q)
+  assign k = sz_w
+  assign lim = ((sext7(s) >s 7'h1e) ? 6'h20 : s)
+  assign ok = (a < 8'hff)
+  inst sz: Sized_Pixel (d = sz_d, q -> sz_q, w -> sz_w)
+end

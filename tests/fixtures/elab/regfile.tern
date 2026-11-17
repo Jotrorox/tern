@@ -1,0 +1,84 @@
+// std::bus::RegisterFile generated from a regmap (§10.3), on AXI4-Lite, APB
+// and Wishbone: every access kind, fields with gaps, reset values, a
+// register wider than the bus and a FIFO-style stream register. Driven by
+// tests/unit/test_elab.c.
+use std::bus::{RegisterFile, Axi4Lite, Apb, Wishbone}
+
+enum Mode { Off, Slow, Fast, Turbo }
+
+regmap Dev {
+    0x00 ctrl: rw { enable: bool @0, mode: Mode @[2:1], level: uint<4> @[11:8] } = 0x305,
+    0x04 status: ro { busy: bool @0, err: bool @1, count: u8 @[15:8] },
+    0x08 scratch: rw u32 = 0x1234_5678,
+    0x0C irq: w1c uint<4>,
+    0x10 go: rw1s uint<2>,
+    0x14 key: wo u16,
+    0x18 txq: wo u8 -> Stream<u8>,
+    0x20 stamp: rw uint<48>,
+}
+
+/// The register file on AXI4-Lite, with the hardware side as plain ports.
+module RegsAxi {
+    in clk: clock
+    in rst: reset
+    in bus: Axi4Lite<32, 32>
+    in busy: bool
+    in irq_in: uint<4>
+    in go_done: uint<2>
+    out enable: bool
+    out mode: Mode
+    out level: uint<4>
+    out scratch: u32
+    out irq: uint<4>
+    out go: uint<2>
+    out key: u16
+    out txq: Stream<u8>
+    out stamp: uint<48>
+
+    let regs = RegisterFile<Dev>(bus)
+    regs.status = Dev::Status { busy, err: false, count: 0x5A }
+    regs.irq_set = irq_in
+    regs.go_clr = go_done
+    enable = regs.ctrl.enable
+    mode = regs.ctrl.mode
+    level = regs.ctrl.level
+    scratch = regs.scratch
+    irq = regs.irq
+    go = regs.go
+    key = regs.key
+    txq = regs.txq
+    stamp = regs.stamp
+}
+
+regmap Small {
+    0x0 a: rw u8,
+    0x4 b: ro u8,
+    0x8 c: w1c u8,
+}
+
+module RegsApb {
+    in clk: clock
+    in rst: reset
+    in bus: Apb<16, 32>
+    in b: u8
+    in c_set: u8
+    out a: u8
+    out c: u8
+
+    let regs = RegisterFile<Small, Apb<16, 32>>(bus)
+    regs.b = b
+    regs.c_set = c_set
+    a = regs.a
+    c = regs.c
+}
+
+module RegsWb {
+    in clk: clock
+    in rst: reset
+    in bus: Wishbone<32, 32>
+    in b: u8
+    out a: u8
+
+    let regs = RegisterFile<Small, Wishbone<32, 32>>(bus, b, c_set: 0)
+    a = regs.a
+}

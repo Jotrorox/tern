@@ -131,7 +131,7 @@ static Place *elb_declare_tree(Elab *el, const char *name, const char *path, Ty 
 
 int el_is_signal_place(const Place *p)
 {
-    return p && (p->kind == PL_SIG || p->kind == PL_AGG);
+    return p && (p->kind == PL_SIG || p->kind == PL_AGG || p->kind == PL_DYN);
 }
 
 static void elb_mark_driven(Elab *el, uint32_t sig, Span at, const char *how)
@@ -144,6 +144,24 @@ static void elb_mark_driven(Elab *el, uint32_t sig, Span at, const char *how)
         mc->pendings.data[k - 1].assigned = 1;
     }
     sema_info_set_driver(el->S, mc->ir->sigs[sig].loc, intern_cstr(how), at);
+}
+
+/* a module-level name declared twice in one scope */
+static int elb_redeclared(Elab *el, Env *env, const char *nm, Span def)
+{
+    Binding *old = nm ? ce_lookup_local_binding(env, nm) : NULL;
+    if (!old || (old->def.file == def.file && old->def.off == def.off))
+        return 0;
+    if (old->def.file == def.file && old->def.off > def.off) {
+        /* report the later one in source order */
+        el_error(el, old->def, "`%s` is declared twice in this module", nm);
+        el_note(el, def, "first declared here");
+    } else {
+        el_error(el, def, "`%s` is declared twice in this module", nm);
+        if (old->def.file)
+            el_note(el, old->def, "first declared here");
+    }
+    return 1;
 }
 
 /* --------------------------------------------------------- assignment -- */
@@ -195,9 +213,10 @@ static void elb_assign_leaf(Elab *el, Place *p, Value v, Expr *src, Expr *lhs, S
         return;
     }
     rhs = el_to_ir(el, &v, at);
-    if (p->index)
+    if (p->index) {
         lv = ir_lv_index(m, p->sig, p->lo, p->elem_width, p->index);
-    else
+        lv.len = p->len;
+    } else
         lv = ir_lv_slice(m, p->sig, p->lo, p->width);
     lv.field = p->field;
     if (el->blk) {
@@ -241,6 +260,36 @@ void el_assign(Elab *el, Place *p, Value v, Expr *src, Expr *lhs, Span at)
         return;
     if (p->kind == PL_LOCAL) {
         el_assign_local(el, p, v, at);
+        return;
+    }
+    if (p->kind == PL_DYN) {
+        /* write decode: assign the element the index selects */
+        IrStmtList *saved;
+        IrCaseArm *arms;
+        uint32_t k, na = 0, iw = p->index->width;
+        if (!el->blk) {
+            el_error(el, at, "an assignment through a signal index into an array of bundles must be inside a `comb` or `on` block");
+            return;
+        }
+        saved = el->blk->out;
+        arms = (IrCaseArm *)xcalloc(p->n + 1, sizeof(IrCaseArm));
+        for (k = 0; k < p->n; k++) {
+            IrStmtList l = {0};
+            if (iw < 32 && k >= (1u << iw))
+                break;
+            el->blk->out = &l;
+            el_assign(el, p->subs[k], v, src, lhs, at);
+            el->blk->out = saved;
+            arms[na].nvals = 1;
+            arms[na].vals = ANEWN(el->design->arena, IrBits, 1);
+            arms[na].vals[0] = ir_bits_u64(el->design->arena, iw, k);
+            arms[na].body = ir_stmts_finish(el->design->arena, &l);
+            na++;
+        }
+        if (iw >= 32 || na < (1u << iw))
+            na++; /* default: an index past the array writes nothing */
+        ir_stmts_push(el->blk->out, ir_stmt_case(el->design->arena, p->index, na, arms, at));
+        free(arms);
         return;
     }
     if (p->kind == PL_AGG) {
@@ -365,7 +414,7 @@ static void elb_declare_port(Elab *el, Stmt *s, Env *env)
     Place *p;
     Binding *b;
     ModPort mp;
-    if (!name)
+    if (!name || elb_redeclared(el, env, name, s->u.port.name.span))
         return;
     if (t->kind != TY_ERROR && !t->hw && t->kind != TY_BUNDLE && !(t->kind == TY_ARRAY && ty_has_bundle(t))) {
         el_error(el, s->u.port.type->span, "port `%s` has type %s, which is not a hardware type", name, ty_str(t));
@@ -874,6 +923,73 @@ static uint32_t elb_map_child_domain(Elab *el, ModInfo *mi, IrExpr **clk_conn, u
     return fallback;
 }
 
+static int elb_pure_expr(const Expr *e)
+{
+    while (e && (e->kind == EXPR_FIELD || e->kind == EXPR_INDEX || e->kind == EXPR_PAREN))
+        e = e->kind == EXPR_FIELD ? e->u.field.base : e->kind == EXPR_INDEX ? e->u.index.base : e->u.inner;
+    return e && e->kind == EXPR_PATH;
+}
+
+/* Generic arguments of a module instantiated without `<..>`, inferred from
+ * the types of the connected inputs (`Crc32(in: words)` with
+ * `in in: Stream<T>`); generics that cannot be inferred keep their defaults.
+ * Returns the number of inferred arguments. */
+static uint32_t elb_infer_generics(Elab *el, Item *it, FileUnit *file, Expr *call, Env *env, ElabArgs *out)
+{
+    GenericParams *gp = it->kind == ITEM_MODULE ? &it->u.module.generics : &it->u.extern_mod.generics;
+    Stmt **body = it->kind == ITEM_MODULE ? it->u.module.body : it->u.extern_mod.body;
+    uint32_t nbody = it->kind == ITEM_MODULE ? it->u.module.nbody : it->u.extern_mod.nbody;
+    uint32_t i, k, n = 0;
+    Env *genv;
+    memset(out, 0, sizeof *out);
+    if (!gp->n || !call->u.call.nargs)
+        return 0;
+    if (!file)
+        file = sema_file_of_item(el->S, it);
+    genv = elab_env_new(el, NULL, file);
+    for (i = 0; i < gp->n; i++) {
+        Value ph = val_void(el->S);
+        ph.aux = 1;
+        elab_env_bind(el, genv, gp->items[i].name.name, ph, gp->items[i].name.span)->sem = SEM_GENERIC;
+    }
+    for (i = 0; i < call->u.call.nargs; i++) {
+        Arg *a = &call->u.call.args[i];
+        const char *pn = a->name.name;
+        Stmt *port = NULL;
+        Value v;
+        int q;
+        if (!pn && a->value->kind == EXPR_PATH && a->value->u.path.nsegs == 1)
+            pn = a->value->u.path.segs[0].name.name;
+        if (!pn || !elb_pure_expr(a->value))
+            continue;
+        for (k = 0; k < nbody; k++)
+            if (body[k]->kind == STMT_PORT && body[k]->u.port.dir == PORT_IN && body[k]->u.port.name.name == pn)
+                port = body[k];
+        if (!port)
+            continue;
+        q = el->quiet;
+        el->quiet = 1;
+        v = elab_eval(el, a->value, env, NULL);
+        el->quiet = q;
+        el->quiet_errors = 0;
+        if (v.kind != VAL_ERROR && v.ty)
+            el_unify_type(el, port->u.port.type, v.ty, genv);
+    }
+    out->items = ANEWN(&el->arena, ElabArg, gp->n);
+    for (i = 0; i < gp->n; i++) {
+        Binding *b = ce_lookup_local_binding(genv, gp->items[i].name.name);
+        if (!b || (b->val.kind == VAL_VOID && b->val.aux == 1) || b->val.kind == VAL_ERROR)
+            continue;
+        out->items[n].name = gp->items[i].name.name;
+        out->items[n].val = b->val;
+        out->items[n].span = call->span;
+        n++;
+    }
+    out->n = n;
+    elab_env_free(genv);
+    return n;
+}
+
 Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Value calleev)
 {
     ModCtx *mc = el->mod;
@@ -898,8 +1014,13 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
         return calleev;
     if (calleev.kind == VAL_MODULE)
         vm = calleev.u.mod;
-    else if (calleev.kind == VAL_ITEM)
-        vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, NULL, call->u.call.callee->span);
+    else if (calleev.kind == VAL_ITEM) {
+        ElabArgs inferred;
+        if (elb_infer_generics(el, calleev.u.fn->item, calleev.u.fn->file, call, env, &inferred))
+            vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, &inferred, call->u.call.callee->span);
+        else
+            vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, NULL, call->u.call.callee->span);
+    }
     else {
         el_error(el, call->u.call.callee->span, "`%s` is not a module", el_text(call->u.call.callee));
         return val_error();
@@ -1574,7 +1695,7 @@ static void elb_bind_decls(Elab *el, Stmt **stmts, uint32_t n, Env *env)
         default:
             break;
         }
-        if (nm) {
+        if (nm && !elb_redeclared(el, env, nm, def)) {
             b = elab_env_bind(el, env, nm, val_void(el->S), def);
             b->lazy = 1;
             b->decl = s;
@@ -1882,6 +2003,78 @@ static void elb_fwd_block(ElbFwd *f, const IrBlock *b, IrExpr *cond)
         elb_fwd_stmt(f, b->stmts[i], cond);
 }
 
+/* read ports of the memories (distinct IRE_MEMREAD nodes, §10.1) */
+typedef struct ElbPorts {
+    Map seen;
+    uint32_t *count;          /* per signal */
+} ElbPorts;
+
+static void elb_ports_expr(ElbPorts *pc, const IrExpr *e)
+{
+    uint32_t i;
+    if (!e || map_has(&pc->seen, MAP_PTR(e)))
+        return;
+    map_put(&pc->seen, MAP_PTR(e), 1);
+    if (e->kind == IRE_MEMREAD)
+        pc->count[e->sig]++;
+    for (i = 0; i < e->nargs; i++)
+        elb_ports_expr(pc, e->args[i]);
+}
+
+static void elb_ports_block(ElbPorts *pc, const IrBlock *b)
+{
+    uint32_t i, k;
+    for (i = 0; i < b->n; i++) {
+        const IrStmt *s = b->stmts[i];
+        elb_ports_expr(pc, s->rhs);
+        elb_ports_expr(pc, s->cond);
+        elb_ports_expr(pc, s->subject);
+        elb_ports_expr(pc, s->addr);
+        elb_ports_expr(pc, s->data);
+        elb_ports_expr(pc, s->lhs.index);
+        elb_ports_block(pc, &s->then_b);
+        elb_ports_block(pc, &s->else_b);
+        for (k = 0; k < s->narms; k++)
+            elb_ports_block(pc, &s->arms[k].body);
+    }
+}
+
+static void elb_check_mem_ports(Elab *el, ModCtx *mc)
+{
+    IrModule *m = mc->ir;
+    ElbPorts pc;
+    uint32_t i, k;
+    int any = 0;
+    for (i = 0; i < m->nsigs && !any; i++)
+        any = m->sigs[i].kind == IRS_MEM;
+    if (!any)
+        return;
+    memset(&pc, 0, sizeof pc);
+    pc.count = (uint32_t *)xcalloc(m->nsigs, sizeof(uint32_t));
+    for (i = 0; i < m->nassigns; i++) {
+        elb_ports_expr(&pc, m->assigns[i].rhs);
+        elb_ports_expr(&pc, m->assigns[i].lhs.index);
+    }
+    for (i = 0; i < m->nprocs; i++)
+        elb_ports_block(&pc, &m->procs[i].body);
+    for (i = 0; i < m->nsigs; i++) {
+        int distributed = 0;
+        if (m->sigs[i].kind != IRS_MEM || pc.count[i] <= 2)
+            continue;
+        for (k = 0; k < m->sigs[i].nattrs; k++)
+            if (strcmp(m->sigs[i].attrs[k].name, "ram") == 0 && m->sigs[i].attrs[k].args &&
+                (strstr(m->sigs[i].attrs[k].args, "distributed") || strstr(m->sigs[i].attrs[k].args, "registers")))
+                distributed = 1;
+        if (distributed)
+            continue;
+        el_error(el, m->sigs[i].loc, "mem `%s` has %u read ports; the target supports 2", m->sigs[i].name,
+                 (unsigned)pc.count[i]);
+        el_help(el, "share a port between the readers, duplicate the memory, or mark it #[ram(distributed)]");
+    }
+    free(pc.count);
+    map_free(&pc.seen);
+}
+
 static void elb_finish(Elab *el, ModCtx *mc)
 {
     IrModule *m = mc->ir;
@@ -1918,6 +2111,7 @@ static void elb_finish(Elab *el, ModCtx *mc)
                 elb_fwd_block(&f, &m->procs[j].body, NULL);
         rp->body.stmts[0]->rhs = f.result;
     }
+    elb_check_mem_ports(el, mc);
     /* unconnected instance inputs */
     for (i = 0; i < mc->pendings.len; i++) {
         PendingIn *pi = &mc->pendings.data[i];
@@ -2041,8 +2235,21 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
     el->undo_depth = 0;
     body = it->kind == ITEM_MODULE ? it->u.module.body : it->u.extern_mod.body;
     nbody = it->kind == ITEM_MODULE ? it->u.module.nbody : it->u.extern_mod.nbody;
-    if (it->kind == ITEM_MODULE && el_regfile_wants(el, vm))
-        el_regfile_body(el, vm, &body, &nbody);
+    if (el_regfile_is(it, vm->file)) {
+        /* compiler-generated register file (regfile.c) */
+        Stmt **gen = NULL;
+        uint32_t ngen = 0;
+        if (el_regfile_body(el, vm, &gen, &ngen)) {
+            Stmt **all = ANEWN(&el->arena, Stmt *, nbody + ngen);
+            if (nbody)
+                memcpy(all, body, nbody * sizeof(Stmt *));
+            memcpy(all + nbody, gen, ngen * sizeof(Stmt *));
+            body = all;
+            nbody += ngen;
+        } else {
+            mi->failed = 1;
+        }
+    }
     elb_module_attrs(el, &mc);
     elb_params(el, &mc);
     if (!mc.is_extern)
@@ -2229,6 +2436,11 @@ static int elb_verify_expr(const IrModule *m, const IrExpr *e, int in_prop)
             bad += elb_vbad(e, "binary operand widths");
         }
         break;
+    case IRE_INDEX:
+        /* may be out of range (reads 0), but the base holds at least one element */
+        if (e->args[0]->width < e->width)
+            bad += elb_vbad(e, "index element wider than the array");
+        break;
     case IRE_MUX:
         if (e->args[0]->width != 1 || e->args[1]->width != e->width || e->args[2]->width != e->width)
             bad += elb_vbad(e, "mux widths");
@@ -2247,6 +2459,23 @@ static int elb_verify_expr(const IrModule *m, const IrExpr *e, int in_prop)
     return bad;
 }
 
+static int elb_verify_lvalue(const IrModule *m, const IrLvalue *lv, const IrExpr *rhs)
+{
+    uint64_t sw;
+    int bad = 0;
+    if (lv->sig >= m->nsigs)
+        return elb_vbad(rhs, "assignment to an unknown signal");
+    sw = m->sigs[lv->sig].type->width;
+    if (lv->index) {
+        bad += elb_verify_expr(m, lv->index, 0);
+        if ((uint64_t)lv->lo + (uint64_t)(lv->len ? lv->len : 1) * lv->width > sw)
+            bad += elb_vbad(rhs, "indexed assignment past the end of the signal");
+    } else if ((uint64_t)lv->lo + lv->width > sw) {
+        bad += elb_vbad(rhs, "assignment slice out of range");
+    }
+    return bad;
+}
+
 static int elb_verify_block(const IrModule *m, const IrBlock *b)
 {
     uint32_t i, k;
@@ -2256,6 +2485,8 @@ static int elb_verify_block(const IrModule *m, const IrBlock *b)
         switch (s->kind) {
         case IRST_ASSIGN:
             bad += elb_verify_expr(m, s->rhs, 0);
+            if (s->rhs)
+                bad += elb_verify_lvalue(m, &s->lhs, s->rhs);
             if (s->rhs && s->rhs->width != s->lhs.width)
                 bad += elb_vbad(s->rhs, "assignment width");
             break;
@@ -2298,6 +2529,7 @@ int elab_ir_verify(const IrDesign *d)
         elb_verify_what[0] = 0;
         for (i = 0; i < m->nassigns; i++) {
             bad += elb_verify_expr(m, m->assigns[i].rhs, 0);
+            bad += elb_verify_lvalue(m, &m->assigns[i].lhs, m->assigns[i].rhs);
             if (m->assigns[i].rhs->width != m->assigns[i].lhs.width)
                 bad += elb_vbad(m->assigns[i].rhs, "continuous assignment width");
         }

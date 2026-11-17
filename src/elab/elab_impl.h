@@ -131,11 +131,6 @@ Value el_maybe_temp(Elab *el, Value v, Span at);
 Value el_eval_path(Elab *el, Path *p, Env *env, Ty *expect, int type_ctx);
 Binding *ce_lookup_local_binding(Env *e, const char *name);   /* this scope only */
 
-/* regfile.c: std::bus::RegisterFile<Map, Bus> (compiler-assisted) */
-int el_regfile_wants(Elab *el, ValModule *vm);
-/* Appends the generated ports and decode to the module body (in el->arena). */
-int el_regfile_body(Elab *el, ValModule *vm, Stmt ***body, uint32_t *nbody);
-
 /* mono.c */
 ValModule *el_bind_module_ast(Elab *el, Item *item, FileUnit *file, GenericArg *args, uint32_t nargs, Env *argenv,
                               Span at);
@@ -153,5 +148,11 @@ Ty *el_type_item_vals(Elab *el, Item *it, FileUnit *file, Env *ctx, const ElabAr
 int el_check_where(Elab *el, WhereList *w, Env *genv, const char *owner, Span at);
 const char *el_ctx_prefix(Env *ctx);
 Ty *el_regmap_type(Elab *el, Item *regmap, FileUnit *file, const char *name, Span at);
+
+/* regfile.c: std::bus::RegisterFile<Map, Bus> */
+int el_regfile_is(const Item *it, const FileUnit *file);
+/* The generated statements of one instantiation (ports, front-end, storage,
+ * decode), to be appended to the declared body; 0 after reporting errors. */
+int el_regfile_body(Elab *el, ValModule *vm, Stmt ***body_out, uint32_t *n_out);
 
 #endif /* TERN_ELAB_IMPL_H */

@@ -1,0 +1,5 @@
+e06_1_drivers.tern:19:12: error: multiple drivers for `y`: driven by a `comb` block and a continuous assignment
+e06_1_drivers.tern:9:9: error: output `undriven` is never driven
+e06_1_drivers.tern:15:12: error: multiple drivers for `v`: driven by two `comb` blocks
+e06_1_drivers.tern:12:9: error: var `unused` is never assigned
+e06_1_drivers.tern:17:14: error: multiple drivers for `r`: driven by two `on` blocks

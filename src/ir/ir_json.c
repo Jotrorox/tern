@@ -232,6 +232,8 @@ static void irj_lvalue(IrjWriter *jw, const IrLvalue *lv)
     if (lv->index) {
         jw_key(&jw->w, "index");
         irj_expr(jw, lv->index);
+        if (lv->len)
+            jw_kv_uint(&jw->w, "len", lv->len);
     }
     if (lv->field)
         jw_kv_str(&jw->w, "field", lv->field);
@@ -858,6 +860,8 @@ static IrLvalue irj_lvalue_read(IrjReader *r, const JsonValue *v)
     lv.width = irj_u32(r, json_get(v, "w"));
     lv.index = irj_expr_read(r, json_get(v, "index"), 0);
     lv.field = irj_str(r, json_get(v, "field"));
+    if (lv.index && json_get(v, "len"))
+        lv.len = irj_u32(r, json_get(v, "len"));
     return lv;
 }
 

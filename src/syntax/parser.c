@@ -1360,6 +1360,14 @@ static Expr *ps_postfix(Parser *p, Expr *e, uint32_t start)
             e = ps_done(p, c, start);
         } else if (k == TK_LBRACE && e->kind == EXPR_PATH && !p->ctx.no_struct) {
             e = ps_struct_lit(p, e, start);
+        } else if (k == TK_COLONCOLON && e->kind != EXPR_PATH && ps_is_name_tok(ps_peek(p, 1)) &&
+                   ast_type_from_expr(p->a, e)) {
+            /* typeof(x)::WIDTH, [u8; 4]::WIDTH: members of a type that is not a path */
+            Expr *q = ps_new_expr(p, EXPR_QPATH, start);
+            q->u.qpath.type = ast_type_from_expr(p->a, e);
+            ps_advance(p);
+            ps_path(p, &q->u.qpath.path, PS_PATH_EXPR);
+            e = ps_done(p, q, start);
         } else {
             break;
         }
@@ -2609,7 +2617,7 @@ static void ps_field_list(Parser *p, PsFieldVec *fields, PsItemVec *fns, int all
             if (k == TK_KW_CONST && i + 1 < p->ntoks && p->toks[i + 1].kind == TK_KW_FN)
                 k = TK_KW_FN;
         }
-        if (k == TK_KW_FN && fns) {
+        if ((k == TK_KW_FN || k == TK_KW_CONST) && fns) {
             uint32_t start = ps_off(p);
             AstDoc *doc = NULL;
             AttrList attrs;
@@ -2937,14 +2945,16 @@ static Item *ps_item_rest(Parser *p, uint32_t start, AstDoc *doc, AttrList attrs
     }
     case TK_KW_STRUCT: {
         PsFieldVec fields = {0};
+        PsItemVec fns = {0};
         it->kind = ITEM_STRUCT;
         ps_advance(p);
         it->name = ps_name(p, "a struct name", 0);
         if (!p->panic)
             ps_generic_params(p, &it->u.struct_def.generics);
         if (!p->panic)
-            ps_field_list(p, &fields, NULL, 0, "to open the struct body");
+            ps_field_list(p, &fields, &fns, 0, "to open the struct body");
         PS_TAKE(p, fields, Field *, it->u.struct_def.fields, it->u.struct_def.nfields);
+        PS_TAKE(p, fns, Item *, it->u.struct_def.fns, it->u.struct_def.nfns);
         break;
     }
     case TK_KW_ENUM: {

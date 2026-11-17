@@ -1,0 +1,115 @@
+// §11 Verification: unit tests (11.1), table-driven and randomized stimulus
+// (11.2), assertions inside the design (11.3) and properties (11.4).
+
+/// A FIFO carrying the spec's assertion and properties.
+module Fifo<T: type, Depth: uint>
+where Depth.is_pow2()
+{
+    in clk: clock
+    in rst: reset
+    in push: Stream<T>
+    out pop: Stream<T>
+    out count: uint<clog2(Depth) + 1>
+
+    mem buf: [T; Depth]
+    reg wr: uint<clog2(Depth)> = 0
+    reg rd: uint<clog2(Depth)> = 0
+    reg n: uint<clog2(Depth) + 1> = 0
+    push.ready = n != Depth
+    pop.valid = n != 0
+    pop.data = buf[rd]
+    count = n
+    on clk {
+        if push.fire() { buf[wr] = push.data; wr = wr +% 1 }
+        if pop.fire() { rd = rd +% 1 }
+        n = n +% (push.fire() as uint<1>) -% (pop.fire() as uint<1>)
+    }
+
+    // 11.3
+    on clk {
+        assert !(push.fire() and count == Depth), "push into full fifo"
+    }
+
+    // 11.4
+    property valid_holds_until_ready {
+        always (push.valid and !push.ready) |=> push.valid and stable(push.data)
+    }
+    property eventually_drains {
+        always (count > 0 and pop.ready) |-> eventually[..Depth] count == 0
+    }
+    assume property no_push_during_reset { always rst |-> !push.valid }
+    cover property wraps_around { count == Depth ##[1:$] count == 0 }
+    // (not in the spec) a named sequence and `never`
+    sequence pushing { push.valid ##1 push.valid }
+    cover property two_pushes { pushing }
+    property never_overflows { never push.fire() and count == Depth }
+}
+
+// 11.1
+test "fifo preserves order" {
+    let dut = sim Fifo<u8, 4>() // harness owns clk/rst of the default domain
+    dut.reset() // asserts reset for 2 cycles, then releases
+    for v in [1, 2, 3, 4] {
+        dut.push = Stream { valid: true, data: v }
+        dut.step() // one clock edge; combinational logic settles after it
+    }
+    dut.push.valid = false
+    expect dut.count == 4
+    dut.pop.ready = true
+    for v in [1, 2, 3, 4] {
+        expect dut.pop.valid and dut.pop.data == v
+        dut.step()
+    }
+    expect !dut.pop.valid
+}
+
+// 11.2
+enum Op { Add, Sub, And }
+
+module Alu<W: uint> {
+    in op: Op
+    in a: uint<W>
+    in b: uint<W>
+    out y: uint<W>
+    y = match op {
+        .Add => a +% b,
+        .Sub => a -% b,
+        .And => a & b,
+    }
+}
+
+test "alu ops" {
+    let dut = sim Alu<32>()
+    for (op, a, b, want) in [(.Add, 1, 2, 3), (.Sub, 5, 7, 0xFFFF_FFFE), (.And, 0xF0, 0x3C, 0x30)] {
+        dut.op = op; dut.a = a; dut.b = b
+        dut.settle()
+        expect dut.y == want
+    }
+}
+
+test "random adds" {
+    let dut = sim Alu<32>()
+    for _ in 0..10_000 {
+        let a = rand<u32>()
+        let b = rand<u32>() where b <= 0x1000 // rejection constraint
+        dut.op = .Add; dut.a = a; dut.b = b
+        dut.settle()
+        expect dut.y == (a + b) as u32
+    }
+}
+
+#[top]
+module Verification {
+    in clk: clock
+    in rst: reset
+    in push: Stream<u8>
+    out pop: Stream<u8>
+    out count: uint<3>
+    out y: u32
+
+    let f = Fifo<u8, 4>(push)
+    pop = f.pop
+    count = f.count
+    let alu = Alu<32>(op: .Add, a: 1, b: 2)
+    y = alu.y
+}

@@ -33,6 +33,8 @@ module Top top #[keep_hierarchy]
   19: mem lut: uint<8> x 8 mem_init include_hex("misc_lut.hex") #[ram(distributed)]
   20: wire probe: bool #[keep]
   assign status = {(regs_ctrl.mode == 2'h3), regs_ctrl.enable}
+  assign regs_status = status
+  assign regs_fifo_ready = 1'h1
   assign locked = (pll_locked && poke)
   assign unsafe_cross_0 = other
   assign crossed = unsafe_cross_0

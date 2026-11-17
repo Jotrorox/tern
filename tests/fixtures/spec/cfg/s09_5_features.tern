@@ -1,0 +1,30 @@
+// §9.5 No preprocessor: `ifdef becomes a bool generic or a feature flag in
+// tern.toml [features], read as cfg::feature_name.
+package cfg_demo
+
+module Probe<Debug: bool = cfg::debug_ila> {
+    in d: u8
+    out q: u8
+    if Debug { q = d ^ 0xFF } else { q = d }
+}
+
+#[top]
+module Features {
+    in d: u8
+    out q: u8
+    out fast: bool
+    out dbg: u8
+
+    if cfg::debug_ila {
+        q = 0
+    } else {
+        q = d
+    }
+    fast = cfg::fast_path
+    if cfg::debug {
+        // Appendix B: `ifdef DEBUG ... `endif
+        static_assert(false, "not elaborated: debug is off")
+    }
+    let p = Probe(d)
+    dbg = p.q
+}

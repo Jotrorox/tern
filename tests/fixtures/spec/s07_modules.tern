@@ -1,0 +1,168 @@
+// §7 Modules, generics and elaboration: declaring (7.1), instantiating
+// (7.2), elaboration-time code (7.3), functions (7.4), top level (7.5).
+
+// 7.1 (the body, elided in the spec, is a minimal FIFO)
+pub module Fifo<T: type, Depth: uint = 16>
+where Depth.is_pow2()
+{
+    in clk: clock
+    in rst: reset
+    in push: Stream<T>
+    out pop: Stream<T>
+    out count: uint<clog2(Depth) + 1>
+
+    mem buf: [T; Depth]
+    reg wr: uint<clog2(Depth)> = 0
+    reg rd: uint<clog2(Depth)> = 0
+    reg n: uint<clog2(Depth) + 1> = 0
+
+    push.ready = n != Depth
+    pop.valid = n != 0
+    pop.data = buf[rd]
+    count = n
+    on clk {
+        if push.fire() { buf[wr] = push.data; wr = wr +% 1 }
+        if pop.fire() { rd = rd +% 1 }
+        n = n +% (push.fire() as uint<1>) -% (pop.fire() as uint<1>)
+    }
+}
+
+// stand-ins for the spec's `uart`, `dma` and `cpu` instances
+module Uart {
+    out rx: Stream<u8>
+    rx.valid = false
+    rx.data = 0
+}
+
+module Dma {
+    out out: Stream<u8>
+    out.valid = false
+    out.data = 0
+}
+
+module Cpu {
+    in rx: Stream<u8>
+    out seen: bool
+    rx.ready = true
+    seen = rx.valid
+}
+
+/// 7.2 with one clock: clk and rst are inherited.
+module Top {
+    in clk: clock
+    in rst: reset
+    in s: Stream<u8>
+    in push: Stream<u8>
+    out full: bool
+    out total: uint<6>
+
+    let uart = Uart()
+    let cpu = Cpu()
+    let rx_fifo = Fifo<u8, 64>(push: uart.rx) // clk, rst inherited from the parent's default domain
+    cpu.rx = rx_fifo.pop
+    let fifo_full = rx_fifo.count == 64
+    full = fifo_full
+    let Fifo { pop, count } = Fifo<u8>(push: s)
+    pop.ready = true
+    let shorthand = Fifo<u8>(push)
+    shorthand.pop.ready = true
+    total = count +% shorthand.count
+}
+
+/// 7.2 with two domains: explicit clock/reset connections and `@ dom`.
+module TwoDomains {
+    in clk: clock
+    in rst: reset
+    in clk_io: clock
+    in rst_io: reset
+    in s: Stream<u8>
+    out level: uint<7>
+
+    domain io = (clk_io, rst_io)
+    let dma = Dma()
+    let tx_fifo = Fifo<u8, Depth: 64>(clk: clk_io, rst: rst_io, push: dma.out)
+    tx_fifo.pop.ready = true
+    let other = Fifo<u8>(push: s) @ io
+    other.pop.ready = false
+    level = tx_fifo.count
+}
+
+// 7.3
+module Pipeline<T: type, Stages: uint> {
+    in clk: clock
+    in d: T
+    out q: T
+
+    var stage: [T; Stages + 1]
+    stage[0] = d
+    for i in 0..Stages {
+        reg r: T @ clk // one register per unrolled iteration: r_0, r_1, ...
+        on clk { r = stage[i] }
+        stage[i + 1] = r
+    }
+    q = stage[Stages]
+}
+
+module Adder<W: uint, Fast: bool = false> {
+    in a: uint<W>
+    in b: uint<W>
+    out y: uint<W + 1>
+
+    if Fast {
+        // carry-lookahead (elided)
+        y = a + b
+    } else {
+        // ripple (elided)
+        var c: bool
+        var s: uint<W>
+        comb {
+            c = false
+            s = 0
+            for i in 0..W {
+                s[i] = a[i] ^ b[i] ^ c
+                c = (a[i] and b[i]) or (c and (a[i] ^ b[i]))
+            }
+        }
+        y = c as uint<1> ++ s
+    }
+}
+
+// 7.4
+fn parity(x: bit<N>) -> bool { ^x } // N inferred from the argument
+
+fn saturate(x: sint<W>, lo: sint<W>, hi: sint<W>) -> sint<W> {
+    if x < lo { lo } else if x > hi { hi } else { x }
+}
+
+// 7.5
+#[top]
+module Board {
+    in clk100: clock #[clock(hz: 100_000_000)]
+    in rst: reset
+    in pad: tri<bool>
+    in s: Stream<u8>
+    in push: Stream<u8>
+    in push2: Stream<u8>
+    in d: u8
+    in x: sint<6>
+    out full: bool
+    out q: u8
+    out sum: uint<9>
+    out sum_fast: uint<9>
+    out par: bool
+    out sat: sint<6>
+    out level: uint<7>
+
+    let top = Top(s, push)
+    let two = TwoDomains(clk_io: clk100, rst_io: rst, s: push2)
+    level = two.level
+    full = top.full
+    let pipe = Pipeline<u8, 3>(d)
+    q = pipe.q
+    let ripple = Adder<8>(a: d, b: 3)
+    sum = ripple.y
+    let fast = Adder<8, true>(a: d, b: 3)
+    sum_fast = fast.y
+    par = parity(d)
+    sat = saturate(x, -8, 7)
+}

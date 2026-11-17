@@ -1,0 +1,2 @@
+e06_2_unassigned.tern:25:9: error: `alu_out` may be unassigned when op == Nop
+e06_2_unassigned.tern:33:9: error: `w` may be unassigned when c is false

@@ -1,0 +1,73 @@
+// §9 Compile-time evaluation: consts (9.1), const fn (9.2), static checks
+// (9.3) and type-level computation (9.4).
+
+// 9.2 (clog2 is also the prelude's; this one shadows it, as in the spec)
+const fn clog2(n: uint) -> uint {
+    var r = 0
+    while (1 << r) < n { r = r + 1 }
+    r
+}
+
+const fn crc_table(poly: uint<32>) -> [uint<32>; 256] {
+    var t: [uint<32>; 256]
+    for i in 0..256 {
+        var c = i as uint<32>
+        for _ in 0..8 { c = if c[0] { (c >> 1) ^ poly } else { c >> 1 } }
+        t[i] = c
+    }
+    t
+}
+
+const Crc32Table: [uint<32>; 256] = crc_table(0xEDB88320) // computed once, becomes a ROM
+
+// 9.1: widthless integers are arbitrary precision
+const Big: uint = 1 << 100
+
+const Huge: uint = Big * Big + 1
+
+// 9.3: `where` is sugar for static_asserts at the instantiation
+module Rom<Depth: uint>
+where Depth.is_pow2(), Depth <= 256
+{
+    in addr: uint<clog2(Depth)>
+    out data: uint<32>
+
+    // 9.4: a type alias that depends on consts
+    type Addr = uint<clog2(Depth)>
+    const_log("Rom with {} entries", Depth)
+    static_assert(Crc32Table[1] == 0x77073096, "CRC table")
+    static_assert(Huge > Big, "no 32-bit overflow in parameter arithmetic")
+
+    let a: Addr = addr
+    let rom: [uint<32>; Depth] = slice_table(Depth)
+    data = rom[a]
+    static_assert(typeof(a)::WIDTH == clog2(Depth))
+    static_assert(typeof(data)::MAX == 0xFFFF_FFFF and uint<4>::MIN == 0 and s8::MIN == -128)
+}
+
+const fn slice_table(n: uint) -> [uint<32>; n] {
+    var t: [uint<32>; n]
+    for i in 0..n { t[i] = Crc32Table[i] }
+    t
+}
+
+/// 9.2: a const fn called with signal arguments is just a fn
+const fn reverse8(x: uint<8>) -> uint<8> {
+    var r: uint<8> = 0
+    for i in 0..8 { r[7 - i] = x[i] }
+    r
+}
+
+#[top]
+module CompileTime {
+    in addr: uint<4>
+    in x: u8
+    out data: uint<32>
+    out rev: u8
+
+    const R: u8 = reverse8(0x01) // compile time
+    static_assert(R == 0x80)
+    let rom = Rom<16>(addr)
+    data = rom.data
+    rev = reverse8(x) // a combinational circuit
+}

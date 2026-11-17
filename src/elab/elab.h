@@ -89,7 +89,7 @@ Binding *elab_env_find(Env *e, const char *name);   /* walks parents; NULL if un
 
 /* ------------------------------------------------------------- places -- */
 
-typedef enum PlaceKind { PL_SIG, PL_AGG, PL_LOCAL } PlaceKind;
+typedef enum PlaceKind { PL_SIG, PL_AGG, PL_LOCAL, PL_DYN } PlaceKind;
 
 typedef struct PlaceSel {     /* a step from a local variable to the assigned part */
     uint8_t kind;             /* 0 field/element index a, 1 dynamic index (idx), 2 bit slice [a +: b] */
@@ -100,13 +100,17 @@ typedef struct PlaceSel {     /* a step from a local variable to the assigned pa
 /* An assignable location. PL_SIG: bits [lo +: width] of signal `sig` of the
  * current module, or element `index` (elem_width bits each) of the array
  * starting at bit lo. PL_AGG: a bundle (subs[i] per field) or an array of
- * bundles (subs[i] per element). PL_LOCAL: (part of) a mutable local. */
+ * bundles (subs[i] per element). PL_LOCAL: (part of) a mutable local.
+ * PL_DYN: the one of subs[0..n) (places of type `ty`) selected by the
+ * hardware value `index` (a dynamic index into an array of bundles: reads
+ * are a mux, writes a decode; an index >= n selects nothing). */
 typedef struct Place {
     uint8_t kind;
     Ty *ty;
     uint32_t sig, lo, width;
     IrExpr *index;
     uint32_t elem_width;
+    uint32_t len;             /* index: elements of the indexed array (writes past it are skipped) */
     const char *field;        /* readable field path for the IR ("carry", "pos.x") */
     uint32_t n;
     struct Place **subs;
@@ -226,6 +230,14 @@ struct Elab {
     uint32_t undo_depth;
     int returned;             /* a `return` is propagating */
     Value ret;
+    /* `return` under conditions on signals in a fn inlined on signals: the
+     * condition (relative to the fn's entry) of the arm being run, and the
+     * merged result of the returns seen so far (taken when ret_cond holds) */
+    int fn_active;            /* inside el_call_fn */
+    Value fn_path;            /* path condition of the current arm (bool true at the fn level) */
+    int fn_ret_have;
+    Value fn_ret_cond, fn_ret_val;
+    Ty *fn_ret_ty;
     Ty *tail_expect;          /* expected type of the next block's tail value */
     struct BlkCtx *temp_blk;  /* block receiving intermediate values (see el_maybe_temp) */
     Map seen_errors;          /* (span, message) hashes: report each error once */

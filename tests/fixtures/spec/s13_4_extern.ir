@@ -1,0 +1,89 @@
+module pll_wrapper extern("ip/pll_wrapper.sv")
+  domain 0 "" clock=refclk reset=rst default
+  0: in refclk: clock
+  1: in rst: reset<async, high> @0
+  2: out outclk: clock
+  3: out locked: bool @0
+end
+module legacy_dma_16 "legacy_dma<16>" extern("rtl/dma.sv")
+  param AW = 32'h10
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, low> @0
+  2: in s_axi_aw_valid (s_axi.aw.valid): bool @0 #[sv_name("s_axi_lite")]
+  3: in s_axi_aw_data (s_axi.aw.data): uint<16> @0 #[sv_name("s_axi_lite")]
+  4: out s_axi_aw_ready (s_axi.aw.ready): bool @0 flipped #[sv_name("s_axi_lite")]
+  5: in s_axi_w_valid (s_axi.w.valid): bool @0 #[sv_name("s_axi_lite")]
+  6: in s_axi_w_data (s_axi.w.data): struct { data: uint<32>, strb: bit<4> } @0 #[sv_name("s_axi_lite")]
+  7: out s_axi_w_ready (s_axi.w.ready): bool @0 flipped #[sv_name("s_axi_lite")]
+  8: out s_axi_b_valid (s_axi.b.valid): bool @0 flipped #[sv_name("s_axi_lite")]
+  9: out s_axi_b_data (s_axi.b.data): bit<2> @0 flipped #[sv_name("s_axi_lite")]
+  10: in s_axi_b_ready (s_axi.b.ready): bool @0 #[sv_name("s_axi_lite")]
+  11: in s_axi_ar_valid (s_axi.ar.valid): bool @0 #[sv_name("s_axi_lite")]
+  12: in s_axi_ar_data (s_axi.ar.data): uint<16> @0 #[sv_name("s_axi_lite")]
+  13: out s_axi_ar_ready (s_axi.ar.ready): bool @0 flipped #[sv_name("s_axi_lite")]
+  14: out s_axi_r_valid (s_axi.r.valid): bool @0 flipped #[sv_name("s_axi_lite")]
+  15: out s_axi_r_data (s_axi.r.data): struct { data: uint<32>, resp: bit<2> } @0 flipped #[sv_name("s_axi_lite")]
+  16: in s_axi_r_ready (s_axi.r.ready): bool @0 #[sv_name("s_axi_lite")]
+  17: out irq: bool @0
+end
+module Board top
+  domain 0 "" clock=clk reset=none default
+  0: in clk: clock
+  1: in rst: reset<async, high> @0
+  2: in rst_n: reset<sync, low> @0
+  3: in bus_aw_valid (bus.aw.valid): bool @0
+  4: in bus_aw_data (bus.aw.data): uint<16> @0
+  5: out bus_aw_ready (bus.aw.ready): bool @0 flipped
+  6: in bus_w_valid (bus.w.valid): bool @0
+  7: in bus_w_data (bus.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  8: out bus_w_ready (bus.w.ready): bool @0 flipped
+  9: out bus_b_valid (bus.b.valid): bool @0 flipped
+  10: out bus_b_data (bus.b.data): bit<2> @0 flipped
+  11: in bus_b_ready (bus.b.ready): bool @0
+  12: in bus_ar_valid (bus.ar.valid): bool @0
+  13: in bus_ar_data (bus.ar.data): uint<16> @0
+  14: out bus_ar_ready (bus.ar.ready): bool @0 flipped
+  15: out bus_r_valid (bus.r.valid): bool @0 flipped
+  16: out bus_r_data (bus.r.data): struct { data: uint<32>, resp: bit<2> } @0 flipped
+  17: in bus_r_ready (bus.r.ready): bool @0
+  18: out locked: bool @0
+  19: out irq: bool @0
+  20: wire pll_outclk (pll.outclk): clock
+  21: wire pll_locked (pll.locked): bool @0
+  22: wire dma_s_axi_aw_valid (dma.s_axi.aw.valid): bool @0
+  23: wire dma_s_axi_aw_data (dma.s_axi.aw.data): uint<16> @0
+  24: wire dma_s_axi_aw_ready (dma.s_axi.aw.ready): bool @0
+  25: wire dma_s_axi_w_valid (dma.s_axi.w.valid): bool @0
+  26: wire dma_s_axi_w_data (dma.s_axi.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  27: wire dma_s_axi_w_ready (dma.s_axi.w.ready): bool @0
+  28: wire dma_s_axi_b_valid (dma.s_axi.b.valid): bool @0
+  29: wire dma_s_axi_b_data (dma.s_axi.b.data): bit<2> @0
+  30: wire dma_s_axi_b_ready (dma.s_axi.b.ready): bool @0
+  31: wire dma_s_axi_ar_valid (dma.s_axi.ar.valid): bool @0
+  32: wire dma_s_axi_ar_data (dma.s_axi.ar.data): uint<16> @0
+  33: wire dma_s_axi_ar_ready (dma.s_axi.ar.ready): bool @0
+  34: wire dma_s_axi_r_valid (dma.s_axi.r.valid): bool @0
+  35: wire dma_s_axi_r_data (dma.s_axi.r.data): struct { data: uint<32>, resp: bit<2> } @0
+  36: wire dma_s_axi_r_ready (dma.s_axi.r.ready): bool @0
+  37: wire dma_irq (dma.irq): bool @0
+  assign locked = pll_locked
+  assign dma_s_axi_aw_valid = bus_aw_valid
+  assign dma_s_axi_aw_data = bus_aw_data
+  assign bus_aw_ready = dma_s_axi_aw_ready
+  assign dma_s_axi_w_valid = bus_w_valid
+  assign dma_s_axi_w_data = bus_w_data
+  assign bus_w_ready = dma_s_axi_w_ready
+  assign bus_b_valid = dma_s_axi_b_valid
+  assign bus_b_data = dma_s_axi_b_data
+  assign dma_s_axi_b_ready = bus_b_ready
+  assign dma_s_axi_ar_valid = bus_ar_valid
+  assign dma_s_axi_ar_data = bus_ar_data
+  assign bus_ar_ready = dma_s_axi_ar_ready
+  assign bus_r_valid = dma_s_axi_r_valid
+  assign bus_r_data = dma_s_axi_r_data
+  assign dma_s_axi_r_ready = bus_r_ready
+  assign irq = dma_irq
+  inst pll: pll_wrapper (refclk = clk, rst = rst, outclk -> pll_outclk, locked -> pll_locked)
+  inst dma: legacy_dma_16 (clk = pll_outclk, rst = rst_n, s_axi_aw_valid = dma_s_axi_aw_valid, s_axi_aw_data = dma_s_axi_aw_data, s_axi_aw_ready -> dma_s_axi_aw_ready, s_axi_w_valid = dma_s_axi_w_valid, s_axi_w_data = dma_s_axi_w_data, s_axi_w_ready -> dma_s_axi_w_ready, s_axi_b_valid -> dma_s_axi_b_valid, s_axi_b_data -> dma_s_axi_b_data, s_axi_b_ready = dma_s_axi_b_ready, s_axi_ar_valid = dma_s_axi_ar_valid, s_axi_ar_data = dma_s_axi_ar_data, s_axi_ar_ready -> dma_s_axi_ar_ready, s_axi_r_valid -> dma_s_axi_r_valid, s_axi_r_data -> dma_s_axi_r_data, s_axi_r_ready = dma_s_axi_r_ready, irq -> dma_irq)
+end

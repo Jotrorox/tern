@@ -404,8 +404,14 @@ static void asg_w_block(AsgCtx *a, const IrBlock *b, uint32_t sig, uint32_t bit)
                 if (arm->nvals)
                     asg_path_add(a, s,
                                  arena_printf(&a->cm->cx->arena, "%s == %s", subj, asg_val_name(a, s, &arm->vals[0])));
-                else
-                    asg_path_add(a, s, arena_printf(&a->cm->cx->arena, "%s matches no other arm", subj));
+                else {
+                    /* a default arm: name the first value no explicit arm covers */
+                    const char *miss = NULL;
+                    if (!asg_case_exhaustive(a, s, &miss) && miss)
+                        asg_path_add(a, s, arena_printf(&a->cm->cx->arena, "%s == %s", subj, miss));
+                    else
+                        asg_path_add(a, s, arena_printf(&a->cm->cx->arena, "%s matches no other arm", subj));
+                }
                 asg_w_block(a, &arm->body, sig, bit);
                 done = 1;
             }

@@ -393,6 +393,13 @@ static void ad_expr(AdState *d, const Expr *e)
         ad_type(d, e->u.type);
         sb_putc(d->sb, ')');
         break;
+    case EXPR_QPATH:
+        sb_puts(d->sb, "(qpath ");
+        ad_type(d, e->u.qpath.type);
+        sb_putc(d->sb, ' ');
+        ad_path(d, &e->u.qpath.path);
+        sb_putc(d->sb, ')');
+        break;
     case EXPR_TEMPORAL: {
         static const char *const names[] = {"always", "never", "eventually"};
         sb_printf(d->sb, "(%s ", names[e->u.temporal.op]);
@@ -783,6 +790,10 @@ static void ad_item(AdState *d, const Item *it)
         for (i = 0; i < it->u.struct_def.nfields; i++) {
             ad_nl(d);
             ad_field(d, it->u.struct_def.fields[i]);
+        }
+        for (i = 0; i < it->u.struct_def.nfns; i++) {
+            ad_nl(d);
+            ad_item(d, it->u.struct_def.fns[i]);
         }
         d->indent--;
         break;

@@ -1,0 +1,39 @@
+// Dynamic (signal) indices into arrays of bundles: a read is a mux per
+// field, an assignment a decode over the elements; reading a whole bundle
+// element and assigning one connects both directions. Driven by
+// tests/unit/test_elab.c.
+struct Beat { data: u8, last: bool }
+
+module BundleIndex {
+    in clk: clock
+    in rst: reset
+    in ins: [Stream<Beat>; 3]
+    out outs: [Stream<u8>; 3]
+    in sel: uint<2>
+    in osel: uint<2>
+    out picked: Stream<Beat>
+    out data: u8
+    out count: u8
+
+    reg seen: u8 = 0
+
+    // reading: valid/data of the selected input, ready driven by `picked`
+    comb {
+        for k in 0..3 { ins[k].ready = false }
+        picked.valid = ins[sel].valid
+        picked.data = ins[sel].data
+        ins[sel].ready = picked.ready
+    }
+    data = ins[sel].data.data
+
+    // writing a whole bundle element through a signal index
+    comb {
+        for k in 0..3 { outs[k] = Stream { valid: false, data: 0 } }
+        outs[osel] = Stream { valid: true, data: ins[sel].data.data }
+    }
+
+    on clk {
+        if ins[sel].valid and picked.ready { seen = seen +% 1 }
+    }
+    count = seen
+}

@@ -493,6 +493,7 @@ IrDesign *driver_elaborate_module(Driver *dr, Item *item, FileUnit *file, const 
     if (diag_error_count() == 0)
         elab_ir_verify(d);
     elab_free(el);
+    sema_info_syntactic(dr->S); /* hover/definition for code elaboration did not reach */
     return mi ? d : NULL;
 }
 
@@ -636,5 +637,6 @@ IrDesign *driver_elaborate_all(Driver *dr, const char *top, Arena *ir_arena)
     vec_free(roots);
     vec_free(tests);
     elab_free(el);
+    sema_info_syntactic(dr->S); /* hover/definition for code elaboration did not reach */
     return d;
 }

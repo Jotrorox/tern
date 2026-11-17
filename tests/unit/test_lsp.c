@@ -34,6 +34,7 @@
 #include "../../src/sema/resolve.c"
 #include "../../src/sema/types.c"
 #include "../../src/sema/info.c"
+#include "../../src/sema/syninfo.c"
 #include "../../src/elab/value.c"
 #include "../../src/elab/consteval.c"
 #include "../../src/elab/mono.c"

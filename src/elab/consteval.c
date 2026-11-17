@@ -671,7 +671,7 @@ Ty *elab_eval_type(Elab *el, Type *t, Env *env)
                 Ty *r = el_type_item(el, it, v.u.fn->file, v.u.fn->ctx, NULL, 0, env, t->span, NULL);
                 return r;
             }
-            if (it->kind == ITEM_REGMAP)   /* as a type: its `Regs` bundle (RegisterFile<Map>) */
+            if (it->kind == ITEM_REGMAP) /* a regmap as a type (RegisterFile<Map>): its Regs bundle */
                 return el_regmap_type(el, it, v.u.fn->file, "Regs", t->span);
         }
         el_error(el, t->span, "`%s` is not a type", el_span_text(t->span));
@@ -1124,6 +1124,11 @@ Value el_member(Elab *el, Value base, const char *name, Span at, Env *env)
             bn_free(&b);
             return v;
         }
+        if (t->def && t->def->kind == ITEM_REGMAP) {
+            /* `Map::Status` where Map is a regmap's Regs bundle */
+            Ty *r = el_regmap_type(el, t->def, t->file, name, at);
+            return r->kind == TY_ERROR ? val_error() : val_type(S, r);
+        }
         if (strcmp(name, "from_bits") == 0) {
             Value v;
             memset(&v, 0, sizeof v);
@@ -1146,6 +1151,16 @@ Value el_member(Elab *el, Value base, const char *name, Span at, Env *env)
             }
             el_error(el, at, "enum `%s` has no variant `%s`", ty_str(t), name);
             return val_error();
+        }
+        if (t->def && (t->def->kind == ITEM_STRUCT || t->def->kind == ITEM_BUNDLE)) {
+            /* associated `const` / `fn` items of the struct or bundle body */
+            Item **fns = t->def->kind == ITEM_STRUCT ? t->def->u.struct_def.fns : t->def->u.bundle.fns;
+            uint32_t nfns = t->def->kind == ITEM_STRUCT ? t->def->u.struct_def.nfns : t->def->u.bundle.nfns, k;
+            for (k = 0; k < nfns; k++)
+                if (fns[k]->name.name && strcmp(fns[k]->name.name, name) == 0) {
+                    ce_record_item_use(el, at, fns[k], name);
+                    return el_item_value(el, fns[k], t->file, (Env *)t->genv, at);
+                }
         }
         el_error(el, at, "`%s` has no associated item `%s`", ty_str(t), name);
         return val_error();
@@ -2472,6 +2487,20 @@ Value el_cast(Elab *el, Value v, Ty *to, Span at, Expr *src)
 static Place *ce_sub_place(Elab *el, Place *p, uint32_t lo, uint32_t width, Ty *ty, const char *field)
 {
     Place *q;
+    if (p && p->kind == PL_DYN) {
+        /* a field of the element selected by a dynamic index */
+        uint32_t k;
+        q = ANEW(&el->arena, Place);
+        *q = *p;
+        q->ty = ty;
+        q->subs = ANEWN(&el->arena, Place *, p->n ? p->n : 1);
+        for (k = 0; k < p->n; k++) {
+            q->subs[k] = ce_sub_place(el, p->subs[k], lo, width, ty, field);
+            if (!q->subs[k])
+                return NULL;
+        }
+        return q;
+    }
     if (!p || p->kind != PL_SIG || p->index)
         return NULL;
     q = ANEW(&el->arena, Place);
@@ -2554,6 +2583,94 @@ Value el_field(Elab *el, Value base, const char *name, Span at)
     }
     el_error(el, at, "no field `%s` on %s", name, t ? ty_str(t) : val_kind_name((ValKind)base.kind));
     return val_error();
+}
+
+static int ce_check_index_width(Elab *el, Ty *it, uint32_t len, Span at, int is_bits);
+
+/* Element `ie` (hardware index) of the n values elems[] (an array of bundles,
+ * or of arrays of bundles): bundles are selected field by field, hardware
+ * leaves by an index into their concatenation (out of range: 0). The result
+ * carries a PL_DYN place (write decode) when every element has a place. */
+static Value ce_dyn_pick(Elab *el, Value *elems, uint32_t n, IrExpr *ie, Span at)
+{
+    Value e0 = elems[0], r;
+    uint32_t k, f;
+    for (k = 0; k < n; k++)
+        if (elems[k].kind == VAL_ERROR)
+            return val_error();
+    if (e0.kind == VAL_BUNDLE || (e0.kind == VAL_ARRAY && (!e0.ty || !e0.ty->hw))) {
+        uint32_t nf = e0.u.list->n;
+        Value *sub = ANEWN(&el->arena, Value, n);
+        Place *agg = ANEW(&el->arena, Place);
+        int places = 1;
+        r = val_list(&el->arena, (ValKind)e0.kind, e0.ty, nf);
+        agg->kind = PL_AGG;
+        agg->ty = e0.ty;
+        agg->n = nf;
+        agg->subs = ANEWN(&el->arena, Place *, nf ? nf : 1);
+        for (f = 0; f < nf; f++) {
+            int missing = 0;
+            for (k = 0; k < n; k++) {
+                if (elems[k].kind != e0.kind || elems[k].u.list->n != nf) {
+                    el_error(el, at, "the elements of this array have different shapes");
+                    return val_error();
+                }
+                sub[k] = elems[k].u.list->v[f];
+                if (sub[k].kind == VAL_VOID)
+                    missing = 1;
+            }
+            if (missing) {
+                r.u.list->v[f] = val_void(el->S);
+                places = 0;
+                continue;
+            }
+            r.u.list->v[f] = ce_dyn_pick(el, sub, n, ie, at);
+            if (r.u.list->v[f].kind == VAL_ERROR)
+                return val_error();
+            agg->subs[f] = r.u.list->v[f].place;
+            if (!agg->subs[f])
+                places = 0;
+        }
+        if (places)
+            r.place = agg;
+        return r;
+    }
+    if (e0.kind == VAL_INST || e0.kind == VAL_MEM || e0.kind == VAL_DOMAIN) {
+        el_error(el, at, "an array of %s can only be indexed with a compile-time index",
+                 e0.kind == VAL_INST ? "instances" : e0.kind == VAL_MEM ? "memories" : "domains");
+        return val_error();
+    }
+    if (!e0.ty || !e0.ty->hw) {
+        el_error(el, at, "cannot index an array of %s with a signal", e0.ty ? ty_str(e0.ty) : val_kind_name((ValKind)e0.kind));
+        return val_error();
+    }
+    {
+        IrExpr **parts = (IrExpr **)xcalloc(n, sizeof(IrExpr *));
+        Place *dp = ANEW(&el->arena, Place);
+        int places = 1;
+        dp->kind = PL_DYN;
+        dp->ty = e0.ty;
+        dp->n = n;
+        dp->index = ie;
+        dp->subs = ANEWN(&el->arena, Place *, n);
+        for (k = 0; k < n; k++) {
+            Value x = elems[k].ty == e0.ty ? elems[k] : elab_convert(el, elems[k], e0.ty, NULL, NULL, at);
+            if (x.kind == VAL_ERROR) {
+                free(parts);
+                return x;
+            }
+            parts[n - 1 - k] = el_to_ir(el, &x, at);
+            dp->subs[k] = elems[k].place;
+            if (!dp->subs[k])
+                places = 0;
+        }
+        r = el_hw(el, e0.ty, ir_index(el->design->arena, n == 1 ? parts[0] : ir_concat(el->design->arena, n, parts, at),
+                                      ie, e0.ty->width, at));
+        free(parts);
+        if (places)
+            r.place = dp;
+        return r;
+    }
 }
 
 static int ce_check_index_width(Elab *el, Ty *it, uint32_t len, Span at, int is_bits)
@@ -2672,10 +2789,15 @@ Value el_index(Elab *el, Value base, Value idx, Span at, Expr *idx_expr)
                 base = hv;
             }
         } else {
-            /* array of bundles / instances: mux chain is not expressible for places */
-            el_error(el, at, "an array of %s can only be indexed with a compile-time index",
-                     t && t->elem ? ty_str(t->elem) : "values");
-            return val_error();
+            /* array of bundles: a mux per field for reads, a decode for writes */
+            IrExpr *ie;
+            uint32_t n = base.u.list->n;
+            if (!el->design)
+                return ce_need_design(el, at);
+            if (!n || !ce_check_index_width(el, idx.ty, n, idx_expr ? idx_expr->span : at, 0))
+                return val_error();
+            ie = el_to_ir(el, &idx, at);
+            return ce_dyn_pick(el, base.u.list->v, n, ie, at);
         }
     }
     if (!el->design)
@@ -2692,6 +2814,7 @@ Value el_index(Elab *el, Value base, Value idx, Span at, Expr *idx_expr)
             *q = *base.place;
             q->index = ie;
             q->elem_width = t->elem->width;
+            q->len = t->len;
             q->width = t->elem->width;
             q->ty = t->elem;
             r.place = q;
@@ -2712,6 +2835,7 @@ Value el_index(Elab *el, Value base, Value idx, Span at, Expr *idx_expr)
             *q = *base.place;
             q->index = ie;
             q->elem_width = 1;
+            q->len = t->width;
             q->width = 1;
             q->ty = el->S->t_bool;
             r.place = q;
@@ -3228,7 +3352,9 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
     Value result = val_void(el->S);
     int hw = 0, ok = 1;
     struct BlkCtx *saved_blk;
-    int saved_in_fn;
+    int saved_in_fn, saved_fn_active, saved_ret_have;
+    Value saved_fn_path, saved_ret_cond, saved_ret_val;
+    Ty *saved_ret_ty;
     char frame[256];
     TERN_UNUSED(expect);
     if (el->depth >= CE_MAX_DEPTH) {
@@ -3361,8 +3487,18 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
     snprintf(frame, sizeof frame, "%s()", it->name.name);
     saved_blk = el->blk;
     saved_in_fn = el->in_fn;
+    saved_fn_active = el->fn_active;
+    saved_fn_path = el->fn_path;
+    saved_ret_have = el->fn_ret_have;
+    saved_ret_cond = el->fn_ret_cond;
+    saved_ret_val = el->fn_ret_val;
+    saved_ret_ty = el->fn_ret_ty;
     el->blk = NULL;
     el->in_fn = 1;
+    el->fn_active = 1;
+    el->fn_path = el_mk_bool(el, 1);
+    el->fn_ret_have = 0;
+    el->fn_ret_ty = NULL;
     el->depth++;
     if (it->u.fn.body) {
         Value tail = val_void(el->S);
@@ -3370,26 +3506,44 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
             int q = el->quiet;
             Ty *rt;
             el->quiet = 1;
-            rt = elab_eval_type(el, it->u.fn.ret, genv);
+            rt = elab_eval_type(el, it->u.fn.ret, benv);
             el->quiet = q;
             el->quiet_errors = 0;
             el->tail_expect = rt && rt->kind != TY_ERROR ? rt : NULL;
+            el->fn_ret_ty = el->tail_expect;
         }
         el_exec_stmts(el, it->u.fn.body->stmts, it->u.fn.body->nstmts, benv, it->u.fn.body->tail, &tail);
         if (el->returned) {
             result = el->ret;
             el->returned = 0;
+        } else if (el->fn_ret_have && el->fn_ret_val.kind != VAL_ERROR) {
+            /* some paths returned early: they take priority over the tail */
+            if (tail.kind == VAL_VOID || tail.kind == VAL_ERROR) {
+                if (tail.kind == VAL_VOID && it->u.fn.ret)
+                    el_error(el, it->u.fn.body->span, "`%s` does not return a value on every path", it->name.name);
+                result = val_error();
+            } else {
+                result = el_unify_mux(el, el->fn_ret_cond, el->fn_ret_val, tail, el->fn_ret_ty, at);
+            }
+        } else if (el->fn_ret_have) {
+            result = val_error();
         } else {
             result = tail;
         }
     }
+    el->fn_active = saved_fn_active;
+    el->fn_path = saved_fn_path;
+    el->fn_ret_have = saved_ret_have;
+    el->fn_ret_cond = saved_ret_cond;
+    el->fn_ret_val = saved_ret_val;
+    el->fn_ret_ty = saved_ret_ty;
     el->depth--;
     el->blk = saved_blk;
     el->in_fn = saved_in_fn;
     if (hw)
         el->hw_calls.len--;
     if (it->u.fn.ret && result.kind != VAL_ERROR && !el->limit_hit) {
-        Ty *rt = elab_eval_type(el, it->u.fn.ret, genv);
+        Ty *rt = elab_eval_type(el, it->u.fn.ret, benv);
         if (rt->kind != TY_ERROR) {
             if (result.kind == VAL_VOID) {
                 el_error(el, it->u.fn.body ? it->u.fn.body->span : at, "`%s` must return a %s value",
@@ -3738,6 +3892,109 @@ Value el_call_value(Elab *el, Value fnv, Expr *call, Env *env, Ty *expect)
 }
 
 /* method call x.name(args) */
+/* Built-in methods of stream bundles (§8.1: "the standard Stream has
+ * fire(), map(f) and skid()"): `s.map(f)` is the stream with its data passed
+ * through fn f (valid passes through, ready flows back to s); `s.skid()`
+ * instantiates std::stream::Skid<T> on s and returns its output. Returns 0
+ * when `name` is not one of them. */
+static int ce_stream_method(Elab *el, Value base, const char *name, Expr *call, Env *env, Value *out)
+{
+    Ty *t = base.ty;
+    Item *bi = t->def;
+    int kv = ty_field_index(t, intern_cstr("valid")), kd = ty_field_index(t, intern_cstr("data"));
+    int kr = ty_field_index(t, intern_cstr("ready"));
+    Span at = call->span;
+    GenericParams *gp = &bi->u.bundle.generics;
+    if (kv < 0 || kd < 0 || base.kind != VAL_BUNDLE || gp->n != 1 || gp->items[0].kind != GENERIC_TYPE)
+        return 0;
+    if (strcmp(name, "map") == 0) {
+        Value fnv, d, r;
+        ElabArgs args;
+        ElabArg a;
+        Ty *rt;
+        uint32_t i;
+        if (call->u.call.nargs != 1) {
+            el_error(el, at, "`map` takes one function");
+            *out = val_error();
+            return 1;
+        }
+        fnv = elab_eval(el, call->u.call.args[0].value, env, NULL);
+        if (fnv.kind != VAL_FN) {
+            if (fnv.kind != VAL_ERROR)
+                el_error(el, call->u.call.args[0].value->span, "`map` needs a function");
+            *out = val_error();
+            return 1;
+        }
+        d = el_call_fn(el, fnv.u.fn, &base.u.list->v[kd], NULL, NULL, 1, at, NULL);
+        if (d.kind == VAL_ERROR || !d.ty || !d.ty->hw) {
+            if (d.kind != VAL_ERROR)
+                el_error(el, at, "the function given to `map` must return a hardware value");
+            *out = val_error();
+            return 1;
+        }
+        a.name = gp->items[0].name.name;
+        a.val = val_type(el->S, d.ty);
+        a.span = at;
+        args.items = &a;
+        args.n = 1;
+        rt = el_type_item_vals(el, bi, t->file, NULL, &args, at);
+        if (rt->kind != TY_BUNDLE || rt->nfields != t->nfields) {
+            *out = val_error();
+            return 1;
+        }
+        r = val_list(&el->arena, VAL_BUNDLE, rt, rt->nfields);
+        for (i = 0; i < rt->nfields; i++)
+            r.u.list->v[i] = (int)i == kd ? d : base.u.list->v[i]; /* ready keeps its place: it flows back */
+        *out = r;
+        return 1;
+    }
+    if (strcmp(name, "skid") == 0) {
+        Package *pkg = sema_find_package(el->S, "std::stream");
+        Symbol sym;
+        ElabArgs args;
+        ElabArg a;
+        ValModule *vm;
+        Value mv, inst, inp;
+        Expr *fake;
+        if (call->u.call.nargs != 0 || !pkg || !sema_lookup_member(el->S, NULL, pkg, intern_cstr("Skid"), &sym, NULL) ||
+            sym.kind != SYM_ITEM) {
+            el_error(el, at, "`skid()` needs std::stream::Skid and takes no arguments");
+            *out = val_error();
+            return 1;
+        }
+        a.name = NULL;
+        a.val = val_type(el->S, base.u.list->v[kd].ty ? base.u.list->v[kd].ty : t->fields[kd].ty);
+        a.span = at;
+        args.items = &a;
+        args.n = 1;
+        vm = elab_bind_module(el, sym.item, sym.file, &args, at);
+        if (!vm) {
+            *out = val_error();
+            return 1;
+        }
+        memset(&mv, 0, sizeof mv);
+        mv.kind = VAL_MODULE;
+        mv.u.mod = vm;
+        fake = ANEW(&el->arena, Expr);
+        *fake = *call;
+        fake->u.call.nargs = 0;
+        fake->u.call.args = NULL;
+        fake->u.call.domain = NULL;
+        inst = el_instance(el, fake, env, NULL, at, mv);
+        if (inst.kind != VAL_INST) {
+            *out = val_error();
+            return 1;
+        }
+        inp = el_inst_field(el, inst, intern_cstr("in"), at);
+        if (inp.place)
+            el_assign(el, inp.place, base, call->u.call.callee->u.field.base, NULL, at);
+        *out = el_inst_field(el, inst, intern_cstr("out"), at);
+        return 1;
+    }
+    TERN_UNUSED(kr);
+    return 0;
+}
+
 static Value ce_method(Elab *el, Expr *call, Env *env, Ty *expect)
 {
     Expr *callee = call->u.call.callee;
@@ -3801,6 +4058,11 @@ static Value ce_method(Elab *el, Expr *call, Env *env, Ty *expect)
                 }
                 return el_call_value(el, fv, call, env, expect);
             }
+        }
+        {
+            Value r;
+            if (ce_stream_method(el, base, name, call, env, &r))
+                return r;
         }
         el_error(el, callee->u.field.name.span, "bundle `%s` has no method `%s`", ty_str(base.ty), name);
         return val_error();
@@ -4460,9 +4722,12 @@ static Value ce_mod_lookup(CeModVec *v, Env *env, const char *name, int *found)
 
 typedef struct CeArmRun {
     Value cond;               /* hw bool, or const true for a default */
+    Value excl;               /* inside fns: the condition under which this arm runs
+                                 (cond and not the earlier arms); VAL_VOID if unknown */
     IrStmtList stmts;
     CeModVec mods;
     Value val;
+    int returned;             /* the arm ended in a `return` */
 } CeArmRun;
 
 /* merges locals modified in the arms: value = mux chain over the arm
@@ -4519,8 +4784,11 @@ static void ce_run_arm(Elab *el, CeArmRun *arm, Stmt *body_stmt, Expr *body_expr
     uint32_t mark = (uint32_t)el->undo.len;
     IrStmtList *saved = el->blk ? el->blk->out : NULL;
     Env *aenv = elab_env_new(el, env, NULL);
+    Value saved_path = el->fn_path;
     if (el->blk)
         el->blk->out = &arm->stmts;
+    if (el->fn_active && arm->excl.kind != VAL_VOID)
+        el->fn_path = el_and(el, el->fn_path, arm->excl, body_stmt ? body_stmt->span : body_expr->span);
     el->undo_depth++;
     if (pat)
         el_bind_pattern(el, pat, subj, aenv, 0);
@@ -4542,10 +4810,30 @@ static void ce_run_arm(Elab *el, CeArmRun *arm, Stmt *body_stmt, Expr *body_expr
             el_exec_stmt(el, body_stmt, aenv);
     }
     el->undo_depth--;
+    el->fn_path = saved_path;
+    if (el->returned && el->fn_active) {
+        /* a `return` under this arm's condition was recorded in fn_ret_*;
+         * the code after the branch still runs for the other paths */
+        arm->returned = 1;
+        el->returned = 0;
+    }
     ce_collect_restore(el, mark, env, &arm->mods);
     if (el->blk)
         el->blk->out = saved;
     elab_env_free(aenv);
+}
+
+/* every arm of a branch returned: the branch as a whole returns */
+static void ce_all_returned(Elab *el, CeArmRun *arms, uint32_t n)
+{
+    uint32_t a;
+    if (!el->fn_active || !el->fn_ret_have || !n)
+        return;
+    for (a = 0; a < n; a++)
+        if (!arms[a].returned)
+            return;
+    el->ret = el->fn_ret_val;
+    el->returned = 1;
 }
 
 static IrBlock ce_finish(Elab *el, IrStmtList *l)
@@ -4575,6 +4863,12 @@ static Value ce_if_hw(Elab *el, Value c, Block *then_b, Expr *else_e, Env *env, 
     then_expr.u.block = then_b;
     arms[0].cond = c;
     arms[1].cond = el_mk_bool(el, 1);
+    arms[0].excl = val_void(el->S);
+    arms[1].excl = val_void(el->S);
+    if (el->fn_active) {
+        arms[0].excl = c;
+        arms[1].excl = el_not(el, c, at);
+    }
     ce_run_arm(el, &arms[0], NULL, &then_expr, NULL, val_void(el->S), env, expect, want_value);
     if (else_e)
         ce_run_arm(el, &arms[1], NULL, else_e, NULL, val_void(el->S), env, expect, want_value);
@@ -4586,10 +4880,17 @@ static Value ce_if_hw(Elab *el, Value c, Block *then_b, Expr *else_e, Env *env, 
         ir_stmts_finish(&el->arena, &arms[1].stmts);
     }
     ce_merge_arms(el, arms, 2, 1, env, at);
-    if (want_value) {
+    if (else_e)
+        ce_all_returned(el, arms, 2);
+    if (want_value && el->returned) {
+        r = val_void(el->S); /* both arms returned from the fn */
+    } else if (want_value) {
         if (!else_e) {
             el_error(el, at, "an `if` used as a value needs an `else`");
             r = val_error();
+        } else if (arms[0].returned || arms[1].returned) {
+            /* the arm that returned has no value: the fn result covers that path */
+            r = arms[0].returned ? arms[1].val : arms[0].val;
         } else {
             r = el_unify_mux(el, c, arms[0].val, arms[1].val, expect, at);
         }
@@ -4701,9 +5002,24 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
     CeArmRun *arms;
     Value r = val_void(el->S);
     int exhaustive;
+    /* A statement match in a comb block may leave values out (§6.2): the
+     * paths without an arm assign nothing, and the full-assignment check
+     * (src/check) reports a var or output left unassigned on them ("`x`
+     * may be unassigned when `op == Nop`"). Elsewhere a match must be
+     * exhaustive. */
+    int stmt_comb = !want_value && el->blk && !el->blk->clocked && !el->in_fn;
+    int covered = 1;
     if (subj.kind == VAL_ERROR)
         return subj;
-    if (subj.ty)
+    if (subj.ty && stmt_comb && subj.kind == VAL_HW) {
+        int q = el->quiet, qe = el->quiet_errors;
+        el->quiet = 1;
+        el->quiet_errors = 0;
+        ce_check_exhaustive(el, e, subj.ty, env);
+        covered = el->quiet_errors == 0;
+        el->quiet = q;
+        el->quiet_errors = qe;
+    } else if (subj.ty)
         ce_check_exhaustive(el, e, subj.ty, env);
     else if (subj.kind == VAL_TUPLE) {
         /* tuple of mixed values: build its type for the check */
@@ -4759,14 +5075,20 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
         for (a = 0; simple && a < n; a++)
             if (!ce_case_vals(el, e->u.match.arms[a].pat, subj.ty, env, &vals[a], &defs[a]))
                 simple = 0;
+        Value prev = el_mk_bool(el, 0);
         for (a = 0; a < n; a++) {
             MatchArm *arm = &e->u.match.arms[a];
             arms[a].cond = el_match_test(el, arm->pat, subj, env);
+            arms[a].excl = val_void(el->S);
+            if (el->fn_active && arms[a].cond.kind != VAL_ERROR) {
+                arms[a].excl = el_and(el, arms[a].cond, el_not(el, prev, arm->span), arm->span);
+                prev = el_or(el, prev, arms[a].cond, arm->span);
+            }
             ce_run_arm(el, &arms[a], arm->body, NULL, arm->pat, subj, env, expect, want_value);
         }
-        exhaustive = 1;
+        exhaustive = covered;
         if (simple) {
-            IrCaseArm *ca = (IrCaseArm *)xcalloc(n ? n : 1, sizeof(IrCaseArm));
+            IrCaseArm *ca = (IrCaseArm *)xcalloc(n + 1, sizeof(IrCaseArm));
             uint32_t k = 0;
             for (a = 0; a < n; a++) {
                 if (defs[a]) {
@@ -4782,6 +5104,8 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
             }
             for (; a + 1 < n; a++)
                 ir_stmts_finish(&el->arena, &arms[a + 1].stmts);
+            if (!covered && (k == 0 || ca[k - 1].nvals != 0))
+                k++; /* the values without an arm: an empty default (calloc'ed) */
             ce_emit(el, ir_stmt_case(el->design->arena, el_to_ir(el, &subj, e->span), k, ca, e->span));
             free(ca);
         } else if (el->blk && ce_arms_have_stmts(arms, n)) {
@@ -4826,10 +5150,17 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
         free(defs);
     }
     ce_merge_arms(el, arms, n, exhaustive, env, e->span);
-    if (want_value && n) {
-        r = arms[n - 1].val;
-        for (a = n - 1; a-- > 0;)
-            r = el_unify_mux(el, arms[a].cond, arms[a].val, r, expect, e->span);
+    ce_all_returned(el, arms, n);
+    if (want_value && n && el->returned) {
+        r = val_void(el->S); /* every arm returned from the fn */
+    } else if (want_value && n) {
+        uint32_t last = n;
+        while (last > 0 && arms[last - 1].returned)
+            last--;
+        r = last ? arms[last - 1].val : val_void(el->S);
+        for (a = last ? last - 1 : 0; a-- > 0;)
+            if (!arms[a].returned)
+                r = el_unify_mux(el, arms[a].cond, arms[a].val, r, expect, e->span);
     }
     for (a = 0; a < n; a++)
         vec_free(arms[a].mods);
@@ -4985,6 +5316,10 @@ Place *el_place_of(Elab *el, Expr *e, Env *env)
         el_error(el, e->span, "cannot assign to instance `%s`", el_text(e));
         return NULL;
     }
+    if (v.kind == VAL_MEM) {
+        el_error(el, e->span, "a memory has no whole-value assignment; write one entry: `%s[addr] = ..`", el_text(e));
+        return NULL;
+    }
     {
         Binding *b = NULL;
         if (e->kind == EXPR_PATH && e->u.path.nsegs == 1 && e->u.path.segs[0].name.name)
@@ -5062,6 +5397,15 @@ Value el_read_place(Elab *el, Place *p)
         Value v = val_list(&el->arena, p->ty && p->ty->kind == TY_BUNDLE ? VAL_BUNDLE : VAL_ARRAY, p->ty, p->n);
         for (i = 0; i < p->n; i++)
             v.u.list->v[i] = el_read_place(el, p->subs[i]);
+        v.place = p;
+        return v;
+    }
+    case PL_DYN: {
+        Value *vs = ANEWN(&el->arena, Value, p->n ? p->n : 1);
+        Value v;
+        for (i = 0; i < p->n; i++)
+            vs[i] = el_read_place(el, p->subs[i]);
+        v = ce_dyn_pick(el, vs, p->n, p->index, span_none());
         v.place = p;
         return v;
     }
@@ -5566,15 +5910,42 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
         }
         return;
     }
-    case STMT_RETURN:
-        if (el->undo_depth) {
-            el_error(el, s->span, "`return` under a condition on signals is not supported");
-            el_help(el, "compute the result with an `if` expression instead");
+    case STMT_RETURN: {
+        Value v;
+        if (el->blk && !el->in_fn) {
+            el_error(el, s->span, "`return` outside a function");
             return;
         }
-        el->ret = s->u.ret ? elab_eval(el, s->u.ret, env, NULL) : val_void(S);
+        v = s->u.ret ? elab_eval(el, s->u.ret, env, el->fn_active ? el->fn_ret_ty : NULL) : val_void(S);
+        if (el->fn_active && el->fn_ret_ty && v.kind != VAL_ERROR && v.kind != VAL_VOID)
+            v = elab_convert(el, v, el->fn_ret_ty, s->u.ret, "the return type", s->u.ret ? s->u.ret->span : s->span);
+        if (el->fn_active && (el->fn_ret_have || el->fn_path.kind != VAL_BOOL)) {
+            /* returns under conditions on signals: the result is a mux over
+             * the return points, the earliest one taking priority */
+            if (v.kind == VAL_ERROR || v.kind == VAL_VOID) {
+                if (v.kind == VAL_VOID)
+                    el_error(el, s->span, "a `return` under a condition on signals needs a value");
+                el->ret = val_error();
+                el->returned = 1;
+                return;
+            }
+            if (!el->fn_ret_have) {
+                el->fn_ret_val = v;
+                el->fn_ret_cond = el->fn_path;
+                el->fn_ret_have = 1;
+            } else if (el->fn_ret_val.kind != VAL_ERROR) {
+                el->fn_ret_val = el_maybe_temp(el, el_unify_mux(el, el->fn_ret_cond, el->fn_ret_val, v, el->fn_ret_ty,
+                                                                s->span), s->span);
+                el->fn_ret_cond = el_or(el, el->fn_ret_cond, el->fn_path, s->span);
+            }
+            el->ret = el->fn_ret_val;
+            el->returned = 1;
+            return;
+        }
+        el->ret = v;
         el->returned = 1;
         return;
+    }
     case STMT_ITEM:
         if (s->u.item->kind == ITEM_PROPERTY || s->u.item->kind == ITEM_SEQUENCE)
             el_error(el, s->span, "properties are declared at module level");
@@ -5833,6 +6204,23 @@ Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
     case EXPR_TYPE: {
         Ty *t = elab_eval_type(el, e->u.type, env);
         return t->kind == TY_ERROR ? val_error() : val_type(S, t);
+    }
+    case EXPR_QPATH: {
+        Ty *t = elab_eval_type(el, e->u.qpath.type, env);
+        Value base;
+        uint32_t i;
+        if (t->kind == TY_ERROR)
+            return val_error();
+        base = val_type(S, t);
+        for (i = 0; i < e->u.qpath.path.nsegs && base.kind != VAL_ERROR; i++) {
+            PathSeg *s = &e->u.qpath.path.segs[i];
+            if (!s->name.name)
+                return val_error();
+            base = el_member(el, base, s->name.name, s->name.span, env);
+            if (s->has_args)
+                base = el_apply_generics(el, base, s, env, i + 1 == e->u.qpath.path.nsegs ? expect : NULL);
+        }
+        return base;
     }
     case EXPR_TEMPORAL:
     case EXPR_DELAY:

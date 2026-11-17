@@ -1,0 +1,38 @@
+// Dynamic indices into arrays whose length is not a power of two (§5.5): an
+// index past the last element reads 0 and a write through it is skipped,
+// even when the array shares its signal with other fields. Driven by
+// tests/unit/test_elab.c.
+struct Slots { tag: u8, slots: [u8; 3] }
+
+module IndexRange {
+    in clk: clock
+    in rst: reset
+    in we: bool
+    in widx: uint<2>
+    in wdata: u8
+    in ridx: uint<2>
+    in bidx: uint<3>
+    out rdata: u8
+    out tag: u8
+    out bit: bool
+    out vsel: u8
+
+    reg s: Slots = Slots { tag: 0xA5, slots: [0, 0, 0] }
+    reg flags: uint<5> = 0b10110
+    var v: [u8; 3]
+
+    on clk {
+        if we {
+            s.slots[widx] = wdata
+            flags[bidx] = true
+        }
+    }
+    comb {
+        v = [1, 2, 3]
+        v[widx] = 0xEE
+    }
+    rdata = s.slots[ridx]
+    tag = s.tag
+    bit = flags[bidx]
+    vsel = v[ridx]
+}

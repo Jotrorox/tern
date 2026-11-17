@@ -1,0 +1,77 @@
+struct S (8 bits) { f: uint<8> @0 }
+module Sub
+  0: in a: uint<8>
+  1: out y: uint<8>
+  assign y = a
+end
+module M_8 "M<8>" top
+  param W = 32'h8
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in a: uint<8> @0
+  3: in b: uint<8> @0
+  4: in c: bool @0
+  5: in x: uint<8> @0
+  6: in d: uint<8> @0
+  7: in bus_req (bus.req): bool @0
+  8: out bus_ack (bus.ack): bool @0 flipped
+  9: out y: uint<8> @0
+  10: out q_out: uint<8> @0
+  11: wire w: uint<8>
+  12: var v: uint<8>
+  13: reg r: uint<8> @0 = 8'h0
+  14: reg q: uint<8> @0 = 8'h0
+  15: wire and_ab: uint<8>
+  16: wire sel: uint<8>
+  17: wire cat: bit<16>
+  18: wire part: bit<4>
+  19: wire wrap: uint<8>
+  20: wire wide: uint<9>
+  21: wire sx: sint<9>
+  22: wire sw: sint<9>
+  23: var acc: uint<8>
+  24: wire m_a (m.a): uint<8>
+  25: wire m_y (m.y): uint<8>
+  26: wire my: uint<8>
+  27: mem ram: uint<8> x 256
+  28: wire s: S
+  assign w = a
+  assign and_ab = (a & b)
+  assign y = ((x == 8'h0) ? a : b)
+  assign sel = (c ? a : b)
+  assign cat = {a, b}
+  assign part = x[3+:4]
+  assign wrap = (a + b)
+  assign wide = (zext9(a) + zext9(b))
+  assign sx = zext9(x)
+  assign sw = zext9(zext9(x))
+  assign bus_ack = bus_req
+  assign m_a = a
+  assign my = m_y
+  assign s = {v}
+  assign q_out = (((((q + r) + my) + acc) + s.f) + ram[x])
+  comb {
+    v = a
+  }
+  on 0 regs(r, q) {
+    r = a
+    q = d
+  }
+  comb {
+    acc = 8'h0
+    acc = (acc + zext8(x[0]))
+    acc = (acc + zext8(x[1]))
+    acc = (acc + zext8(x[2]))
+    acc = (acc + zext8(x[3]))
+    acc = (acc + zext8(x[4]))
+    acc = (acc + zext8(x[5]))
+    acc = (acc + zext8(x[6]))
+    acc = (acc + zext8(x[7]))
+  }
+  on 0 regs() {
+    ram[a] = b
+  }
+  inst m: Sub (a = m_a, y -> m_y)
+  assert property p @0: always (c |=> (c || !c))
+end

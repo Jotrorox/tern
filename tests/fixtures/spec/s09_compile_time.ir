@@ -1,0 +1,26 @@
+module Rom_16 "Rom<16>"
+  param Depth = 32'h10
+  0: in addr: uint<4>
+  1: out data: uint<32>
+  2: wire a: uint<4>
+  assign a = addr
+  assign data = 512'h90bf1d91e7b82d077eb17cbd09b64c2b97d2d988e0d5e91e79dcb8a40edb88329e6495a3e963a535706af48f076dc419990951baee0e612c7707309600000000[a]:32
+end
+module CompileTime top
+  0: in addr: uint<4>
+  1: in x: uint<8>
+  2: out data: uint<32>
+  3: out rev: uint<8>
+  4: wire rom_addr (rom.addr): uint<4>
+  5: wire rom_data (rom.data): uint<32>
+  6: wire _t0: uint<8>
+  7: wire _t1: uint<8>
+  8: wire _t2: uint<8>
+  assign rom_addr = addr
+  assign data = rom_data
+  assign _t0 = {{{x[0], 8'h0[0+:7]}[7], x[1], {x[0], 8'h0[0+:7]}[0+:6]}[6+:2], x[2], {{x[0], 8'h0[0+:7]}[7], x[1], {x[0], 8'h0[0+:7]}[0+:6]}[0+:5]}
+  assign _t1 = {{_t0[5+:3], x[3], _t0[0+:4]}[4+:4], x[4], {_t0[5+:3], x[3], _t0[0+:4]}[0+:3]}
+  assign _t2 = {{_t1[3+:5], x[5], _t1[0+:2]}[2+:6], x[6], {_t1[3+:5], x[5], _t1[0+:2]}[0]}
+  assign rev = {_t2[1+:7], x[7]}
+  inst rom: Rom_16 (addr = rom_addr, data -> rom_data)
+end

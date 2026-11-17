@@ -1,0 +1,68 @@
+enum UartTx_50000000_115200_State (2 bits, tag 2, binary) { Idle = 2'h0, Start = 2'h1, Data = 2'h2, Stop = 2'h3 }
+module UartTx_50000000_115200 "UartTx<50000000, 115200>" in uart
+  param ClkHz = 32'h2faf080
+  param Baud = 32'h1c200
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in tx_valid (tx.valid): bool @0
+  3: in tx_data (tx.data): uint<8> @0
+  4: out tx_ready (tx.ready): bool @0 flipped
+  5: out txd: bool @0
+  6: reg state: UartTx_50000000_115200_State @0 = 2'h0
+  7: reg tick: uint<9> @0 = 9'h0
+  8: reg bit: uint<3> @0 = 3'h0
+  9: reg shift: uint<8> @0 = 8'h0
+  10: wire baud_tick: bool
+  assign baud_tick = (tick == 9'h1b1)
+  assign tx_ready = (state == 2'h0)
+  assign txd = (((state == 2'h0) || (state == 2'h3)) ? 1'h1 : ((state == 2'h1) ? 1'h0 : shift[0]))
+  on 0 regs(state, tick, bit, shift) {
+    tick = ((baud_tick || (state == 2'h0)) ? 9'h0 : (tick + 9'h1))
+    case state {
+      2'h0 => {
+        if tx_valid {
+          shift = tx_data
+          state = 2'h1
+        }
+      }
+      2'h1 => {
+        if baud_tick {
+          state = 2'h2
+        }
+      }
+      2'h2 => {
+        if baud_tick {
+          shift = (shift >> 4'h1)
+          bit = (bit + 3'h1)
+          if (bit == 3'h7) {
+            state = 2'h3
+          }
+        }
+      }
+      2'h3 => {
+        if baud_tick {
+          state = 2'h0
+        }
+      }
+    }
+  }
+end
+module UartTop in uart top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in tx_valid (tx.valid): bool @0
+  3: in tx_data (tx.data): uint<8> @0
+  4: out tx_ready (tx.ready): bool @0 flipped
+  5: out txd: bool @0
+  6: wire u_tx_valid (u.tx.valid): bool @0
+  7: wire u_tx_data (u.tx.data): uint<8> @0
+  8: wire u_tx_ready (u.tx.ready): bool @0
+  9: wire u_txd (u.txd): bool @0
+  assign u_tx_valid = tx_valid
+  assign u_tx_data = tx_data
+  assign tx_ready = u_tx_ready
+  assign txd = u_txd
+  inst u: UartTx_50000000_115200 (clk = clk, rst = rst, tx_valid = u_tx_valid, tx_data = u_tx_data, tx_ready -> u_tx_ready, txd -> u_txd)
+end

@@ -32,6 +32,8 @@ cl %TERN_CFLAGS% tests\unit\test_backend.c /Fe:build\test_backend.exe /Fo:build\
 if errorlevel 1 exit /b 1
 cl %TERN_CFLAGS% tests\unit\test_lsp.c /Fe:build\test_lsp.exe /Fo:build\test_lsp.obj
 if errorlevel 1 exit /b 1
+cl %TERN_CFLAGS% tests\unit\test_elab.c /Fe:build\test_elab.exe /Fo:build\test_elab.obj
+if errorlevel 1 exit /b 1
 cl %TERN_CFLAGS% tests\run.c /Fe:tests\run.exe /Fo:build\run.obj
 if errorlevel 1 exit /b 1
 
@@ -52,6 +54,8 @@ if errorlevel 1 exit /b 1
 build\test_backend.exe
 if errorlevel 1 exit /b 1
 build\test_lsp.exe
+if errorlevel 1 exit /b 1
+build\test_elab.exe tern.exe
 if errorlevel 1 exit /b 1
 tests\run.exe --tern tern.exe
 if errorlevel 1 exit /b 1

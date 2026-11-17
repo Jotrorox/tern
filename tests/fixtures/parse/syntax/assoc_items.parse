@@ -1,0 +1,16 @@
+(file
+  (struct@2:1 Flags
+    (field carry bool)
+    (field zero bool)
+    (const@7:5 NONE pub (doc "No flag set.") : Flags = (struct Flags (carry false) (zero false)))
+    (fn@8:5 both const (params (a bool)) -> Flags
+      (block
+        (tail (struct Flags (carry a) (zero a))))))
+  (bundle@11:1 Link (generics (T type))
+    (field data T)
+    (flip ack bool)
+    (const@14:5 DEPTH : uint = 2)
+    (fn@15:5 busy (params) -> bool
+      (block
+        (tail (not (. self ack))))))
+  (comments 2))

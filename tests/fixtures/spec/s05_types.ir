@@ -1,0 +1,95 @@
+enum Cmd (50 bits, tag 2, binary) { Write = 2'h0 struct { addr: uint<16>, data: uint<32> }, Read = 2'h1 struct { addr: uint<16> }, Idle = 2'h2 }
+enum Op (2 bits, tag 2, binary) { Nop = 2'h0, Add = 2'h1, Sub = 2'h2, Load = 2'h3 }
+enum Hot (3 bits, tag 3, onehot) { A = 3'h1, B = 3'h2, C = 3'h4 }
+enum Phase (2 bits, tag 2, gray) { P0 = 2'h0, P1 = 2'h1, P2 = 2'h3, P3 = 2'h2 }
+struct Pixel (24 bits) { r: uint<8> @16, g: uint<8> @8, b: uint<8> @0 }
+module Types top
+  domain 0 "clk_b" clock=clk_b reset=none
+  0: in clk_a: clock
+  1: in clk_b: clock
+  2: in grad: uint<16>
+  3: in payload: uint<32>
+  4: in c: Cmd
+  5: in n: uint<5>
+  6: in m: uint<7>
+  7: in sa: sint<5>
+  8: in sb: sint<7>
+  9: in raw: bit<8>
+  10: in i: uint<4>
+  11: in op: Op
+  12: in words: [uint<8>; 4]
+  13: out grey: uint<10>
+  14: out a: uint<16>
+  15: out cmd: Cmd
+  16: out sum: uint<8>
+  17: out wrap: uint<7>
+  18: out prod: uint<12>
+  19: out diff: sint<8>
+  20: out quot: uint<7>
+  21: out shl: uint<5>
+  22: out cat: bit<12>
+  23: out sl: bit<3>
+  24: out red: bool
+  25: out eq: bool
+  26: out conv: sint<9>
+  27: out sel: uint<8>
+  28: out hot: Hot
+  29: out ph: Phase
+  30: out x_q: uint<8>
+  31: out total: uint<8>
+  32: wire p: Pixel
+  33: wire g: uint<10>
+  34: wire narrow: uint<4>
+  35: wire reinterp: sint<5>
+  36: wire forget: bit<5>
+  37: wire nz: bool
+  38: wire rb: bit<24>
+  39: wire back: Pixel
+  40: wire ws: sint<6>
+  41: wire fromraw: uint<8>
+  42: wire tobits: bit<8>
+  43: wire ev: uint<8>
+  44: wire _t0: uint<8>
+  45: wire _t1: uint<8>
+  46: wire _t2: uint<8>
+  47: wire _t3: uint<8>
+  48: reg x: uint<8> @0 = 8'h0
+  assign p = {8'hff, 8'h0, grad[0+:8]}
+  assign g = ((zext10((zext9(p.r) + zext9(p.g))) + zext10(p.b)) / 10'h3)
+  assign grey = g
+  assign cmd = {2'h0, {16'h10, payload}}
+  assign a = (((c[48+:2] == 2'h0) || (c[48+:2] == 2'h1)) ? ((c[48+:2] == 2'h0) ? c[0+:48].addr : c[0+:16].addr) : 16'h0)
+  assign hot = 3'h2
+  assign ph = 2'h3
+  assign sum = (zext8(n) + zext8(m))
+  assign wrap = (zext7(n) + m)
+  assign prod = (zext12(n) * zext12(m))
+  assign diff = (sext8(sa) - sext8(sb))
+  assign quot = (m / 7'h3)
+  assign shl = (n << 3'h2)
+  assign cat = {n, m}
+  assign sl = m[2+:3]
+  assign red = ((&n || |m) || ^n)
+  assign eq = (zext7(n) == m)
+  assign narrow = zext4(m)
+  assign reinterp = zext5(n)
+  assign forget = zext5(sa)
+  assign nz = |n
+  assign rb = p
+  assign back = zext24(rb)
+  assign ws = zext6(zext6(n))
+  assign conv = sext9((sext7(ws) + sext7(sa)))
+  assign fromraw = raw
+  assign tobits = fromraw
+  assign sel = 128'h100f0e0d0c0b0a090807060504030201[i]:8
+  assign ev = 32'h281e140a[op]:8
+  assign _t0 = {(words[24+:8] + 8'h1), (words[16+:8] + 8'h1), (words[8+:8] + 8'h1), (words[0+:8] + 8'h1)}[0+:8]
+  assign _t1 = {(words[24+:8] + 8'h1), (words[16+:8] + 8'h1), (words[8+:8] + 8'h1), (words[0+:8] + 8'h1)}[8+:8]
+  assign _t2 = {(words[24+:8] + 8'h1), (words[16+:8] + 8'h1), (words[8+:8] + 8'h1), (words[0+:8] + 8'h1)}[16+:8]
+  assign _t3 = {(words[24+:8] + 8'h1), (words[16+:8] + 8'h1), (words[8+:8] + 8'h1), (words[0+:8] + 8'h1)}[24+:8]
+  assign total = (((_t0 + _t1) + _t2) + _t3)
+  assign x_q = x
+  on 0 regs(x) {
+    x = 8'hc8
+  }
+end

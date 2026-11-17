@@ -1,0 +1,26 @@
+module Lexical top
+  0: in a: uint<8>
+  1: in b: uint<8>
+  2: in s: sint<8>
+  3: in c: bool
+  4: in d: bool
+  5: in sel: uint<2>
+  6: out lits: uint<16>
+  7: out logical: bool
+  8: out syn: bool
+  9: out ops: uint<8>
+  10: out shifts: sint<8>
+  11: out prec: uint<17>
+  12: out member: bool
+  13: wire always: bool
+  14: wire until: bool
+  assign lits = 16'hf126
+  assign always = c
+  assign until = d
+  assign logical = ((always && !until) || (c ^ d))
+  assign syn = ((c && !d) || (c != d))
+  assign ops = (((((((((sext8(-zext9(a)) ^ ~b) ^ zext8(&a)) ^ zext8(|b)) ^ zext8(^a)) ^ zext8((zext16(a) * zext16(b)))) ^ (a + b)) ^ (a - b)) ^ (a & b)) ^ (a | b))
+  assign shifts = (((s << 4'h1) ^ (s >> 4'h2)) ^ (s >>> 4'h3))
+  assign prec = (zext17(a) + zext17((zext16(b) * 16'h2)))
+  assign member = (((sel == 2'h0) || (sel == 2'h2)) && ({a, b} == 16'h1234))
+end

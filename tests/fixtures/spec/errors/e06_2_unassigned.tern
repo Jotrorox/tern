@@ -1,0 +1,38 @@
+// §6.2: "If .Nop were missing, the compiler reports alu_out may be
+// unassigned when op == Nop with the path." `flags` has a default, so the
+// branches may skip it; an `if` without `else` leaves `w` unassigned.
+enum Op { Nop, Add, Sub, And }
+
+struct Flags {
+    carry: bool,
+    zero: bool,
+
+    const NONE: Flags = Flags { carry: false, zero: false }
+}
+
+module Alu {
+    in op: Op
+    in a: u32
+    in b: u32
+    in c: bool
+    out y: u32
+    out carry: bool
+    out z: u32
+
+    var alu_out: u32 // no default: every branch below must assign it
+    var flags: Flags = Flags::NONE // default given: branches may skip it
+    comb {
+        match op {
+            .Add => { alu_out = (a + b) as u32; flags.carry = (a + b)[32] },
+            .Sub => alu_out = a -% b,
+            .And => alu_out = a & b,
+        }
+    }
+    var w: u32
+    comb {
+        if c { w = a }
+    }
+    y = alu_out
+    carry = flags.carry
+    z = w
+}

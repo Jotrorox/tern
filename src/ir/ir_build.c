@@ -1372,6 +1372,8 @@ static void irb_dump_lv(const IrModule *m, const IrLvalue *lv, StrBuf *out)
         sb_printf(out, "[%u + ", lv->lo);
         irb_dump_expr(m, lv->index, out);
         sb_printf(out, "*%u +: %u]", lv->width, lv->width);
+        if (lv->len && m && lv->sig < m->nsigs && lv->len != (m->sigs[lv->sig].type->width - lv->lo) / lv->width)
+            sb_printf(out, " (of %u)", lv->len);
     } else if (m && lv->sig < m->nsigs && (lv->lo != 0 || lv->width != m->sigs[lv->sig].type->width)) {
         if (lv->field)
             sb_printf(out, ".%s", lv->field);

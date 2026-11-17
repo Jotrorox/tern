@@ -1,0 +1,16 @@
+// Associated const and fn items in struct and bundle bodies.
+struct Flags {
+    carry: bool,
+    zero: bool,
+
+    /// No flag set.
+    pub const NONE: Flags = Flags { carry: false, zero: false }
+    const fn both(a: bool) -> Flags { Flags { carry: a, zero: a } }
+}
+
+bundle Link<T: type> {
+    data: T
+    flip ack: bool
+    const DEPTH: uint = 2
+    fn busy() -> bool { !self.ack }
+}

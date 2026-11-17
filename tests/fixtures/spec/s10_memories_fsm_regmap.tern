@@ -1,0 +1,119 @@
+// §10 Memories (10.1), state machines (10.2) and register maps (10.3).
+
+// 10.1
+module Mems {
+    in clk: clock
+    in we: bool
+    in wr_addr: uint<10>
+    in wr_data: u32
+    in mask_we: bool
+    in mask: bit<4>
+    in rd_addr: uint<10>
+    in idx: uint<6>
+    out rd_q: u32
+    out old_q: u32
+    out lut_q: u8
+
+    mem buf: [u32; 1024] // inferred: block RAM if the target has it
+    #[ram(distributed)] mem lut: [u8; 64] = include_hex("sine.hex")
+    let rd = buf.read(rd_addr) // synchronous read port: value appears next cycle
+    let old = buf.read(rd_addr, rdw: .OldData)
+    on clk {
+        if we { buf[wr_addr] = wr_data } // write port
+        if mask_we { buf.write(wr_addr, wr_data, mask) } // byte enables
+    }
+    let async_rd = lut[idx] // combinational read: distributed/LUT RAM only
+    rd_q = rd
+    old_q = old
+    lut_q = async_rd
+}
+
+// 10.2
+enum State { Idle, Run, Finish }
+
+enum Event { None, Start, Done, Abort }
+
+module Fsm {
+    in clk: clock
+    in rst: reset
+    in event: Event
+    out is_busy: bool
+
+    reg state: State = .Idle
+    on clk {
+        state = match (state, event) {
+            (.Idle, .Start) => .Run,
+            (.Run, .Done) => .Finish,
+            (.Run, .Abort) => .Idle,
+            (.Finish, _) => .Idle,
+            (s, _) => s, // stay
+        }
+    }
+    let busy = state in [.Run, .Finish] // set membership
+    is_busy = busy
+}
+
+// 10.3
+enum Mode { Off, Slow, Fast, Turbo }
+
+regmap Ctrl {
+    0x00 ctrl: rw { enable: bool @0, mode: Mode @[1:2] },
+    0x04 status: ro { busy: bool @0, err: bool @1 },
+    0x08 count: rw u32,
+    0x10 fifo: wo u8 -> Stream<u8>, // write-only register exposed as a stream
+}
+
+// stand-ins for the spec's `cpu` and `Engine`
+module Engine {
+    in clk: clock
+    in rst: reset
+    in enable: bool
+    in mode: Mode
+    in in: Stream<u8>
+    out busy: bool
+    out err: bool
+
+    reg n: u8 = 0
+    in.ready = enable
+    on clk { if in.fire() { n = n +% 1 } }
+    busy = n != 0 and mode != .Off
+    err = false
+}
+
+module Cpu {
+    out axi_lite: std::bus::Axi4Lite<32, 32>
+    axi_lite.aw = Stream { valid: false, data: 0 }
+    axi_lite.w.valid = false
+    axi_lite.w.data.data = 0
+    axi_lite.w.data.strb = 0
+    axi_lite.b.ready = true
+    axi_lite.ar = Stream { valid: false, data: 0 }
+    axi_lite.r.ready = true
+}
+
+#[top]
+module Soc {
+    in clk: clock
+    in rst: reset
+    in event: Event
+    in we: bool
+    in addr: uint<10>
+    in data: u32
+    in idx: uint<6>
+    out busy: bool
+    out q: u32
+    out wave: u8
+    out engine_busy: bool
+
+    let fsm = Fsm(event)
+    busy = fsm.is_busy
+    let mems = Mems(we, wr_addr: addr, wr_data: data, mask_we: false, mask: 0, rd_addr: addr, idx)
+    q = mems.rd_q ^ mems.old_q
+    wave = mems.lut_q
+
+    let cpu = Cpu()
+    let regs = std::bus::RegisterFile<Ctrl>(bus: cpu.axi_lite)
+    let engine = Engine(enable: regs.ctrl.enable, mode: regs.ctrl.mode, in: regs.fifo)
+    regs.status = Ctrl::Status { busy: engine.busy, err: engine.err }
+    engine_busy = engine.busy
+}

@@ -1,0 +1,63 @@
+// `return` inside branches on signal values in fns inlined on signals: the
+// result is a mux over the return points, earlier ones taking priority.
+// Driven by tests/unit/test_elab.c.
+
+/// Index of the lowest set bit, 8 when there is none.
+fn first_set(x: u8) -> uint<4> {
+    for i in 0..8 {
+        if x[i] {
+            return i
+        }
+    }
+    8
+}
+
+fn classify(x: u8) -> uint<2> {
+    if x == 0 {
+        return 0
+    }
+    var y = x
+    if x < 16 {
+        y = y +% 100
+        if y == 105 {
+            return 3
+        }
+        return 1
+    }
+    match x {
+        0xFF => return 3,
+        _ => {},
+    }
+    2
+}
+
+fn both(c: bool, a: u8, b: u8) -> u8 {
+    if c {
+        return a
+    } else {
+        return b
+    }
+}
+
+fn clamp_add(a: u8, b: u8) -> u8 {
+    let s = a + b
+    if s > 255 {
+        return 255
+    }
+    s as u8
+}
+
+module FnReturn {
+    in x: u8
+    in a: u8
+    in b: u8
+    in c: bool
+    out first: uint<4>
+    out class: uint<2>
+    out pick: u8
+    out sum: u8
+    first = first_set(x)
+    class = classify(x)
+    pick = both(c, a, b)
+    sum = clamp_add(a, b)
+}

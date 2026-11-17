@@ -1,0 +1,109 @@
+// §5 Types: built-in types (5.1), width rules (5.2, table 5.2), conversions
+// (5.3), structs and enums (5.4), arrays (5.5) and clock-domain typing (5.6).
+use std::math::widen_signed
+
+struct Pixel { r: u8, g: u8, b: u8 } // 24 bits, r is the MSB byte
+enum Op { Nop, Add, Sub, Load } // 2 bits, binary encoded
+enum Cmd { // enum with payload: a tagged union
+    Write { addr: u16, data: u32 },
+    Read { addr: u16 },
+    Idle,
+}
+
+#[encoding(onehot)]
+enum Hot { A, B, C }
+
+#[encoding(gray)]
+enum Phase { P0, P1, P2, P3 }
+
+const fn double(x: uint) -> uint { x * 2 }
+fn inc(x: u8) -> u8 { x +% 1 }
+fn add8(a: u8, b: u8) -> u8 { a +% b }
+
+#[top]
+module Types {
+    in clk_a: clock
+    in clk_b: clock
+    in grad: u16
+    in payload: u32
+    in c: Cmd
+    in n: uint<5>
+    in m: uint<7>
+    in sa: sint<5>
+    in sb: sint<7>
+    in raw: bit<8>
+    in i: uint<4>
+    in op: Op
+    in words: [u8; 4]
+    out grey: uint<10>
+    out a: u16
+    out cmd: Cmd
+    out sum: uint<8>
+    out wrap: uint<7>
+    out prod: uint<12>
+    out diff: sint<8>
+    out quot: uint<7>
+    out shl: uint<5>
+    out cat: bit<12>
+    out sl: bit<3>
+    out red: bool
+    out eq: bool
+    out conv: sint<9>
+    out sel: u8
+    out hot: Hot
+    out ph: Phase
+    out x_q: u8
+    out total: u8
+
+    // 5.4
+    let p = Pixel { r: 255, g: 0, b: grad[7:0] }
+    let g = (p.r + p.g + p.b) / 3 // uint<10> / const -> uint<10>
+    grey = g
+    cmd = Cmd::Write { addr: 0x10, data: payload }
+    a = match c { .Write { addr, .. } | .Read { addr } => addr, .Idle => 0 }
+    hot = Hot::B
+    ph = .P2
+
+    // table 5.2
+    sum = n + m                      // uint<max(5,7)+1>
+    wrap = n +% m                    // uint<7>, wraps
+    prod = n * m                     // uint<5+7>
+    diff = sa - sb                   // sint<max(5,7)+1>
+    quot = m / 3                     // uint<7> / const
+    shl = n << 2                     // same width
+    cat = n ++ m                     // bit<12>
+    sl = m[4:2]                      // bit<3>
+    red = &n or |m or ^n             // bool
+    eq = n == m                      // operands widened
+
+    // 5.3 conversions
+    let narrow = m as uint<4>
+    let reinterp = n as sint<5>
+    let forget = sa as bit<5>
+    let nz = n as bool
+    let rb = bits(p)
+    let back = Pixel::from_bits(rb)
+    let ws = widen_signed(n)         // uint<5> -> sint<6>
+    conv = ws + sa                   // sint<6> + sint<5> -> sint<7> widened to sint<9>
+    let fromraw: uint<8> = raw       // bit<N> -> uint<N>
+    let tobits: bit<8> = fromraw     // and back
+    let lit: u8 = 200                // untyped literal fits
+    let typed = 42u8 +% (-3s12) as uint<8>
+    let filled: u16 = all1
+    let wide = 0xFFu<double(4)>
+
+    // 5.5 arrays: exact-width index, elaboration-time methods
+    let arr: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    sel = arr[i]
+    let by_op: [u8; 4] = [10, 20, 30, 40]
+    let ev = by_op[op]               // an enum index
+    static_assert(arr.len == 16)
+    total = words.map(inc).reduce(add8)   // logic built at elaboration time
+    let z = [words[0], words[1]].zip([words[2], words[3]])
+    let first = z[0]
+
+    // 5.6 a register in an explicit domain
+    reg x: uint<8> = 0 @ clk_b
+    on clk_b { x = lit }
+    x_q = x
+}

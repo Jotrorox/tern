@@ -2670,13 +2670,23 @@ static const char *const tern_std_chunks_5[] = {
     "/// * adds one port per regmap entry (the fields of `Map::Regs`): `rw`, `wo`,\n"
     "///   `w1c` and `rw1s` registers are outputs of type `Map::<Name>` (or the\n"
     "///   scalar type), `ro` registers are inputs, and `wo T -> Stream<T>` entries\n"
-    "///   are output streams that carry one beat per bus write;\n"
-    "/// * generates the decode on the RegBus: a write updates the addressed register\n"
-    "///   honouring `strb` (`w1c` clears the written one bits, `rw1s` sets them),\n"
-    "///   a read returns the addressed register (`ro`: the input; `wo`: zero),\n"
-    "///   writes to `ro` registers are ignored with OKAY, and any access to an\n"
-    "///   offset not in `Map` reports `err` (SLVERR on AXI4-Lite);\n"
-    "/// * resets every register to zero unless the regmap gives a reset value.\n"
+    "///   are output streams that carry one beat per bus write; a `w1c` register\n"
+    "///   also has an input `<name>_set` (bits the hardware sets) and an `rw1s`\n"
+    "///   register an input `<name>_clr` (bits the hardware clears);\n"
+    "/// * generates the decode on the RegBus, on word addresses (offsets are\n"
+    "///   aligned to the bus width; a register wider than the bus takes\n"
+    "///   consecutive words, least significant first): a write updates the\n"
+    "///   addressed register honouring `strb` (`w1c` clears the written one bits,\n"
+    "///   with a hardware set in the same cycle winning; `rw1s` sets them, winning\n"
+    "///   over a hardware clear), a read returns the addressed register in its\n"
+    "///   bus layout (fields at their `@` positions, gaps read as zero; `ro`: the\n"
+    "///   input; `wo`: zero), writes to `ro` registers are ignored with OKAY, and\n"
+    "///   any access to an offset not in `Map` reports `err` (SLVERR on\n"
+    "///   AXI4-Lite), as does a write to a stream register whose previous beat\n"
+    "///   was not taken yet (the write is dropped);\n"
+    "/// * resets every register to zero unless the regmap gives a reset value\n"
+    "///   (`= value`: an integer in the bus layout or a value of the register's\n"
+    "///   type).\n"
     "///\n"
     "/// The bus behaviour (handshakes, latency, error responses) is therefore\n"
     "/// exactly that of the front-end module; see its tests.\n"
@@ -2730,7 +2740,7 @@ static const char *const tern_std_chunks_5[] = {
     "\n"
     "test \"RegisterFile: byte strobes and register fields\" {\n"
     "    let dut = sim RegisterFile<DemoRegs>()\n"
-    "    dut.reset()\n"
+    "    dut.reset()\n",
     "    dut.status = DemoRegs::Status { busy: false, err: false }\n"
     "    dut.txq.ready = true\n"
     "    dut.bus.b.ready = true\n"
@@ -2750,7 +2760,7 @@ static const char *const tern_std_chunks_5[] = {
     "    dut.bus.w.valid = true\n"
     "    dut.bus.w.data.data = 0x1122_3344\n"
     "    dut.bus.w.data.strb = 0b0100            // only byte 2\n"
-    "    dut.step()\n",
+    "    dut.step()\n"
     "    dut.bus.aw.valid = false\n"
     "    dut.bus.w.valid = false\n"
     "    dut.step_until(dut.bus.b.valid, max: 20)\n"
@@ -20439,7 +20449,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/bus/dma.tern", tern_std_chunks_2, 4, 12437},
     {"std/bus/interconnect.tern", tern_std_chunks_3, 6, 20125},
     {"std/bus/lite.tern", tern_std_chunks_4, 4, 12539},
-    {"std/bus/regfile.tern", tern_std_chunks_5, 4, 13799},
+    {"std/bus/regfile.tern", tern_std_chunks_5, 4, 14464},
     {"std/cdc/cdc.tern", tern_std_chunks_6, 5, 16846},
     {"std/clk/clk.tern", tern_std_chunks_7, 2, 7369},
     {"std/crc/crc.tern", tern_std_chunks_8, 4, 14734},
