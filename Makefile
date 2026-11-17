@@ -8,8 +8,9 @@
 #   make test-docs        only the ```tern snippets of README.md and docs/guide/
 #   make unity            one-command build: $(CC) ... -o tern src/unity.c
 #   make check-warnings   -Werror builds of everything as C99 and as C11
-#   make fuzz             libFuzzer parser harness build/fuzz_parser (clang;
-#                         on macOS: FUZZ_CC=/opt/homebrew/opt/llvm/bin/clang)
+#   make fuzz             libFuzzer harnesses build/fuzz_{parser,check,toml,json}
+#                         (clang; on macOS: FUZZ_CC=/opt/homebrew/opt/llvm/bin/clang)
+#   make fuzz-replay      replay the fuzz regression corpus (part of `make test`)
 #   make clean
 #
 # Variables: CC, STD (c11 | c99), OPT, WARN, EXTRA (appended to CFLAGS),
@@ -491,6 +492,17 @@ UNIT_TESTS = \
 	build/test_lsp \
 	build/test_elab
 
+# The fuzz harnesses (tests/fuzz/fuzz_<name>.c, `make fuzz`). `make test`
+# replays the regression corpus tests/fuzz/corpus/<name>/ through the same
+# entry points, built without libFuzzer (-DFUZZ_STANDALONE,
+# tests/fuzz/fuzz_main.h).
+FUZZ_HARNESSES = parser check toml json
+FUZZ_REPLAY = \
+	build/fuzz_replay_parser \
+	build/fuzz_replay_check \
+	build/fuzz_replay_toml \
+	build/fuzz_replay_json
+
 tests/run: tests/run.c $(TEST_DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS) $(DL)
 
@@ -532,8 +544,9 @@ build/test_lsp: tests/unit/test_lsp.c $(TEST_DEPS) $(SYNTAX_SRCS) $(IR_SRCS) $(S
 build/test_elab: tests/unit/test_elab.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_elab.c $(LDLIBS) $(DL)
 
-test: $(BIN) tests/run build/doc_snippets $(UNIT_TESTS)
+test: $(BIN) tests/run build/doc_snippets $(UNIT_TESTS) $(FUZZ_REPLAY)
 	for t in $(UNIT_TESTS); do ./$$t || exit 1; done
+	for h in $(FUZZ_HARNESSES); do ./build/fuzz_replay_$$h -q tests/fuzz/corpus/$$h || exit 1; done
 	./$(BIN) parse std
 	./$(BIN) fmt --check std
 	./tests/run --tern ./$(BIN)
@@ -581,15 +594,30 @@ test-std: $(BIN)
 	./$(BIN) test --diag-format=short std
 
 # ----------------------------------------------------------------- fuzz ---
-# Not part of `all`/`test`: needs clang with libFuzzer. Run it with e.g.
+# Not part of `all`/`test`: needs clang with libFuzzer. Run them with e.g.
 #   ./build/fuzz_parser -max_total_time=120 build/fuzz-corpus tests/fixtures/parse std
+# (CI: the fuzz job in .github/workflows/ci.yml). Save every crashing input
+# under tests/fuzz/corpus/<harness>/ once it is fixed: `make test` replays it.
 
 FUZZ_CC = clang
 FUZZ_FLAGS = -g -O1 -fsanitize=fuzzer,address,undefined
 
 fuzz: $(OBJ)/dl.flags
 	mkdir -p build/fuzz-corpus
-	$(FUZZ_CC) -std=c11 $(FUZZ_FLAGS) $(WARN) -o build/fuzz_parser tests/fuzz/fuzz_parser.c $(DL)
+	for h in $(FUZZ_HARNESSES); do \
+	  $(FUZZ_CC) -std=c11 $(FUZZ_FLAGS) $(WARN) -o build/fuzz_$$h tests/fuzz/fuzz_$$h.c $(DL) || exit 1; done
+
+build/fuzz_replay_parser: tests/fuzz/fuzz_parser.c tests/fuzz/fuzz_main.h $(TEST_DEPS) $(SYNTAX_SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -DFUZZ_STANDALONE $(LDFLAGS) -o $@ tests/fuzz/fuzz_parser.c $(LDLIBS) $(DL)
+build/fuzz_replay_check: tests/fuzz/fuzz_check.c tests/fuzz/fuzz_main.h $(TEST_DEPS) $(SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -DFUZZ_STANDALONE $(LDFLAGS) -o $@ tests/fuzz/fuzz_check.c $(LDLIBS) $(DL)
+build/fuzz_replay_toml: tests/fuzz/fuzz_toml.c tests/fuzz/fuzz_main.h $(TEST_DEPS) $(PKG_SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -DFUZZ_STANDALONE $(LDFLAGS) -o $@ tests/fuzz/fuzz_toml.c $(LDLIBS) $(DL)
+build/fuzz_replay_json: tests/fuzz/fuzz_json.c tests/fuzz/fuzz_main.h $(TEST_DEPS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -DFUZZ_STANDALONE $(LDFLAGS) -o $@ tests/fuzz/fuzz_json.c $(LDLIBS) $(DL)
+
+fuzz-replay: $(FUZZ_REPLAY)
+	for h in $(FUZZ_HARNESSES); do ./build/fuzz_replay_$$h -q tests/fuzz/corpus/$$h || exit 1; done
 
 # ---------------------------------------------------------------- other ---
 
@@ -605,6 +633,8 @@ check-warnings: $(OBJ)/dl.flags
 	  for t in $(UNIT_TESTS); do n=`basename $$t`; \
 	    $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/$$n-$$s tests/unit/$$n.c $(DL) || exit 1; done; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/embed-$$s tools/embed.c $(DL) || exit 1; \
+	  for h in $(FUZZ_HARNESSES); do \
+	    $(CC) -std=$$s $(OPT) $(WARN) -Werror -DFUZZ_STANDALONE -o build/fuzz_replay_$$h-$$s tests/fuzz/fuzz_$$h.c $(DL) || exit 1; done; \
 	done
 	@echo "check-warnings: OK (c99 and c11, -Werror)"
 
@@ -616,4 +646,4 @@ clean:
 	rm -rf build tests/out
 	rm -f tern tern.exe tools/embed tools/embed.exe tests/run tests/run.exe
 
-.PHONY: all test test-std test-verilator test-docs examples unity check-warnings fuzz install clean FORCE
+.PHONY: all test test-std test-verilator test-docs examples unity check-warnings fuzz fuzz-replay install clean FORCE

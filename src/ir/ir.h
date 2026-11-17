@@ -410,6 +410,8 @@ struct IrModule {
     int is_cdc;               /* a std::cdc primitive (#[cdc(...)]) */
     IrCdcKind cdc_kind;
     IrOrigin *origin;         /* elaborator side channel (see IrOrigin), or NULL */
+    int elab_failed;          /* elaboration reported errors in it (or below it): the
+                                 IR is incomplete and check_design skips it */
     Span loc;
 };
 

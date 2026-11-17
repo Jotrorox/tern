@@ -207,13 +207,20 @@ static char *diag_vfmt(const char *fmt, va_list ap)
     return sb_take(&sb);
 }
 
+/* "Top > rx_fifo: Fifo<u8, 64>"; a very deep path (runaway recursive
+ * instantiation) keeps its first and last frames */
 static char *diag_path_string(void)
 {
     StrBuf sb = {0};
-    size_t i;
-    if (!diag_st.path.len)
+    size_t i, n = diag_st.path.len;
+    if (!n)
         return NULL;
-    for (i = 0; i < diag_st.path.len; i++) {
+    for (i = 0; i < n; i++) {
+        if (n > 12 && i == 4) {
+            sb_printf(&sb, " > ... (%lu more)", (unsigned long)(n - 8));
+            i = n - 5;
+            continue;
+        }
         if (i)
             sb_puts(&sb, " > ");
         sb_puts(&sb, diag_st.path.data[i]);

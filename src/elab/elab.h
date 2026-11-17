@@ -223,6 +223,7 @@ struct Elab {
     struct BlkCtx *blk;       /* statement sink of the current comb/on block */
     int in_fn;                /* inside an inlined fn body */
     uint32_t depth;           /* call depth */
+    uint32_t mod_depth;       /* module instantiation depth (elab_module) */
     VEC(Item *) hw_calls;     /* fns being inlined with hardware arguments */
     VEC(Env *) kept;          /* scopes that live as long as the Elab (freed by elab_free) */
     /* undo log of assignments to mutable locals (merging under hardware conditions) */

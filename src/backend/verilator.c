@@ -2,11 +2,36 @@
  *
  * Style-only warnings that generated code legitimately triggers are waived
  * (the same set as tests/lint_emitted.sh); concurrent assertions are
- * hidden with TERN_NO_SVA. */
+ * hidden with TERN_NO_SVA. PROCASSINIT (a register with a declaration
+ * initializer, which is how FPGA power-on values are emitted, also written
+ * by a process) is a style warning too, but only newer Verilators know it
+ * and older ones reject unknown -Wno- codes, so it is waived when the
+ * installed Verilator accepts it. */
 #include "../base/common.h"
 #include "../base/str.h"
 #include "../os/os.h"
 #include "backend.h"
+
+/* 1 if `verilator -Wno-<code> --version` succeeds (the code exists) */
+static int vl_knows_warning(const char *exe, const char *flag)
+{
+    char *argv[4];
+    OsSpawnOpts so;
+    OsRunResult res;
+    int r;
+    argv[0] = (char *)exe;
+    argv[1] = (char *)flag;
+    argv[2] = (char *)"--version";
+    argv[3] = NULL;
+    memset(&so, 0, sizeof so);
+    memset(&res, 0, sizeof res);
+    so.stdin_null = 1;
+    so.capture_stdout = 1;
+    so.merge_stderr = 1;
+    r = os_run(argv, &so, &res);
+    os_run_result_free(&res);
+    return r == 0;
+}
 
 int vl_lint(const char *dir, const SvOutput *out, const char *top, SvStd std)
 {
@@ -30,6 +55,8 @@ int vl_lint(const char *dir, const SvOutput *out, const char *top, SvStd std)
     vec_push(argv, exe);
     for (i = 0; i < TERN_ARRAY_LEN(vl_flags); i++)
         vec_push(argv, (char *)vl_flags[i]);
+    if (vl_knows_warning(exe, "-Wno-PROCASSINIT"))
+        vec_push(argv, (char *)"-Wno-PROCASSINIT");
     vec_push(argv, (char *)"--default-language");
     vec_push(argv, (char *)(std == SV_STD_V2005 ? "1364-2005" : "1800-2012"));
     if (top) {

@@ -2153,8 +2153,8 @@ Value el_binary(Elab *el, BinaryOp op, Value a, Value b, Span at, Expr *ea, Expr
     case BIN_BITAND: case BIN_BITOR: case BIN_BITXOR:
         if (a.ty && b.ty && a.ty->kind == TY_BOOL && b.ty->kind == TY_BOOL) {
             if (a.kind == VAL_BOOL && b.kind == VAL_BOOL)
-                return el_mk_bool(el, op == BIN_BITAND ? (a.u.i & b.u.i) : op == BIN_BITOR ? (a.u.i | b.u.i)
-                                                                                        : (a.u.i ^ b.u.i));
+                return el_mk_bool(el, (op == BIN_BITAND ? (a.u.i & b.u.i) : op == BIN_BITOR ? (a.u.i | b.u.i)
+                                                                                         : (a.u.i ^ b.u.i)) != 0);
             if (!el->design)
                 return ce_need_design(el, at);
             return el_mk_hw_bool(el, ir_binary(el->design->arena,

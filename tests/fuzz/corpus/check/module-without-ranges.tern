@@ -1,0 +1,8 @@
+// §7.5 top level
+#[top]
+module Board {
+    in clk100: clock #[clock(hz: 100_000_000)]
+    #[clock(hz: 25_000_000)]
+    in pix_clk: clock
+    in pad: tri<bool>
+}

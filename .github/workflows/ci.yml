@@ -1,5 +1,13 @@
 name: CI
 
+# Spec 13.7: the emitted SystemVerilog is linted with Verilator and
+# synthesized with Yosys (hdl); the compiler builds with -Wall -Wextra
+# -Wpedantic -Werror on GCC and Clang in C11 and C99 (linux, warnings,
+# macos) and with /W4 /WX on MSVC in C11 and C17 (MSVC has no C99 mode);
+# make test runs under AddressSanitizer and UndefinedBehaviorSanitizer
+# (sanitizers); the parser, `tern check` and the TOML and JSON readers are
+# fuzzed (fuzz).
+
 on:
   push:
     branches: [main]
@@ -100,8 +108,14 @@ jobs:
       - run: cc -std=c99 -O2 -o tern src/unity.c && ./tern --version
 
   windows:
-    name: Windows MSVC
+    name: Windows MSVC /std:${{ matrix.std }} (/W4 /WX)
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        std: [c11, c17]
+    env:
+      TERN_MSVC_STD: ${{ matrix.std }}
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
@@ -113,6 +127,29 @@ jobs:
       - name: Version
         shell: cmd
         run: tern.exe --version
+
+  mingw:
+    name: MinGW-w64 cross build (x86_64 + i686, c99 + c11, -Werror)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW-w64
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-mingw-w64-i686
+      - name: Cross-compile the compiler and the test drivers
+        run: |
+          set -e
+          mkdir -p build
+          for cc in x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
+            for std in c99 c11; do
+              $cc -std=$std -O2 -Wall -Wextra -Wpedantic -Werror -o build/tern-$std.exe src/unity.c
+              for t in tests/run.c tests/doc_snippets.c tests/unit/test_*.c tools/embed.c; do
+                $cc -std=$std -O2 -Wall -Wextra -Wpedantic -Werror -o build/x.exe $t
+              done
+              for h in parser check toml json; do
+                $cc -std=$std -O2 -Wall -Wextra -Wpedantic -Werror -DFUZZ_STANDALONE -o build/x.exe tests/fuzz/fuzz_$h.c
+              done
+            done
+          done
 
   tcc:
     name: TCC smoke build
@@ -129,6 +166,58 @@ jobs:
           ./test_base
           tcc -o run tests/run.c
           ./run --tern ./tern
+
+  fuzz:
+    name: Fuzz (libFuzzer + ASan + UBSan, parser / check / toml / json)
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the harnesses (clang -fsanitize=fuzzer,address,undefined)
+        run: make fuzz FUZZ_CC=clang FUZZ_FLAGS="-g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all"
+      - name: Seed corpora
+        run: |
+          set -e
+          mkdir -p build/fz/seed-tern build/fz/seed-toml build/fz/seed-json
+          for f in $(find tests/fixtures std examples -name '*.tern'); do cp "$f" "build/fz/seed-tern/$(echo "$f" | tr / _)"; done
+          n=0; for f in $(find . -name tern.toml -not -path './build/*'); do n=$((n+1)); cp "$f" build/fz/seed-toml/$n.toml; done
+          cp editors/vscode/*.json editors/vscode/syntaxes/*.json build/fz/seed-json/
+          make tern
+          ./tern ir --json tests/fixtures/ir/fifo.tern > build/fz/seed-json/fifo.json
+          grep -h '^-->' tests/lsp/*.session | sed 's/^--> *//' | split -l 1 - build/fz/seed-json/lsp_
+      # about two minutes for the parser and for `tern check` (step limit
+      # and memory cap: see tests/fuzz/fuzz_check.c), less for the readers.
+      # A crash fails the job and leaves the input in the artifact below;
+      # fix it and add the input to tests/fuzz/corpus/<harness>/.
+      - name: Fuzz the parser
+        run: |
+          mkdir -p build/fz/parser build/fz/art
+          ./build/fuzz_parser -max_total_time=120 -timeout=10 -rss_limit_mb=2048 -dict=tests/fuzz/tern.dict \
+            -artifact_prefix=build/fz/art/parser- build/fz/parser build/fz/seed-tern tests/fuzz/corpus/parser
+      - name: Fuzz tern check (parse, resolve, elaborate, check)
+        run: |
+          mkdir -p build/fz/check build/fz/art
+          ./build/fuzz_check -max_total_time=120 -timeout=20 -rss_limit_mb=1024 -malloc_limit_mb=512 \
+            -max_len=16384 -dict=tests/fuzz/tern.dict -artifact_prefix=build/fz/art/check- \
+            build/fz/check build/fz/seed-tern tests/fuzz/corpus/check
+      - name: Fuzz the TOML reader
+        run: |
+          mkdir -p build/fz/toml build/fz/art
+          ./build/fuzz_toml -max_total_time=45 -timeout=10 -rss_limit_mb=1024 \
+            -artifact_prefix=build/fz/art/toml- build/fz/toml build/fz/seed-toml tests/fuzz/corpus/toml
+      - name: Fuzz the JSON reader
+        run: |
+          mkdir -p build/fz/json build/fz/art
+          ./build/fuzz_json -max_total_time=45 -timeout=10 -rss_limit_mb=1024 \
+            -artifact_prefix=build/fz/art/json- build/fz/json build/fz/seed-json tests/fuzz/corpus/json
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: build/fz/art/
+          if-no-files-found: ignore
 
   sanitizers:
     name: ASan + UBSan

@@ -597,6 +597,7 @@ IrDesign *driver_elaborate_top(Driver *dr, const char *name, Arena *ir_arena)
         it = driver_find_item(dr, name, &f);
         if (!it || (it->kind != ITEM_MODULE && it->kind != ITEM_EXTERN)) {
             diag_error(span_none(), "cannot find module `%s`", name);
+            driver_suggest_module(dr, name);
             return NULL;
         }
     } else {
@@ -631,6 +632,34 @@ FileUnit *driver_module_scope(Driver *dr, const char *spec)
     return scope;
 }
 
+int driver_spec_exists(Driver *dr, const char *spec)
+{
+    size_t n = 0;
+    char *base;
+    Item *it;
+    while (spec[n] == ' ')
+        spec++;
+    while (spec[n] && spec[n] != '<' && spec[n] != ' ' && spec[n] != '(')
+        n++;
+    base = xstrndup(spec, n);
+    it = driver_find_item(dr, base, NULL);
+    if (!it) {
+        /* imported into the file the spec resolves in (`use std::fifo::Fifo`) */
+        FileUnit *scope = driver_module_scope(dr, spec);
+        Symbol sym;
+        if (scope && sema_lookup(dr->S, scope, intern_cstr(base), &sym) && sym.kind == SYM_ITEM)
+            it = sym.item;
+    }
+    if (it && (it->kind == ITEM_MODULE || it->kind == ITEM_EXTERN)) {
+        free(base);
+        return 1;
+    }
+    diag_error(span_none(), "cannot find module `%s`", base);
+    driver_suggest_module(dr, base);
+    free(base);
+    return 0;
+}
+
 IrDesign *driver_elaborate_spec(Driver *dr, const char *spec, Arena *ir_arena)
 {
     Arena *a;
@@ -644,11 +673,15 @@ IrDesign *driver_elaborate_spec(Driver *dr, const char *spec, Arena *ir_arena)
     int errs = diag_error_count();
     if (!strchr(spec, '<'))
         return driver_elaborate_top(dr, spec, ir_arena);
+    if (!driver_spec_exists(dr, spec))
+        return NULL;
     a = (Arena *)xcalloc(1, sizeof(Arena));
     vec_push(dr->arenas, a);
     {
-        /* parsed as a call so that `<` opens generic arguments */
-        char *text = arena_printf(a, "%s()", spec);
+        /* parsed as a call so that `<` opens generic arguments; the `()`
+         * goes on a line of its own (newlines are blanks in an expression)
+         * so that excerpts show the spec as the user typed it */
+        char *text = arena_printf(a, "%s\n()", spec);
         e = parse_expr_string(a, text, strlen(text), "<command line>", NULL);
     }
     if (diag_error_count() != errs)

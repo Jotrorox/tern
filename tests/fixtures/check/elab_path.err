@@ -1,0 +1,13 @@
+elab_path.tern:15:13: error: width mismatch: `n + 1` is uint<8>, `n` is uint<7>
+   |
+15 |         n = n + 1
+   |             ^^^^^
+   = help: use `+%` for a wrapping add, or truncate with `as uint<7>`
+  in: Top > rx_fifo: Fifo<u8, 64>
+
+elab_path.tern:25:9: error: output `busy` is never driven
+   |
+25 |     out busy: bool
+   |         ^^^^
+   = help: assign it at module level (`busy = ...`) or in a `comb` block
+  in: Top > tx_pipe: Pipe<8>

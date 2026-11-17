@@ -15,6 +15,9 @@
  */
 #include "elab_impl.h"
 
+/* deepest chain of module instances (stack depth of elab_module) */
+#define EL_MAX_MOD_DEPTH 128
+
 /* ------------------------------------------------------------- helpers */
 
 static const char *elb_attr_args(Elab *el, Attr *a)
@@ -1153,7 +1156,11 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
             buf[k] = (char)tern_to_lower((unsigned char)buf[k]);
         name = elb_name(el, env, intern_cstr(buf));
     }
-    frame = arena_printf(&el->arena, "%s: %s", name, el_text(call->u.call.callee));
+    /* the arguments as written (`rx_fifo: Fifo<u8, 64>`); inside a generic
+     * module they may name its generics, so the evaluated ones (`M<3>`) */
+    frame = arena_printf(&el->arena, "%s: %s", name,
+                         el->mod && el->mod->vm && el->mod->vm->args.n ? vm->display
+                                                                       : el_text(call->u.call.callee));
     diag_push_path(frame);
     mi = elab_module(el, vm, call->u.call.callee->span);
     diag_pop_path();
@@ -1767,7 +1774,7 @@ static void elb_bind_decls(Elab *el, Stmt **stmts, uint32_t n, Env *env)
     for (i = 0; i < n; i++) {
         Stmt *s = stmts[i];
         const char *nm = NULL;
-        Span def;
+        Span def = span_none();
         Binding *b;
         switch (s->kind) {
         case STMT_DOMAIN: nm = s->u.domain.name.name; def = s->u.domain.name.span; break;
@@ -2351,6 +2358,7 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
     Stmt **body;
     uint32_t nbody, i;
     Env *scope;
+    int errs0 = diag_error_count();
     if (map_get(&el->modules, MAP_PTR(vm->cache_key), &v)) {
         mi = (ModInfo *)(uintptr_t)v;
         if (mi->state == 1) {
@@ -2363,6 +2371,15 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
         el_error(el, at, "modules can only be elaborated into a design");
         return NULL;
     }
+    if (el->mod_depth >= EL_MAX_MOD_DEPTH) {
+        /* M<N> instantiating M<N + 1> forever: every key is new, so the
+         * self-instantiation check above never fires */
+        el_error(el, at, "module instances nested too deeply (more than %u levels) at `%s`",
+                 (unsigned)EL_MAX_MOD_DEPTH, vm->display);
+        diag_help("a module that instantiates itself needs a base case: `if N > 1 { ... }`");
+        return NULL;
+    }
+    el->mod_depth++;
     mi = ANEW(&el->arena, ModInfo);
     mi->item = it;
     mi->file = vm->file;
@@ -2483,7 +2500,14 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
     el->in_fn = saved_fn;
     el->undo_depth = saved_undo;
     ir_design_add_module(el->design, mi->ir);
+    /* errors here or in the instances elaborated meanwhile: the checks
+     * skip the module (its IR is incomplete) but still run elsewhere */
+    if (mi->failed || diag_error_count() != errs0) {
+        mi->failed = 1;
+        mi->ir->elab_failed = 1;
+    }
     mi->state = 2;
+    el->mod_depth--;
     return mi;
 }
 
@@ -2726,3 +2750,5 @@ int elab_ir_verify(const IrDesign *d)
     map_free(&elb_verify_seen);
     return total;
 }
+
+#undef EL_MAX_MOD_DEPTH

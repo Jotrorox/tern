@@ -1,0 +1,17 @@
+// A module instantiating itself with ever new generic arguments is cut
+// off with an error (it used to overflow the stack).
+
+module M<N: uint> {
+    in a: u8
+    out y: u8
+    let m = M<N + 1>(a)
+    y = m.y
+}
+
+#[top]
+module T {
+    in a: u8
+    out y: u8
+    let m = M<0>(a)
+    y = m.y
+}

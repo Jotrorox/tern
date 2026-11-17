@@ -7,8 +7,8 @@ module Sync2_bool (  // tern: src/demo.tern:500
 );
 
     // registers
-    (* ASYNC_REG = "TRUE" *) reg s1;  // tern: src/demo.tern:505
-    (* ASYNC_REG = "TRUE" *) reg s2;  // tern: src/demo.tern:506
+    (* ASYNC_REG = "TRUE" *) reg s1 = 1'b0;  // tern: src/demo.tern:505
+    (* ASYNC_REG = "TRUE" *) reg s2 = 1'b0;  // tern: src/demo.tern:506
 
     // continuous assignments
     assign q = s2;  // tern: src/demo.tern:510
@@ -16,10 +16,6 @@ module Sync2_bool (  // tern: src/demo.tern:500
     always @(posedge dst) begin  // tern: src/demo.tern:507
         s1 <= d;  // tern: src/demo.tern:508
         s2 <= s1;  // tern: src/demo.tern:509
-    end
-    initial begin  // power-on values (the domain has no reset)
-        s1 = 1'b0;
-        s2 = 1'b0;
     end
 
 endmodule

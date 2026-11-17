@@ -77,7 +77,7 @@ void eval_dump()
     top->eval();
 #if VM_TRACE
     if (tfp)
-        tfp->dump(now_ps);
+        tfp->dump(static_cast<uint64_t>(now_ps));
 #endif
     if (ctx->gotFinish())
         stopped = true;
@@ -299,7 +299,7 @@ int main(int argc, char **argv)
                 top->trace(tfp, 99);
             }
             tfp->open(a[1].c_str());
-            tfp->dump(now_ps);
+            tfp->dump(static_cast<uint64_t>(now_ps));
             reply("@ok%s\n", "");
 #else
             reply("@err %s\n", "the model was built without --trace");

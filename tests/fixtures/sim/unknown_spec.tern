@@ -1,0 +1,14 @@
+// args: Countr<4> counter.stim
+// An unknown module spec is reported by name, with a suggestion (no
+// excerpt of the internal `sim Countr<4>()` statement).
+module Counter<W: uint> {
+    in clk: clock
+    in rst: reset
+    out count: uint<W>
+
+    reg c: uint<W> = 0
+    count = c
+    on clk {
+        c = c + 1
+    }
+}

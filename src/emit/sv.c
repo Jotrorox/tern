@@ -543,6 +543,7 @@ typedef struct SvGen {
     const Map *written;   /* signals written by the current comb process, or NULL */
     VEC(uint32_t) locals; /* temps local to the current comb process */
     Map defassigned;      /* comb: signals definitely assigned so far (V2005 case defaults) */
+    Map poweron;          /* registers whose power-on value is their declaration's initializer */
     const char *rst_guard;/* reset-active condition for assertions outside a reset branch */
     int in_prop;
     int dedupe_marks;     /* inside a process: a marker repeating the previous line is omitted */
@@ -2842,13 +2843,15 @@ static void sv_clocked(SvGen *g, const IrProcess *p, StrBuf *out)
         g->rst_guard = saved;
         sb_free(&guard);
         if (!dm.rst && ninit) {
-            /* power-on values (spec 6.4) */
+            /* power-on values (spec 6.4): FPGA targets initialize the
+             * declaration (`logic [3:0] p = 4'd5;`, sv_decl_group), which
+             * synthesis turns into the register's configuration value;
+             * unlike an `initial` block it is not a second driver of a
+             * variable written by always_ff (Verilator MULTIDRIVEN) */
             if (g->c->o->target_kind == SV_TARGET_FPGA) {
-                sb_puts(&body, "    initial begin  // power-on values (the domain has no reset)\n");
                 for (i = 0; i < p->nregs; i++)
                     if (p->regs[i] < g->m->nsigs && map_has(&init, p->regs[i]))
-                        sv_reset_value(g, p->regs[i], 2, 0, &body);
-                sb_puts(&body, "    end\n");
+                        map_put(&g->poweron, p->regs[i], 1);
             } else {
                 for (i = 0; i < p->nregs; i++) {
                     uint32_t r = p->regs[i];
@@ -3460,6 +3463,18 @@ static void sv_decl_group(SvGen *g, IrSigKind kind, const char *title, StrBuf *o
                 sb_printf(out, " [0:%u]", s->depth - 1);
             }
         }
+        if (s->kind == IRS_REG && s->has_init && map_has(&g->poweron, i)) {
+            IrExpr k;
+            memset(&k, 0, sizeof k);
+            k.kind = IRE_CONST;
+            k.width = s->type->width;
+            k.bits = s->init;
+            k.sig = IR_NONE;
+            sb_puts(out, " = ");
+            g->kwidth = svp_get(g, s, SVK_SIGW);
+            sv_rhs(g, &k, s->type, out);
+            g->kwidth = NULL;
+        }
         sb_putc(out, ';');
         if (sv_has_attr(s, "unsafe_cross"))
             sb_puts(out, "  // CDC: unchecked");
@@ -3880,6 +3895,7 @@ static void sv_module_ex(SvCtx *c, const IrModule *m, const SvPView *pv)
     vec_free(g.pconsts);
     map_free(&g.types);
     map_free(&g.defassigned);
+    map_free(&g.poweron);
     free(g.drv);
     free(g.memw);
 }

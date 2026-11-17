@@ -330,10 +330,17 @@ are split into a second `always_ff` without the reset (both blocks use the
 same conditions, so non-blocking semantics make the split exact); memory
 writes go there too. No register gets a reset-enable.
 
-A domain without a reset: power-on values (`reg x = init`) are emitted as an
-`initial` block after the process for FPGA targets (`SvOptions.target_kind =
-SV_TARGET_FPGA`, the default), and as a `// WARNING: power-on value ...`
-comment plus a compiler warning for ASIC targets. A register that is never
+A domain without a reset: power-on values (`reg x = init`) are emitted as
+declaration initializers for FPGA targets (`SvOptions.target_kind =
+SV_TARGET_FPGA`, the default): `logic [7:0] r = 8'h00;`, and
+`reg [7:0] r = 8'h00;` in Verilog-2005 (legal since Verilog-2001). FPGA
+synthesis tools (Vivado, Quartus, Yosys) take them as the register's
+configuration value. Unlike an `initial` block they do not make the
+register a second driver next to its `always_ff` (Verilator's MULTIDRIVEN).
+Verilator's style warning PROCASSINIT, which `-Wall` enables for every
+initialized declaration that a process writes, is waived by `tern build
+--lint` and tests/lint_emitted.sh. For ASIC targets the value is dropped:
+a `// WARNING: power-on value ...` comment plus a compiler warning. A register that is never
 assigned keeps its initial value: `assign r = init;`.
 
 ### Memories (spec §10.1)

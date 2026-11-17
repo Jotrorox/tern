@@ -203,6 +203,8 @@ static void sema_flatten_use(Sema *S, FileUnit *f, UseDecl *ud, UseTree *t, cons
             sema_flatten_use(S, f, ud, t->group[i], segs, spans, n);
         return;
     }
+    if (n == 0)
+        return; /* syntax error (`use ?::*`) */
     for (i = 0; i < n; i++)
         if (!segs[i])
             return; /* syntax error */
@@ -222,8 +224,6 @@ static void sema_flatten_use(Sema *S, FileUnit *f, UseDecl *ud, UseTree *t, cons
                 vec_push(f->pkg->reexport_globs, u);
             return;
         }
-        if (n == 0)
-            return;
         u->name = t->alias.name ? t->alias.name : segs[n - 1];
         {
             uint64_t ov;

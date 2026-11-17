@@ -5,12 +5,18 @@
  *     ./build/fuzz_parser -max_total_time=120 build/fuzz-corpus tests/fixtures/parse std
  *
  * Built with -DFUZZ_STANDALONE (no libFuzzer) it runs the inputs named on
- * the command line once each, which reproduces a crash from a saved input:
+ * the command line once each (tests/fuzz/fuzz_main.h), which reproduces a
+ * crash from a saved input and replays tests/fuzz/corpus/parser in
+ * `make test`:
  *     cc -DFUZZ_STANDALONE -g -fsanitize=address,undefined tests/fuzz/fuzz_parser.c -o fuzz1
  *     ./fuzz1 crash-1234
  *
  * Single translation unit: it includes the sources it needs, like tests/run.c.
  */
+#define FUZZ_NAME "fuzz_parser"
+#include "../../src/os/os_posix.c"
+#include "../../src/os/os_win32.c"
+#include "../../src/os/os_common.c"
 #include "../../src/base/common.c"
 #include "../../src/base/arena.c"
 #include "../../src/base/str.c"
@@ -70,32 +76,4 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     return 0;
 }
 
-#ifdef FUZZ_STANDALONE
-int main(int argc, char **argv)
-{
-    int i;
-    for (i = 1; i < argc; i++) {
-        FILE *fp = fopen(argv[i], "rb");
-        char *buf;
-        long n;
-        if (!fp) {
-            fprintf(stderr, "cannot open %s\n", argv[i]);
-            return 2;
-        }
-        fseek(fp, 0, SEEK_END);
-        n = ftell(fp);
-        fseek(fp, 0, SEEK_SET);
-        buf = (char *)xmalloc((size_t)(n > 0 ? n : 1));
-        if (n > 0 && fread(buf, 1, (size_t)n, fp) != (size_t)n) {
-            fclose(fp);
-            free(buf);
-            return 2;
-        }
-        fclose(fp);
-        LLVMFuzzerTestOneInput((const uint8_t *)buf, (size_t)(n > 0 ? n : 0));
-        free(buf);
-        printf("ok %s\n", argv[i]);
-    }
-    return 0;
-}
-#endif
+#include "fuzz_main.h"

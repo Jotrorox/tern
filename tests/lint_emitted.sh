@@ -32,6 +32,12 @@ fi
 VFLAGS="--lint-only -Wall -Wno-DECLFILENAME -Wno-UNUSED -Wno-WIDTH -Wno-PINCONNECTEMPTY -Wno-CASEINCOMPLETE -DTERN_NO_SVA"
 
 have() { command -v "$1" >/dev/null 2>&1; }
+# FPGA power-on values are declaration initializers (`logic [3:0] p = 4'd5;`)
+# of registers that an always_ff also writes: the style warning PROCASSINIT
+# (newer Verilators only; older ones reject unknown -Wno- codes)
+if have verilator && verilator -Wno-PROCASSINIT --version >/dev/null 2>&1; then
+    VFLAGS="$VFLAGS -Wno-PROCASSINIT"
+fi
 fail=0
 have verilator && verilator --version
 have yosys && yosys -V

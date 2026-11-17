@@ -118,6 +118,10 @@ IrDesign *driver_elaborate_top(Driver *dr, const char *name, Arena *ir_arena);
  * (`Fifo<u8, 4>`, `std::fifo::Fifo<u8, 4>`) or without (then as
  * driver_elaborate_top). `tern prove` and `tern sim` share it. */
 IrDesign *driver_elaborate_spec(Driver *dr, const char *spec, Arena *ir_arena);
+/* 1 if the module named by such a spec (its base name, before any `<`)
+ * exists; else reports "cannot find module `X`" (with a did-you-mean help)
+ * and returns 0. */
+int driver_spec_exists(Driver *dr, const char *spec);
 /* The file in whose scope such a spec resolves: the one declaring its base
  * name, else the first user file. */
 FileUnit *driver_module_scope(Driver *dr, const char *spec);

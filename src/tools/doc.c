@@ -613,7 +613,8 @@ void doc_set_finish(DocSet *ds)
     if (ds->finished)
         return;
     ds->finished = 1;
-    qsort(ds->pkgs.data, ds->pkgs.len, sizeof(DocPkg *), doc_pkg_cmp);
+    if (ds->pkgs.len > 1)
+        qsort(ds->pkgs.data, ds->pkgs.len, sizeof(DocPkg *), doc_pkg_cmp);
     for (i = 0; i < ds->pkgs.len; i++) {
         DocPkg *p = ds->pkgs.data[i];
         const char *last = strrchr(p->name, ':');
