@@ -91,7 +91,7 @@ end
 module UartRx_100000000_3000000 "UartRx<100000000, 3000000>" in std::io
   param ClkHz = 32'h5f5e100
   param Baud = 32'h2dc6c0
-  domain 0 "" clock=clk reset=rst default
+  domain 0 "" clock=clk reset=rst hz=100000000 default
   0: in clk: clock
   1: in rst: reset<sync, high> @0
   2: in rxd: bool @0
