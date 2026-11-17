@@ -210,9 +210,11 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b)
         if (!it || it->kind != ITEM_MODULE) {
             if (it && it->kind == ITEM_EXTERN)
                 diag_error(it->name.span, "`%s` is an extern module; it cannot be the top of a build", name);
-            else
+            else {
                 diag_error(span_none(), "cannot find module `%s`%s", name,
-                           o->top ? "" : " (the `top` of the build target)");
+                           o->top ? "" : " (the `top` of the build target in tern.toml)");
+                driver_suggest_module(dr, name);
+            }
             free(cwd);
             return -1;
         }

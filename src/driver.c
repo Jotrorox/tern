@@ -248,9 +248,12 @@ Driver *driver_open(const DriverOptions *opt)
     } else if (r < 0) {
         /* manifest errors were reported; continue in single-file mode */
     }
+    if (r < 0)
+        diag_flush(); /* the manifest errors first */
     if (user.len == 0) {
-        fprintf(stderr, "tern %s: error: no input files%s\n", opt->cmd ? opt->cmd : "check",
-                dr->has_project ? " (src/ is empty)" : " (and no tern.toml found)");
+        if (r >= 0)
+            fprintf(stderr, "tern %s: error: no input files%s\n", opt->cmd ? opt->cmd : "check",
+                    dr->has_project ? " (src/ is empty)" : " (and no tern.toml found)");
         drv_free_paths(&user);
         drv_free_paths(&lib);
         driver_free(dr);
@@ -394,6 +397,32 @@ void driver_default_roots(Driver *dr, DriverItemVec *out)
             vec_push(*out, di);
         }
     }
+}
+
+void driver_suggest_module(Driver *dr, const char *name)
+{
+    size_t i;
+    uint32_t k;
+    const char *best = NULL;
+    uint32_t bd = 99, cap = (uint32_t)(strlen(name) <= 3 ? 1 : strlen(name) / 3);
+    for (i = 0; i < dr->S->files.len; i++) {
+        FileUnit *f = dr->S->files.data[i];
+        if (!f->is_user)
+            continue;
+        for (k = 0; k < f->ast->nitems; k++) {
+            Item *it = f->ast->items[k];
+            uint32_t d;
+            if (it->kind != ITEM_MODULE || !it->name.name)
+                continue;
+            d = sema_edit_distance(name, it->name.name, cap);
+            if (d <= cap && d < bd) {
+                bd = d;
+                best = it->name.name;
+            }
+        }
+    }
+    if (best)
+        diag_help("did you mean `%s`?", best);
 }
 
 void driver_tests(Driver *dr, DriverItemVec *out)

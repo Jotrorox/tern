@@ -186,7 +186,21 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
                 sb_free(&sb);
             }
         } else {
-            IrDesign *d = driver_elaborate_all(dr, top, &ira);
+            IrDesign *d;
+            const TernTarget *tg = NULL;
+            size_t nt = driver_targets(dr, &tg), t;
+            /* the build targets' tops must exist (tern build would fail) */
+            for (t = 0; t < nt; t++) {
+                Item *it;
+                if (!tg[t].top || paths.len)
+                    continue;
+                it = driver_find_item(dr, tg[t].top, NULL);
+                if (!it || (it->kind != ITEM_MODULE && it->kind != ITEM_EXTERN)) {
+                    diag_error(tg[t].span, "[target.%s]: `top = \"%s\"` names no module", tg[t].name, tg[t].top);
+                    driver_suggest_module(dr, tg[t].top);
+                }
+            }
+            d = driver_elaborate_all(dr, top, &ira);
             co.is_user_file = cmd_check_is_user_file;
             co.user = dr;
             if (diag_error_count() == 0)
