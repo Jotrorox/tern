@@ -766,6 +766,7 @@ void el_record_decl(Elab *el, Span at, const char *name, SemKind k, Ty *t, const
     si.kind = k;
     si.name = name;
     si.type = t && t->kind != TY_TYPE ? ty_str(t) : NULL;
+    si.width = t && t->hw ? t->width : 0;
     si.domain = domain;
     if (val && val_is_const(val) && val->kind != VAL_TYPE) {
         StrBuf sb = {0};
@@ -790,8 +791,10 @@ void el_record_use(Elab *el, Span at, Binding *b, const char *name)
     if (b) {
         si.def = b->def;
         si.kind = (SemKind)b->sem;
-        if (b->val.ty && b->val.kind != VAL_TYPE && b->val.kind != VAL_ERROR)
+        if (b->val.ty && b->val.kind != VAL_TYPE && b->val.kind != VAL_ERROR) {
             si.type = ty_str(b->val.ty);
+            si.width = b->val.ty->hw ? b->val.ty->width : 0;
+        }
         if (b->val.kind == VAL_TYPE)
             si.value = ty_str(b->val.u.type);
         else if (!b->is_mut && val_is_const(&b->val) && b->val.kind != VAL_VOID) {
@@ -819,6 +822,46 @@ static void ce_record_item_use(Elab *el, Span at, Item *it, const char *name)
     case ITEM_FN: si.kind = SEM_FN; break;
     case ITEM_CONST: si.kind = SEM_CONST; break;
     default: si.kind = SEM_TYPE; break;
+    }
+    sema_info_record(el->S, &si);
+}
+
+/* `x.f`: struct / bundle fields and instance ports (hover, go-to-definition) */
+static void ce_record_field_use(Elab *el, const Value *base, const Value *r, Ident name)
+{
+    SemInfo si;
+    Ty *t = base->ty;
+    if (!el->S->record_info || el->quiet || !name.span.file || r->kind == VAL_ERROR ||
+        sema_info_decl(el->S, name.span))
+        return;
+    memset(&si, 0, sizeof si);
+    si.span = name.span;
+    si.name = name.name;
+    si.kind = SEM_FIELD;
+    if (base->kind == VAL_INST && base->u.inst && base->u.inst->mi) {
+        ModInfo *mi = base->u.inst->mi;
+        uint32_t i;
+        for (i = 0; i < mi->nports; i++)
+            if (mi->ports[i].name == name.name) {
+                si.def = mi->ports[i].loc;
+                si.kind = mi->ports[i].dir == PORT_IN ? SEM_PORT_IN : SEM_PORT_OUT;
+                if (mi->ports[i].ty) {
+                    si.type = ty_str(mi->ports[i].ty);
+                    si.width = mi->ports[i].ty->hw ? mi->ports[i].ty->width : 0;
+                }
+                break;
+            }
+    } else if (t && (t->kind == TY_STRUCT || t->kind == TY_BUNDLE)) {
+        int k = ty_field_index(t, name.name);
+        if (k < 0)
+            return;
+        si.def = t->fields[k].loc;
+        if (t->fields[k].ty) {
+            si.type = ty_str(t->fields[k].ty);
+            si.width = t->fields[k].ty->hw ? t->fields[k].ty->width : 0;
+        }
+    } else {
+        return;
     }
     sema_info_record(el->S, &si);
 }
@@ -5590,6 +5633,7 @@ Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
     case EXPR_FIELD: {
         Value base = elab_eval(el, e->u.field.base, env, NULL);
         Value v = el_field(el, base, e->u.field.name.name, e->u.field.name.span);
+        ce_record_field_use(el, &base, &v, e->u.field.name);
         if (v.kind == VAL_HW && v.u.e && !v.u.e->loc.file)
             v.u.e = ce_located(el, v.u.e, e->span);
         return v;

@@ -66,6 +66,9 @@
 #include "pkg/lock.c"
 #include "pkg/git.c"
 #include "pkg/cmd_pkg.c"
+#include "lsp/rpc.c"
+#include "lsp/lsp.c"
+#include "lsp/lsp_nav.c"
 
 #include "tools/import.c"
 #include "tools/remap.c"

@@ -127,8 +127,11 @@ static const MainCmd main_cmds[] = {
      "  <build-dir>         directory with the emitted .sv files (default: build/)\n"
      "  <log>               tool log to translate (default: stdin)\n"
      "  -o, --output <f>    write the result to f (default: stdout)\n"},
-    {"lsp", cmd_lsp, "Interop", "",
-     "language server on stdio: diagnostics, go-to-definition, hover", NULL},
+    {"lsp", cmd_lsp, "Interop", "[--log <file>] [--debounce <ms>]",
+     "language server on stdio: diagnostics, go-to-definition, hover, instance tree",
+     "  --log <file>        write the message log and analysis timings to file\n"
+     "  --debounce <ms>     re-analyse after this long without edits (default: 150)\n"
+     "                      (editor setup: docs/editors.md)\n"},
     {"parse", cmd_parse, NULL, "--dump <file.tern>",
      "(internal) print the AST of a file", NULL},
     {"emit", cmd_emit, NULL, "--ir <design.json> [-o <dir> | --stdout]",

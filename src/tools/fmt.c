@@ -2324,13 +2324,21 @@ int fmt_verify(const AstFile *f, const char *text, size_t len, StrBuf *why)
     uint32_t id, i;
     int ok = 1;
     const SourceFile *sf = src_get(f->src);
+    DiagSink old_sink;
+    void *old_user;
     sb_printf(&name, "%s (formatted)", f->path ? f->path : "");
     diag_flush();
+    diag_get_sink(&old_sink, &old_user);
     diag_set_sink(fmt_null_sink, NULL);
-    id = src_add(name.data, text, len);
+    /* reuse the scratch source on repeated calls (tern lsp formats often) */
+    id = src_find(name.data);
+    if (id)
+        src_update(id, text, len);
+    else
+        id = src_add(name.data, text, len);
     g = parse_file(&a, id);
     diag_flush();
-    diag_set_sink(NULL, NULL);
+    diag_set_sink(old_sink, old_user);
     sb_free(&name);
     if (g->nerrors) {
         if (why)

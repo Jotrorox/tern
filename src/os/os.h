@@ -103,6 +103,12 @@ int os_color_enabled(int fd);
 int os_cpu_count(void);               /* >= 1 */
 /* Put stdout/stdin in binary mode (no CRLF translation; no-op on POSIX). */
 void os_set_binary_stdio(void);
+/* Unbuffered read of up to n bytes from standard input (bypasses stdio).
+ * Returns the number of bytes read (>= 1), 0 at end of input, -1 on error. */
+long os_read_stdin(char *buf, size_t n);
+/* Wait until standard input has data (or reached its end): 1 when a read
+ * would not block, 0 on timeout, -1 on error. timeout_ms < 0 waits forever. */
+int os_stdin_wait(int timeout_ms);
 
 /* ------------------------------------------------------------ processes --- */
 

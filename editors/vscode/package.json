@@ -1,0 +1,59 @@
+{
+  "name": "tern",
+  "displayName": "Tern",
+  "description": "Tern hardware description language: syntax highlighting and the tern lsp language server",
+  "version": "0.1.0",
+  "publisher": "tern-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": ["Programming Languages", "Formatters"],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "tern",
+        "aliases": ["Tern", "tern"],
+        "extensions": [".tern"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "tern",
+        "scopeName": "source.tern",
+        "path": "./syntaxes/tern.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Tern",
+      "properties": {
+        "tern.path": {
+          "type": "string",
+          "default": "tern",
+          "description": "Path of the tern executable (searched in PATH when it has no directory part)."
+        },
+        "tern.lsp.log": {
+          "type": "string",
+          "default": "",
+          "description": "When set, tern lsp writes its message log to this file (--log)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "tern.instanceTree",
+        "title": "Tern: Show Instance Tree"
+      },
+      {
+        "command": "tern.restartServer",
+        "title": "Tern: Restart Language Server"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

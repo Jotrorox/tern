@@ -185,6 +185,7 @@ typedef struct SemInfo {
     SemKind kind;
     const char *name;
     const char *type;     /* printed type, "uint<5>" */
+    uint32_t width;       /* bits of a hardware type (0: unknown / not hardware) */
     const char *domain;   /* clock domain name ("clk", "sys") */
     const char *driver;   /* "on clk", "comb", "continuous", "instance output", "input" */
     Span driver_span;     /* first assignment */

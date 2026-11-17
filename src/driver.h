@@ -18,6 +18,10 @@
  *   Explicit paths always win: they are the "user" files that are checked and
  *   whose roots are elaborated; the rest of the project is library code.
  *
+ * Sources are registered with src_add once per path: opening the same
+ * files again (the LSP re-analyses after every edit) reuses their source ids
+ * and updates the text when it changed.
+ *
  * std comes from $TERN_STD, else a `std/` directory next to the executable,
  * else the copy embedded in the binary (src/std_embed.c). When the user
  * files themselves declare `package std::...` (e.g. `tern check std`), those
@@ -34,6 +38,11 @@
 #include "ir/ir.h"
 #include "pkg/pkg.h"
 
+/* Contents that replace a file on disk (the LSP's open editor buffers):
+ * returns the text of `path` (as the driver spells it: absolute when the
+ * project root / given paths are) or NULL to read the file normally. */
+typedef const char *(*DriverOverlayFn)(void *user, const char *path, size_t *len);
+
 typedef struct DriverOptions {
     const char *const *paths;   /* command-line files / directories (may be empty) */
     size_t npaths;
@@ -41,6 +50,9 @@ typedef struct DriverOptions {
     uint64_t const_eval_limit;  /* 0: default 10^7 */
     const char *features;       /* --features "a,-b", or NULL */
     const char *cmd;            /* command name for messages ("check") */
+    const char *root;           /* where to look for tern.toml (upwards); NULL: cwd */
+    DriverOverlayFn overlay;    /* NULL: files come from disk */
+    void *overlay_user;
 } DriverOptions;
 
 typedef struct DriverItem {

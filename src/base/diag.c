@@ -361,6 +361,12 @@ void diag_set_sink(DiagSink sink, void *user)
     diag_st.sink_user = user;
 }
 
+void diag_get_sink(DiagSink *sink, void **user)
+{
+    *sink = diag_st.sink;
+    *user = diag_st.sink_user;
+}
+
 void diag_set_format(DiagFormat fmt) { diag_st.format = fmt; }
 DiagFormat diag_get_format(void) { return diag_st.format; }
 void diag_set_color(int on) { diag_st.color = on; }

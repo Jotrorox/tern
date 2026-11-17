@@ -46,6 +46,7 @@ HDRS = \
 	src/emit/emit.h \
 	src/sim/sim.h src/sim/sim_impl.h \
 	src/pkg/pkg.h \
+	src/lsp/lsp.h src/lsp/lsp_impl.h \
 	src/tools/tools.h \
 	src/sema/sema.h \
 	src/elab/value.h src/elab/elab.h src/elab/elab_impl.h \
@@ -298,8 +299,20 @@ $(OBJ)/pkg_cmd_pkg.o: src/pkg/cmd_pkg.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/pkg/cmd_pkg.c -o $@
 
 # --- lsp/
-LSP_SRCS =
-LSP_OBJS =
+LSP_SRCS = \
+	src/lsp/rpc.c \
+	src/lsp/lsp.c \
+	src/lsp/lsp_nav.c
+LSP_OBJS = \
+	$(OBJ)/lsp_rpc.o \
+	$(OBJ)/lsp_lsp.o \
+	$(OBJ)/lsp_nav.o
+$(OBJ)/lsp_rpc.o: src/lsp/rpc.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/lsp/rpc.c -o $@
+$(OBJ)/lsp_lsp.o: src/lsp/lsp.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/lsp/lsp.c -o $@
+$(OBJ)/lsp_nav.o: src/lsp/lsp_nav.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/lsp/lsp_nav.c -o $@
 
 # --- tools/
 TOOLS_SRCS = \
@@ -413,7 +426,8 @@ UNIT_TESTS = \
 	build/test_tools \
 	build/test_fmt \
 	build/test_emit \
-	build/test_backend
+	build/test_backend \
+	build/test_lsp
 
 tests/run: tests/run.c $(TEST_DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS)
@@ -438,6 +452,9 @@ build/test_backend: tests/unit/test_backend.c $(TEST_DEPS) $(IR_SRCS) $(EMIT_SRC
 
 build/test_emit: tests/unit/test_emit.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(EMIT_SRCS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_emit.c $(LDLIBS)
+
+build/test_lsp: tests/unit/test_lsp.c $(TEST_DEPS) $(SYNTAX_SRCS) $(IR_SRCS) $(SEMA_SRCS) $(ELAB_SRCS) $(CHECK_SRCS) $(PKG_SRCS) $(LSP_SRCS) src/tools/fmt.c src/std_embed.c src/driver.c $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_lsp.c $(LDLIBS)
 
 test: $(BIN) tests/run $(UNIT_TESTS)
 	for t in $(UNIT_TESTS); do ./$$t || exit 1; done

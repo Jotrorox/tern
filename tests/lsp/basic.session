@@ -1,0 +1,33 @@
+# A scripted `tern lsp` session, replayed by tests/unit/test_lsp.c.
+# `-->` lines are sent to the server, `<--` lines must match its messages in
+# order (subset match; "$ANY" matches any value). ${URI:name} is the file
+# URI of tests/lsp/name (the document is an editor buffer, not a file).
+
+--> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}
+<-- {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"hoverProvider":true,"definitionProvider":true,"documentFormattingProvider":true,"documentSymbolProvider":true}}}
+--> {"jsonrpc":"2.0","method":"initialized","params":{}}
+
+# open a document with a width error
+--> {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"${URI:session.tern}","languageId":"tern","version":1,"text":"module Top {\n    in a: u8\n    in b: u8\n    out y: u8\n    y = a + b\n}\n"}}}
+<-- {"method":"textDocument/publishDiagnostics","params":{"uri":"${URI:session.tern}","version":1,"diagnostics":[{"range":{"start":{"line":4,"character":8},"end":{"line":4,"character":13}},"severity":1,"source":"tern","message":"$ANY"}]}}
+
+# fix it: truncate explicitly
+--> {"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"${URI:session.tern}","version":2},"contentChanges":[{"range":{"start":{"line":4,"character":8},"end":{"line":4,"character":13}},"text":"a +% b"}]}}
+<-- {"method":"textDocument/publishDiagnostics","params":{"uri":"${URI:session.tern}","version":2,"diagnostics":[]}}
+
+# hover on `y` (line 4) and go to its declaration
+--> {"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"${URI:session.tern}"},"position":{"line":4,"character":4}}}
+<-- {"id":2,"result":{"contents":{"kind":"markdown","value":"```tern\nout y: uint<8>\n```\n\n*output port* · 8 bits · driven by `continuous` at session.tern:5"},"range":{"start":{"line":4,"character":4},"end":{"line":4,"character":5}}}}
+--> {"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"${URI:session.tern}"},"position":{"line":4,"character":9}}}
+<-- {"id":3,"result":{"uri":"${URI:session.tern}","range":{"start":{"line":1,"character":7},"end":{"line":1,"character":8}}}}
+
+--> {"jsonrpc":"2.0","id":4,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"${URI:session.tern}"}}}
+<-- {"id":4,"result":[{"name":"Top","kind":2,"children":[{"name":"a","detail":"in u8"},{"name":"b"},{"name":"y","detail":"out u8"}]}]}
+
+# closing the document clears its diagnostics
+--> {"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"${URI:session.tern}"}}}
+<-- {"method":"textDocument/publishDiagnostics","params":{"uri":"${URI:session.tern}","diagnostics":[]}}
+
+--> {"jsonrpc":"2.0","id":5,"method":"shutdown"}
+<-- {"id":5,"result":null}
+--> {"jsonrpc":"2.0","method":"exit"}
