@@ -672,10 +672,10 @@ static void ad_stmt(AdState *d, const Stmt *s)
     case STMT_STATIC_ASSERT:
         ad_stmt_head(d, "static_assert", s);
         sb_putc(d->sb, ' ');
-        ad_expr(d, s->u.static_assert.cond);
-        if (s->u.static_assert.msg) {
+        ad_expr(d, s->u.sassert.cond);
+        if (s->u.sassert.msg) {
             sb_putc(d->sb, ' ');
-            ad_expr(d, s->u.static_assert.msg);
+            ad_expr(d, s->u.sassert.msg);
         }
         break;
     case STMT_RETURN:
@@ -920,10 +920,10 @@ static void ad_item(AdState *d, const Item *it)
         break;
     case ITEM_STATIC_ASSERT:
         sb_putc(d->sb, ' ');
-        ad_expr(d, it->u.static_assert.cond);
-        if (it->u.static_assert.msg) {
+        ad_expr(d, it->u.sassert.cond);
+        if (it->u.sassert.msg) {
             sb_putc(d->sb, ' ');
-            ad_expr(d, it->u.static_assert.msg);
+            ad_expr(d, it->u.sassert.msg);
         }
         break;
     }

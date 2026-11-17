@@ -5897,16 +5897,16 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
         return;
     }
     case STMT_STATIC_ASSERT: {
-        Value c = elab_eval_const(el, s->u.static_assert.cond, env, S->t_bool, "a static_assert condition");
+        Value c = elab_eval_const(el, s->u.sassert.cond, env, S->t_bool, "a static_assert condition");
         if (c.kind == VAL_BOOL && !c.u.i) {
-            Value m = s->u.static_assert.msg ? elab_eval_const(el, s->u.static_assert.msg, env, NULL, "a message")
+            Value m = s->u.sassert.msg ? elab_eval_const(el, s->u.sassert.msg, env, NULL, "a message")
                                              : val_error();
             if (m.kind == VAL_STRING)
                 el_error(el, s->span, "static assertion failed: %.*s", (int)m.aux, m.u.s);
             else
-                el_error(el, s->span, "static assertion failed: `%s`", el_text(s->u.static_assert.cond));
+                el_error(el, s->span, "static assertion failed: `%s`", el_text(s->u.sassert.cond));
         } else if (c.kind != VAL_BOOL && c.kind != VAL_ERROR) {
-            el_error(el, s->u.static_assert.cond->span, "static_assert needs a bool condition");
+            el_error(el, s->u.sassert.cond->span, "static_assert needs a bool condition");
         }
         return;
     }

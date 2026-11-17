@@ -130,7 +130,7 @@ static uint32_t SIGP(IrModule *m, const char *name, const char *path, IrSigKind 
 static IrType *U(uint32_t w) { return ir_type_uint(D, w); }
 static IrType *SI(uint32_t w) { return ir_type_sint(D, w); }
 static IrType *BITS(uint32_t w) { return ir_type_bits(D, w); }
-static IrType *BOOL(void) { return ir_type_bool(D); }
+static IrType *T_BOOL(void) { return ir_type_bool(D); }
 static IrType *CLK(void) { return ir_type_clock(D, 0); }
 static IrExpr *S(IrModule *m, uint32_t s) { return ir_sig(TA, m, s, SP(1)); }
 static IrExpr *K(uint32_t w, uint64_t v) { return ir_const_u64(TA, w, v, SP(1)); }
@@ -230,8 +230,8 @@ static void te_counter(void)
     IrModule *m = ir_module_new(D, "Counter", "Counter", "Counter<8>", SP(10));
     uint32_t clk = SIG(m, "clk", IRS_IN, CLK(), 11);
     uint32_t rst = SIG(m, "rst", IRS_IN, ir_type_reset(D, 0, 0), 12);
-    uint32_t en = SIG(m, "en", IRS_IN, BOOL(), 13);
-    uint32_t load = SIG(m, "load", IRS_IN, BOOL(), 14);
+    uint32_t en = SIG(m, "en", IRS_IN, T_BOOL(), 13);
+    uint32_t load = SIG(m, "load", IRS_IN, T_BOOL(), 14);
     uint32_t din = SIG(m, "din", IRS_IN, U(8), 15);
     uint32_t cnt = SIG(m, "count", IRS_OUT, U(8), 16);
     uint32_t q = SIG(m, "q", IRS_REG, U(8), 17);
@@ -265,15 +265,15 @@ static void te_uart(void)
     st = ENUM("UartTx_16_1_State", 4, sn, 2);
     clk = SIG(m, "clk", IRS_IN, CLK(), 31);
     rst = SIG(m, "rst", IRS_IN, ir_type_reset(D, 0, 0), 32);
-    txv = SIGP(m, "tx_valid", "tx.valid", IRS_IN, BOOL(), 33);
+    txv = SIGP(m, "tx_valid", "tx.valid", IRS_IN, T_BOOL(), 33);
     txd_in = SIGP(m, "tx_data", "tx.data", IRS_IN, U(8), 33);
-    txr = SIGP(m, "tx_ready", "tx.ready", IRS_OUT, BOOL(), 33);
-    txd = SIG(m, "txd", IRS_OUT, BOOL(), 34);
+    txr = SIGP(m, "tx_ready", "tx.ready", IRS_OUT, T_BOOL(), 33);
+    txd = SIG(m, "txd", IRS_OUT, T_BOOL(), 34);
     state = SIG(m, "state", IRS_REG, st, 38);
     tick = SIG(m, "tick", IRS_REG, U(4), 39);
     bit = SIG(m, "bit", IRS_REG, U(3), 40);
     shift = SIG(m, "shift", IRS_REG, U(8), 41);
-    baud = SIG(m, "baud_tick", IRS_WIRE, BOOL(), 42);
+    baud = SIG(m, "baud_tick", IRS_WIRE, T_BOOL(), 42);
     ir_add_domain(D, m, "", clk, rst, 0);
     ir_set_init(D, m, state, ir_bits_u64(TA, 2, 0));
     ir_set_init(D, m, tick, ir_bits_u64(TA, 4, 0));
@@ -334,7 +334,7 @@ static void te_resets(void)
     c = SIG(pon, "clk", IRS_IN, CLK(), 71);
     q = SIG(pon, "q", IRS_OUT, U(4), 72);
     p = SIG(pon, "p", IRS_REG, U(4), 73);
-    cnt = SIG(pon, "seen", IRS_REG, BOOL(), 74);
+    cnt = SIG(pon, "seen", IRS_REG, T_BOOL(), 74);
     ir_add_domain(D, pon, "", c, IR_NONE, 0);
     ir_set_init(D, pon, p, ir_bits_u64(TA, 4, 5));
     ir_set_init(D, pon, cnt, ir_bits_u64(TA, 1, 0));
@@ -360,9 +360,9 @@ static void te_resets(void)
     clk = SIG(top, "clk", IRS_IN, CLK(), 91);
     rst = SIG(top, "rst", IRS_IN, ir_type_reset(D, 0, 0), 92);
     arst = SIG(top, "arst_n", IRS_IN, ir_type_reset(D, 1, 1), 93);
-    soft = SIG(top, "soft_rst_n", IRS_IN, BOOL(), 94);
+    soft = SIG(top, "soft_rst_n", IRS_IN, T_BOOL(), 94);
     din = SIG(top, "din", IRS_IN, U(8), 95);
-    sel = SIG(top, "sel", IRS_IN, BOOL(), 96);
+    sel = SIG(top, "sel", IRS_IN, T_BOOL(), 96);
     oa = SIG(top, "oa", IRS_OUT, U(8), 97);
     ob = SIG(top, "ob", IRS_OUT, U(8), 98);
     oc = SIG(top, "oc", IRS_OUT, U(8), 99);
@@ -438,16 +438,16 @@ static void te_case(void)
     op = SIG(m, "op", IRS_IN, U(3), 143);
     a = SIG(m, "a", IRS_IN, U(8), 144);
     b = SIG(m, "b", IRS_IN, U(8), 145);
-    go = SIG(m, "go", IRS_IN, BOOL(), 146);
+    go = SIG(m, "go", IRS_IN, T_BOOL(), 146);
     y = SIG(m, "y", IRS_OUT, U(8), 147);
-    flag = SIG(m, "flag", IRS_OUT, BOOL(), 148);
+    flag = SIG(m, "flag", IRS_OUT, T_BOOL(), 148);
     z = SIG(m, "z", IRS_OUT, U(2), 149);
     w = SIG(m, "w", IRS_OUT, U(8), 150);
     ph = SIG(m, "phase", IRS_OUT, U(2), 151);
     osel = SIG(m, "osel", IRS_OUT, U(8), 152);
     opc = SIG(m, "opc", IRS_WIRE, opt, 153);
     yv = SIG(m, "yv", IRS_VAR, U(8), 154);
-    fv = SIG(m, "fv", IRS_VAR, BOOL(), 155);
+    fv = SIG(m, "fv", IRS_VAR, T_BOOL(), 155);
     zv = SIG(m, "zv", IRS_VAR, U(2), 156);
     state = SIG(m, "state", IRS_REG, st, 157);
     cnt = SIG(m, "cnt", IRS_REG, U(8), 158);
@@ -560,7 +560,7 @@ static void te_types(void)
     cmdin = SIG(m, "cmd", IRS_IN, cmd, 205);
     grey = SIG(m, "grey", IRS_OUT, U(10), 206);
     kout = SIG(m, "kind_out", IRS_OUT, kind, 207);
-    isw = SIG(m, "is_write", IRS_OUT, BOOL(), 208);
+    isw = SIG(m, "is_write", IRS_OUT, T_BOOL(), 208);
     addr = SIG(m, "addr", IRS_OUT, U(16), 209);
     eout = SIG(m, "elem", IRS_OUT, U(8), 210);
     rdata = SIG(m, "green1", IRS_OUT, U(8), 211);
@@ -618,14 +618,14 @@ static void te_mem(void)
         ocnt, i;
     clk = SIG(m, "clk", IRS_IN, CLK(), 241);
     rst = SIG(m, "rst", IRS_IN, ir_type_reset(D, 0, 0), 242);
-    we = SIG(m, "we", IRS_IN, BOOL(), 243);
+    we = SIG(m, "we", IRS_IN, T_BOOL(), 243);
     wa = SIG(m, "waddr", IRS_IN, U(4), 244);
     wd = SIG(m, "wdata", IRS_IN, U(16), 245);
     wm = SIG(m, "wmask", IRS_IN, BITS(2), 246);
     ra = SIG(m, "raddr", IRS_IN, U(4), 247);
     ra2 = SIG(m, "raddr2", IRS_IN, U(4), 248);
     ra3 = SIG(m, "raddr3", IRS_IN, U(3), 249);
-    bwe = SIG(m, "big_we", IRS_IN, BOOL(), 250);
+    bwe = SIG(m, "big_we", IRS_IN, T_BOOL(), 250);
     oread = SIG(m, "rdata", IRS_OUT, U(16), 251);
     oasync = SIG(m, "adata", IRS_OUT, U(16), 252);
     orom = SIG(m, "romdata", IRS_OUT, U(8), 253);
@@ -678,7 +678,7 @@ static void te_hier(void)
     a = SIG(add, "a", IRS_IN, U(8), 281);
     b = SIG(add, "b", IRS_IN, U(8), 282);
     s = SIG(add, "s", IRS_OUT, U(8), 283);
-    c = SIG(add, "c", IRS_OUT, BOOL(), 284);
+    c = SIG(add, "c", IRS_OUT, T_BOOL(), 284);
     sum9 = SIG(add, "full", IRS_WIRE, U(9), 285);
     ir_add_param(D, add, "W", ir_bits_u64(TA, 32, 8), 0);
     CONT(add, sum9, BIN(IROP_ADD, ZX(S(add, a), 9), ZX(S(add, b), 9)), 285);
@@ -691,7 +691,7 @@ static void te_hier(void)
     SIG(pll, "refclk", IRS_IN, CLK(), 291);
     SIG(pll, "rst", IRS_IN, ir_type_reset(D, 1, 0), 292);
     SIG(pll, "outclk", IRS_OUT, CLK(), 293);
-    SIG(pll, "locked", IRS_OUT, BOOL(), 294);
+    SIG(pll, "locked", IRS_OUT, T_BOOL(), 294);
     ir_add_param(D, pll, "DIV", ir_bits_u64(TA, 32, 4), 0);
     ir_design_add_module(D, pll);
     top = ir_module_new(D, "Hier", NULL, NULL, SP(300));
@@ -700,13 +700,13 @@ static void te_hier(void)
     x = SIG(top, "x", IRS_IN, U(8), 303);
     y = SIG(top, "y", IRS_IN, U(8), 304);
     sum = SIG(top, "sum", IRS_OUT, U(8), 305);
-    carry = SIG(top, "carry", IRS_OUT, BOOL(), 306);
-    locked = SIG(top, "locked", IRS_OUT, BOOL(), 307);
+    carry = SIG(top, "carry", IRS_OUT, T_BOOL(), 306);
+    locked = SIG(top, "locked", IRS_OUT, T_BOOL(), 307);
     w_s1 = SIG(top, "u1_s", IRS_WIRE, U(8), 308);
-    w_c1 = SIG(top, "u1_c", IRS_WIRE, BOOL(), 309);
+    w_c1 = SIG(top, "u1_c", IRS_WIRE, T_BOOL(), 309);
     w_s2 = SIG(top, "u2_s", IRS_WIRE, U(8), 310);
-    w_c2 = SIG(top, "u2_c", IRS_WIRE, BOOL(), 311);
-    w_lk = SIG(top, "pll_locked", IRS_WIRE, BOOL(), 312);
+    w_c2 = SIG(top, "u2_c", IRS_WIRE, T_BOOL(), 311);
+    w_lk = SIG(top, "pll_locked", IRS_WIRE, T_BOOL(), 312);
     w_oc = SIG(top, "pll_outclk", IRS_WIRE, CLK(), 313);
     ir_add_domain(D, top, "", clk, rst, 100000000);
     i = ir_add_instance(D, top, "u1", add, SP(314));
@@ -742,7 +742,7 @@ static void te_arith(void)
     sa = SIG(m, "sa", IRS_IN, SI(8), 333);
     sb = SIG(m, "sb", IRS_IN, SI(8), 334);
     sh = SIG(m, "sh", IRS_IN, U(4), 335);
-    c = SIG(m, "c", IRS_IN, BOOL(), 336);
+    c = SIG(m, "c", IRS_IN, T_BOOL(), 336);
     w1 = SIG(m, "w1", IRS_IN, BITS(100), 337);
     w2 = SIG(m, "w2", IRS_IN, BITS(100), 338);
     big.w[0] = UINT64_C(0xDEADBEEFCAFEF00D);
@@ -765,12 +765,12 @@ static void te_arith(void)
     TE_OUT("modc", U(8), BIN(IROP_MOD, S(m, a), K(8, 5)));
     TE_OUT("sdivc", SI(8), SBIN(IROP_DIV, S(m, sa), K(8, 0xFD)));
     TE_OUT("smodc", SI(8), SBIN(IROP_MOD, S(m, sa), K(8, 0xFD)));
-    TE_OUT("ult", BOOL(), BIN(IROP_LT, S(m, a), S(m, b)));
-    TE_OUT("ule", BOOL(), BIN(IROP_LE, S(m, a), S(m, b)));
-    TE_OUT("slt", BOOL(), SBIN(IROP_LT, S(m, sa), S(m, sb)));
-    TE_OUT("sge", BOOL(), SBIN(IROP_GE, S(m, sa), S(m, sb)));
-    TE_OUT("sgt_u", BOOL(), BIN(IROP_GT, S(m, sa), S(m, sb))); /* unsigned compare of signed signals */
-    TE_OUT("sltk", BOOL(), SBIN(IROP_LT, S(m, sa), K(8, 0xF0)));
+    TE_OUT("ult", T_BOOL(), BIN(IROP_LT, S(m, a), S(m, b)));
+    TE_OUT("ule", T_BOOL(), BIN(IROP_LE, S(m, a), S(m, b)));
+    TE_OUT("slt", T_BOOL(), SBIN(IROP_LT, S(m, sa), S(m, sb)));
+    TE_OUT("sge", T_BOOL(), SBIN(IROP_GE, S(m, sa), S(m, sb)));
+    TE_OUT("sgt_u", T_BOOL(), BIN(IROP_GT, S(m, sa), S(m, sb))); /* unsigned compare of signed signals */
+    TE_OUT("sltk", T_BOOL(), SBIN(IROP_LT, S(m, sa), K(8, 0xF0)));
     TE_OUT("shl", U(8), BIN(IROP_SHL, S(m, a), S(m, sh)));
     TE_OUT("shr", U(8), BIN(IROP_SHR, S(m, a), S(m, sh)));
     TE_OUT("ashr", SI(8), SBIN(IROP_ASHR, S(m, sa), S(m, sh)));
@@ -778,30 +778,30 @@ static void te_arith(void)
     TE_OUT("shl_far", U(8), BIN(IROP_SHL, S(m, a), S(m, b)));
     TE_OUT("neg", SI(8), UN(IROP_NEG, S(m, sa)));
     TE_OUT("inv", U(8), UN(IROP_NOT, S(m, a)));
-    TE_OUT("rand", BOOL(), UN(IROP_RAND, S(m, a)));
-    TE_OUT("ror", BOOL(), UN(IROP_ROR, S(m, a)));
-    TE_OUT("rxor", BOOL(), UN(IROP_RXOR, BIN(IROP_AND, S(m, a), S(m, b))));
-    TE_OUT("logic", BOOL(),
+    TE_OUT("rand", T_BOOL(), UN(IROP_RAND, S(m, a)));
+    TE_OUT("ror", T_BOOL(), UN(IROP_ROR, S(m, a)));
+    TE_OUT("rxor", T_BOOL(), UN(IROP_RXOR, BIN(IROP_AND, S(m, a), S(m, b))));
+    TE_OUT("logic", T_BOOL(),
            BIN(IROP_LOR, BIN(IROP_LAND, S(m, c), UN(IROP_LNOT, BIN(IROP_EQ, S(m, a), S(m, b)))),
                BIN(IROP_NE, S(m, sa), S(m, sb))));
     /* signed operations inside unsigned contexts */
     TE_OUT("mix1", U(8), BIN(IROP_ADD, SBIN(IROP_ASHR, S(m, sa), K(2, 1)), S(m, a)));
     TE_OUT("mix2", U(8), BIN(IROP_XOR, SBIN(IROP_DIV, S(m, sa), S(m, sb)), S(m, a)));
     TE_OUT("mix3", U(8), MUX(S(m, c), SBIN(IROP_DIV, S(m, sa), K(8, 3)), S(m, a)));
-    TE_OUT("mix4", BOOL(), BIN(IROP_LT, SBIN(IROP_ASHR, S(m, sa), K(2, 2)), S(m, a)));
+    TE_OUT("mix4", T_BOOL(), BIN(IROP_LT, SBIN(IROP_ASHR, S(m, sa), K(2, 2)), S(m, a)));
     TE_OUT("mix5", SI(8), SBIN(IROP_ADD, SBIN(IROP_MOD, S(m, sa), S(m, sb)), UN(IROP_NEG, S(m, sb))));
     TE_OUT("mix6", U(16), BIN(IROP_MUL, ZX(S(m, a), 16), SX(S(m, sb), 16)));
-    TE_OUT("mix7", BOOL(), SBIN(IROP_LT, SX(SBIN(IROP_ADD, S(m, sa), S(m, sb)), 9), SX(S(m, sb), 9)));
+    TE_OUT("mix7", T_BOOL(), SBIN(IROP_LT, SX(SBIN(IROP_ADD, S(m, sa), S(m, sb)), 9), SX(S(m, sb), 9)));
     TE_OUT("mix8", U(8), BIN(IROP_SUB, BIN(IROP_ADD, S(m, a), S(m, b)), BIN(IROP_ADD, S(m, b), S(m, a))));
     TE_OUT("mix9", U(8), BIN(IROP_SHL, BIN(IROP_ADD, S(m, a), S(m, b)), K(3, 2)));
-    TE_OUT("mix10", BOOL(), BIN(IROP_EQ, BIN(IROP_AND, S(m, a), K(8, 0x0F)), BIN(IROP_OR, S(m, b), K(8, 0xF0))));
+    TE_OUT("mix10", T_BOOL(), BIN(IROP_EQ, BIN(IROP_AND, S(m, a), K(8, 0x0F)), BIN(IROP_OR, S(m, b), K(8, 0xF0))));
     /* wide */
     TE_OUT("wadd", BITS(100), BIN(IROP_ADD, S(m, w1), S(m, w2)));
     TE_OUT("wmul", BITS(100), BIN(IROP_MUL, S(m, w1), S(m, w2)));
     TE_OUT("wxor", BITS(100), BIN(IROP_XOR, S(m, w1), ir_const(TA, big, SP(1))));
     TE_OUT("wshr", BITS(100), BIN(IROP_SHR, S(m, w1), S(m, a)));
     TE_OUT("washr", BITS(100), SBIN(IROP_ASHR, S(m, w2), SL(S(m, a), 0, 7)));
-    TE_OUT("wlt", BOOL(), SBIN(IROP_LT, S(m, w1), S(m, w2)));
+    TE_OUT("wlt", T_BOOL(), SBIN(IROP_LT, S(m, w1), S(m, w2)));
     /* (Icarus Verilog 13 returns 0 for a >64-bit unsigned division whose
      * dividend has its MSB set, so the dividend is shifted right by one) */
     TE_OUT("wdiv", BITS(100), BIN(IROP_DIV, BIN(IROP_SHR, S(m, w1), K(1, 1)), ZX(S(m, b), 100)));
@@ -829,7 +829,7 @@ static void te_resize(void)
         line++;                                              \
     } while (0)
     TE_OUT("z9", U(9), ZX(BIN(IROP_ADD, S(m, a), S(m, b)), 9));
-    TE_OUT("carry", BOOL(), SL(BIN(IROP_ADD, ZX(S(m, a), 9), ZX(S(m, b), 9)), 8, 1));
+    TE_OUT("carry", T_BOOL(), SL(BIN(IROP_ADD, ZX(S(m, a), 9), ZX(S(m, b), 9)), 8, 1));
     TE_OUT("t4", U(4), ir_resize(TA, BIN(IROP_MUL, S(m, a), S(m, b)), 4, 0, SP(1)));
     TE_OUT("tpath", U(3), ir_resize(TA, S(m, b), 3, 0, SP(1)));
     TE_OUT("sx", SI(16), SX(SBIN(IROP_ADD, S(m, s), K(8, 3)), 16));
@@ -842,7 +842,7 @@ static void te_resize(void)
     TE_OUT("elem", U(8), IDX(S(m, arr), S(m, idx), 8));
     TE_OUT("elem_lo", U(4), SL(IDX(S(m, arr), S(m, idx), 8), 0, 4));
     TE_OUT("elem_x", U(8), IDX(BIN(IROP_XOR, S(m, arr), K(32, 0x0F0F0F0F)), S(m, idx), 8));
-    TE_OUT("bit", BOOL(), IDX(S(m, a), SL(S(m, b), 0, 3), 1));
+    TE_OUT("bit", T_BOOL(), IDX(S(m, a), SL(S(m, b), 0, 3), 1));
     TE_OUT("scat", U(8), SL(CAT2(S(m, a), S(m, b)), 4, 8));
     TE_OUT("sres", U(8), SL(ZX(S(m, a), 16), 4, 8));
     TE_OUT("sres2", U(4), SL(SX(S(m, s), 16), 10, 4));
@@ -887,13 +887,13 @@ static void te_asserts(void)
     IrExpr *fire;
     clk = SIG(m, "clk", IRS_IN, CLK(), 471);
     rst = SIG(m, "rst", IRS_IN, ir_type_reset(D, 0, 0), 472);
-    pv = SIGP(m, "push_valid", "push.valid", IRS_IN, BOOL(), 473);
+    pv = SIGP(m, "push_valid", "push.valid", IRS_IN, T_BOOL(), 473);
     pd = SIGP(m, "push_data", "push.data", IRS_IN, U(8), 473);
-    pr = SIGP(m, "push_ready", "push.ready", IRS_OUT, BOOL(), 473);
-    popr = SIG(m, "pop_ready", IRS_IN, BOOL(), 474);
+    pr = SIGP(m, "push_ready", "push.ready", IRS_OUT, T_BOOL(), 473);
+    popr = SIG(m, "pop_ready", IRS_IN, T_BOOL(), 474);
     ocnt = SIG(m, "level", IRS_OUT, U(3), 475);
     count = SIG(m, "count", IRS_REG, U(3), 476);
-    full = SIG(m, "full", IRS_WIRE, BOOL(), 477);
+    full = SIG(m, "full", IRS_WIRE, T_BOOL(), 477);
     ir_add_domain(D, m, "", clk, rst, 0);
     ir_set_init(D, m, count, ir_bits_u64(TA, 3, 0));
     CONT(m, full, BIN(IROP_EQ, S(m, count), K(3, 4)), 478);
@@ -976,10 +976,10 @@ static void te_cdc(void)
     ir_module_add_attr(D, sync, "cdc", "sync2");
     src = SIG(sync, "src", IRS_IN, CLK(), 501);
     dst = SIG(sync, "dst", IRS_IN, CLK(), 502);
-    d = SIG(sync, "d", IRS_IN, BOOL(), 503);
-    q = SIG(sync, "q", IRS_OUT, BOOL(), 504);
-    s1 = SIG(sync, "s1", IRS_REG, BOOL(), 505);
-    s2 = SIG(sync, "s2", IRS_REG, BOOL(), 506);
+    d = SIG(sync, "d", IRS_IN, T_BOOL(), 503);
+    q = SIG(sync, "q", IRS_OUT, T_BOOL(), 504);
+    s1 = SIG(sync, "s1", IRS_REG, T_BOOL(), 505);
+    s2 = SIG(sync, "s2", IRS_REG, T_BOOL(), 506);
     ir_add_domain(D, sync, "src", src, IR_NONE, 0);
     ir_add_domain(D, sync, "dst", dst, IR_NONE, 0);
     sync->sigs[d].domain = 0;
@@ -1001,7 +1001,7 @@ static void te_cdc(void)
     wrst = SIG(fifo, "wrst", IRS_IN, ir_type_reset(D, 1, 1), 522);
     rclk = SIG(fifo, "rclk", IRS_IN, CLK(), 523);
     rrst = SIG(fifo, "rrst", IRS_IN, ir_type_reset(D, 1, 1), 524);
-    wen = SIG(fifo, "wen", IRS_IN, BOOL(), 525);
+    wen = SIG(fifo, "wen", IRS_IN, T_BOOL(), 525);
     wdat = SIG(fifo, "wdata", IRS_IN, U(8), 526);
     rdat = SIG(fifo, "rdata", IRS_OUT, U(8), 527);
     wbin = SIG(fifo, "wbin", IRS_REG, U(3), 528);
@@ -1061,7 +1061,7 @@ static void te_cdc(void)
     rs_clk = SIG(rsync, "clk", IRS_IN, CLK(), 551);
     rs_in = SIG(rsync, "rst_in", IRS_IN, ir_type_reset(D, 1, 0), 552);
     rs_out = SIG(rsync, "rst_out", IRS_OUT, ir_type_reset(D, 1, 0), 553);
-    rs_act = SIG(rsync, "active", IRS_OUT, BOOL(), 554);
+    rs_act = SIG(rsync, "active", IRS_OUT, T_BOOL(), 554);
     rs_chain = SIG(rsync, "chain", IRS_REG, BITS(2), 555);
     ir_add_domain(D, rsync, "d", rs_clk, rs_in, 0);
     rsync->sigs[rs_chain].domain = 0;
@@ -1079,12 +1079,12 @@ static void te_cdc(void)
     pclk = SIG(top, "pix_clk", IRS_IN, CLK(), 563);
     din = SIG(top, "din", IRS_IN, U(8), 564);
     cfg = SIG(top, "cfg", IRS_IN, U(4), 565);
-    oflag = SIG(top, "flag_pix", IRS_OUT, BOOL(), 566);
+    oflag = SIG(top, "flag_pix", IRS_OUT, T_BOOL(), 566);
     odat = SIG(top, "data_pix", IRS_OUT, U(8), 567);
     ocfg = SIG(top, "cfg_pix", IRS_OUT, U(4), 568);
-    flag = SIG(top, "flag", IRS_REG, BOOL(), 569);
+    flag = SIG(top, "flag", IRS_REG, T_BOOL(), 569);
     cfgp = SIG(top, "cfg_q", IRS_REG, U(4), 570);
-    w_q = SIG(top, "u_sync_q", IRS_WIRE, BOOL(), 571);
+    w_q = SIG(top, "u_sync_q", IRS_WIRE, T_BOOL(), 571);
     w_d = SIG(top, "u_xfer_rdata", IRS_WIRE, U(8), 572);
     w_cfg = SIG(top, "cfg_cross", IRS_WIRE, U(4), 573);
     rd_q = SIG(top, "pix_rst_n", IRS_WIRE, ir_type_reset(D, 1, 1), 574);
@@ -1118,10 +1118,10 @@ static void te_cdc(void)
     /* a counter in a domain reset by the ResetSync output */
     pix_arst = SIG(top, "pix_arst", IRS_IN, ir_type_reset(D, 1, 0), 586);
     w_prst = SIG(top, "u_rsync_rst_out", IRS_WIRE, ir_type_reset(D, 1, 0), 587);
-    w_pact = SIG(top, "u_rsync_active", IRS_WIRE, BOOL(), 588);
+    w_pact = SIG(top, "u_rsync_active", IRS_WIRE, T_BOOL(), 588);
     pcnt = SIG(top, "pix_cnt", IRS_REG, U(4), 589);
     opcnt = SIG(top, "pix_count", IRS_OUT, U(4), 590);
-    opact = SIG(top, "pix_in_reset", IRS_OUT, BOOL(), 591);
+    opact = SIG(top, "pix_in_reset", IRS_OUT, T_BOOL(), 591);
     ir_add_domain(D, top, "pix_r", pclk, w_prst, 0);
     top->sigs[pcnt].domain = 2;
     ir_set_init(D, top, pcnt, ir_bits_u64(TA, 4, 0));
@@ -1173,7 +1173,7 @@ static void te_regmap(void)
     fctrl[0].name = "enable";
     fctrl[0].lo = 0;
     fctrl[0].width = 1;
-    fctrl[0].type = BOOL();
+    fctrl[0].type = T_BOOL();
     fctrl[1].name = "mode";
     fctrl[1].lo = 1;
     fctrl[1].width = 2;
@@ -1181,19 +1181,19 @@ static void te_regmap(void)
     fstat[0].name = "busy";
     fstat[0].lo = 0;
     fstat[0].width = 1;
-    fstat[0].type = BOOL();
+    fstat[0].type = T_BOOL();
     fstat[1].name = "err";
     fstat[1].lo = 1;
     fstat[1].width = 1;
-    fstat[1].type = BOOL();
+    fstat[1].type = T_BOOL();
     firq[0].name = "done";
     firq[0].lo = 0;
     firq[0].width = 1;
-    firq[0].type = BOOL();
+    firq[0].type = T_BOOL();
     firq[1].name = "overflow";
     firq[1].lo = 1;
     firq[1].width = 1;
-    firq[1].type = BOOL();
+    firq[1].type = T_BOOL();
     regs[0].offset = 0x00;
     regs[0].name = "ctrl";
     regs[0].access = IR_RW;
@@ -1257,11 +1257,11 @@ static void te_names(void)
     clk = SIG(top, "clk", IRS_IN, CLK(), 626);
     b = SIG(top, "bit", IRS_IN, st, 627);
     lg = SIG(top, "logic", IRS_OUT, U(4), 628);
-    ty = SIG(top, "type_default", IRS_WIRE, BOOL(), 629);
+    ty = SIG(top, "type_default", IRS_WIRE, T_BOOL(), 629);
     b2 = SIG(top, "bit_", IRS_REG, U(4), 630);
     w = SIG(top, "begin_output", IRS_WIRE, U(4), 631);
     ev = SIG(top, "event", IRS_OUT, e, 632);
-    pr = SIG(top, "9lives", IRS_OUT, BOOL(), 633);
+    pr = SIG(top, "9lives", IRS_OUT, T_BOOL(), 633);
     ir_add_domain(D, top, "", clk, IR_NONE, 0);
     CONT(top, ty, BIN(IROP_EQ, ir_field(TA, S(top, b), "end", SP(1)), KT(e, 0)), 634);
     ir_add_process(D, top, IRP_CLOCKED, 0, BL(ASG(top, b2, ir_field(TA, S(top, b), "int", SP(1)), 635), NULL), SP(635));

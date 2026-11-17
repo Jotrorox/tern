@@ -389,7 +389,7 @@ typedef enum StmtKind {
     STMT_FOR,             /* u.for_stmt: for pat in e { ... } */
     STMT_WHILE,           /* u.while_stmt: while c { ... } */
     STMT_ASSERT,          /* u.assert_stmt: assert c[, msg] / expect c[, msg] */
-    STMT_STATIC_ASSERT,   /* u.static_assert: static_assert(c[, msg]) */
+    STMT_STATIC_ASSERT,   /* u.sassert: static_assert(c[, msg]) */
     STMT_RETURN           /* u.ret: return [e] (value may be NULL) */
 } StmtKind;
 
@@ -416,7 +416,7 @@ struct Stmt {
         struct { Pattern *pat; Expr *iter; Block *body; } for_stmt;
         struct { Expr *cond; Block *body; } while_stmt;
         struct { AssertKind kind; Expr *cond; Expr *msg; } assert_stmt;      /* msg may be NULL */
-        struct { Expr *cond; Expr *msg; } static_assert;                     /* msg may be NULL */
+        struct { Expr *cond; Expr *msg; } sassert;                     /* msg may be NULL */
         Expr *ret;
     } u;
 };
@@ -437,7 +437,7 @@ typedef enum ItemKind {
     ITEM_TEST,            /* u.test */
     ITEM_PROPERTY,        /* u.property */
     ITEM_SEQUENCE,        /* u.sequence */
-    ITEM_STATIC_ASSERT    /* u.static_assert: static_assert(c, "msg") at file level */
+    ITEM_STATIC_ASSERT    /* u.sassert: static_assert(c, "msg") at file level */
 } ItemKind;
 
 typedef struct Variant {
@@ -535,7 +535,7 @@ struct Item {
         struct { const char *name; Span name_span; Block *body; } test;
         struct { PropertyKind kind; Expr *body; } property;
         struct { Expr *body; } sequence;
-        struct { Expr *cond; Expr *msg; } static_assert;
+        struct { Expr *cond; Expr *msg; } sassert;
     } u;
 };
 

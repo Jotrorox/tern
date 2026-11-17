@@ -1770,7 +1770,7 @@ static void fmt_stmt(FmtState *st, const Stmt *s)
         }
         break;
     case STMT_STATIC_ASSERT:
-        fmt_static_assert(st, kw, s->u.static_assert.cond, s->u.static_assert.msg);
+        fmt_static_assert(st, kw, s->u.sassert.cond, s->u.sassert.msg);
         break;
     case STMT_RETURN:
         fmt_str(st, "return");
@@ -2150,7 +2150,7 @@ static void fmt_item(FmtState *st, const Item *it)
         fmt_temporal_body(st, fmt_end(it->name.span), close, it->u.sequence.body);
         break;
     case ITEM_STATIC_ASSERT:
-        fmt_static_assert(st, kw, it->u.static_assert.cond, it->u.static_assert.msg);
+        fmt_static_assert(st, kw, it->u.sassert.cond, it->u.sassert.msg);
         break;
     }
     TERN_UNUSED(i);
