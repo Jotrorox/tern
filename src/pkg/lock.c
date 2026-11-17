@@ -988,6 +988,16 @@ static int res_fetch(Resolver *R, ResPkg *p)
         diag_warning(span_none(), "`%s` %s: its tern.toml says version %s", p->node.name, p->node.version,
                      p->man.version);
     }
+    if (p->node.kind == PKG_SRC_GIT && p->node.tag && p->man.version) {
+        /* a semver tag and the manifest version should agree */
+        PkgVersion tv, mv;
+        if (pkg_version_parse(p->node.tag, &tv, 1) == 0 && pkg_version_parse(p->man.version, &mv, 0) == 0 &&
+            pkg_version_cmp(&tv, &mv) != 0) {
+            diag_warning(span_none(), "`%s` tag %s: its tern.toml says version %s", p->node.name, p->node.tag,
+                         p->man.version);
+            diag_help("the lock records the tern.toml version; bump it before tagging a release");
+        }
+    }
     if (!p->node.version)
         p->node.version = arena_strdup(&R->arena, p->man.version ? p->man.version : "0.0.0");
     return 0;

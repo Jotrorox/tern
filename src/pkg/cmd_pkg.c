@@ -350,6 +350,7 @@ int cmd_add(int argc, char **argv)
     ArgParser ap;
     const char *tag = NULL, *rev = NULL, *branch = NULL, *path = NULL, *git = NULL, *name_opt = NULL;
     char *git_owned = NULL;   /* git URL made from a local directory */
+    char *hint_tag = NULL, *hint_commit = NULL;
     VEC(const char *) specs = {0};
     CpkgProject p;
     PkgGitProvider g;
@@ -523,6 +524,14 @@ int cmd_add(int argc, char **argv)
             arena_release(&a);
             goto out;
         }
+        /* the resolver below fetches the same commit again: point it at this one */
+        if (node.tag && node.commit) {
+            hint_tag = xstrdup(node.tag);
+            hint_commit = xstrdup(node.commit);
+            g.hint_url = git;
+            g.hint_tag = hint_tag;
+            g.hint_commit = hint_commit;
+        }
         mp = os_path_join(node.root, PKG_MANIFEST_FILE);
         if (!os_is_file(mp)) {
             diag_error(span_none(), "%s is not a Tern package (no tern.toml at its root)", git);
@@ -694,6 +703,8 @@ out:
     sb_free(&text);
     free(index_url);
     free(git_owned);
+    free(hint_tag);
+    free(hint_commit);
     cpkg_close(&p);
     return rc;
 }
