@@ -475,8 +475,8 @@ module Resets {
 ```
 
 * A domain with a clock but no reset is allowed. Every `reg` in it is
-  reset-less, and `= init` becomes a power-on value (an `initial` value on
-  FPGA targets, a warning on ASIC targets).
+  reset-less, and `= init` becomes a power-on value (a declaration initializer
+  on FPGA targets, a warning on ASIC targets).
 * A reset is never data. `rst as bool` is an error. A design that needs to
   know whether it is in reset uses a `reg in_reset: bool = true` that it
   clears.

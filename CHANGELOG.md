@@ -62,8 +62,13 @@ of spec version 0.1 (`docs/tern-spec.pdf`) and every command of spec §13.2.
 
 ### Simulation and verification
 
-* Built-in cycle-based, 2-state simulator (an interpreter over a flattened
-  netlist), with VCD output.
+* Built-in cycle-based, 2-state simulator: an interpreter over a flattened
+  netlist that switches long tests to a model compiled to C with the host
+  compiler (`--sim auto|interp|compiled`, cached in `build/simcache/`), with
+  VCD output.
+* `tern test --backend verilator` for designs with extern modules (chosen
+  automatically), through a generic VPI harness.
+* `#[test_port]` signals that tests drive, overriding the design's driver.
 * `test` blocks: `sim` handles, `reset`/`step`/`step_until`/`settle`/`run`,
   per-domain stepping, `expect` and `assert` with operand values, `log`,
   `rand<T>()` with rejection constraints and per-test seeds, table-driven
@@ -113,14 +118,5 @@ of spec version 0.1 (`docs/tern-spec.pdf`) and every command of spec §13.2.
 
 ### Known limitations
 
-* The simulator is an interpreter. The compile-to-C mode of spec §13.7 is not
-  implemented.
-* `tern test --backend verilator` (spec §13.4) is not available, so tests of
-  designs with extern modules cannot run.
-* The `tern check` warning for reset-less registers that are read before
-  any write (spec §6.5) is not implemented. The simulator's per-seed
-  randomization of power-on values is.
-* `#[test_port]` (spec §11.1) is accepted, but tests cannot yet drive a
-  signal marked with it.
 * `Arbiter`'s `.Weighted` policy and a few other std details differ from the
   spec's tables. See `std/README.md` and `std/README-part2.md`.

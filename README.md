@@ -235,15 +235,17 @@ spec §13.2. The standard library passes its own 363 tests (`tern test std`).
 CI builds with GCC and Clang (C99 and C11, `-Werror`), MSVC and TCC, runs
 the test suite under AddressSanitizer and UndefinedBehaviorSanitizer,
 cross-checks emitted SystemVerilog against the simulator with Icarus Verilog,
-and lints and synthesizes it with Verilator and Yosys.
+lints and synthesizes it with Verilator and Yosys, and fuzzes the parser and
+the front end.
 
 This is an early release. Known limitations:
 
 * **The compiled simulator needs a host C compiler.** Long tests switch from
   the interpreter to a model compiled with `$CC`/`cc`/`cl` (`--sim auto`);
   without a compiler they stay interpreted, which is slow on large designs.
-* **No Verilator test backend.** Tests that instantiate an `extern module`
-  cannot run, because `tern test` only accepts `--backend builtin`.
+* **Verilator for extern modules.** Tests of designs that contain an
+  `extern module` run through Verilator (`tern test --backend verilator`,
+  picked automatically), so Verilator and a C++ compiler must be installed.
 * **External tools for formal and synthesis.** `tern prove` and `tern synth`
   generate scripts, run the tools and parse their results, but they need
   Yosys/SymbiYosys or the vendor tools installed. CI exercises the generated
@@ -254,9 +256,6 @@ This is an early release. Known limitations:
   without it.
 * **No stable IR yet.** The IR JSON schema ([docs/ir-schema.md](docs/ir-schema.md))
   is version 1, and the spec makes it stable only from Tern 1.0.
-* **Unfinished spec items.** The `tern check` warning for a reset-less
-  register read before any write (spec §6.5) is not implemented, and tests
-  cannot yet drive a signal marked `#[test_port]` (spec §11.1).
 * **Small deviations in std** from the spec's tables are listed in the std
   READMEs. For example, `Arbiter` has no `.Weighted` policy.
 
