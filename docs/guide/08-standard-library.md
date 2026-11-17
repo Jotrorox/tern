@@ -12,13 +12,15 @@ tern doc std --text                  # the package list
 tern doc std::fifo --text            # one package
 tern doc std::fifo::Fifo --text      # one item: generics, ports, constants, properties, tests
 tern doc std -o build/doc --open     # the whole library as a static HTML site
-tern test std                        # run the library's own tests (363 of them)
+tern test std                        # run the library's own tests
 ```
 
 ## Rules every component follows
 
 1. Generic over the payload type (`T: type` comes first) and sized by `uint`
-   generics with `where` constraints. No widths are hard-coded.
+   generics with `where` constraints. No widths are hard-coded. (Where the
+   spec's table orders the generics differently, std follows the table:
+   `Crc<W, Poly, Init, RefIn, RefOut, XorOut, T>`, `Cic<Stages, R, T>`.)
 2. One handshake: `Stream<T>` (valid/ready/data) between components,
    `Valid<T>` (no back-pressure) where that is enough. Width and rate changes
    are explicit components, never hidden in a port.
@@ -30,32 +32,38 @@ tern test std                        # run the library's own tests (363 of them)
    `in` or `push`, an output stream `out` or `pop`.
 6. Data registers are reset-less; only control state is reset.
 7. Nothing is vendor-specific except `std::target::*`.
+8. A component that needs its clock's frequency takes it as
+   `ClkHz: uint = clock_hz(clk)`: the `#[clock(hz: ..)]` of the top's clock
+   port flows down to it (see [Clock frequencies](#clock-frequencies)).
 
 ## Packages
 
 | Package | Highlights |
 |---|---|
 | `std::prelude` (auto-imported) | `Valid<T>`, `Stream<T>`, `u8`..`u64`, `s8`..`s64`, `clog2`, `count_ones` |
-| `std::stream` | `Skid`, `Pipe`, `Fork`, `Join`/`Join3`, `Arbiter` (`.RoundRobin`, `.Fixed`), `Mux`, `Demux`, `Gearbox`, `GearboxLast`, `Throttle`, `Packetizer`/`Depacketizer`, `StreamCounter`, `Beat<T>` for packets |
+| `std::stream` | `Skid`, `Pipe`, `Fork`, `Join`/`Join3`, `Arbiter` (`.RoundRobin`, `.Fixed`, `.Weighted<[3, 1, 2]>`), `Mux`, `Demux`, `Gearbox`, `GearboxLast`, `Throttle`, `Packetizer`/`Depacketizer` (by `.Count<Len>` or `.Delim<Value>`), `StreamCounter`, `Beat<T>` for packets |
 | `std::fifo` | `Fifo` (block RAM), `FifoFwft` (first-word fall-through), `ShiftFifo`, `Lifo`, `AsyncFifo`, `PacketFifo` |
 | `std::cdc` | `Sync2`, `Sync3`, `PulseSync`, `HandshakeSync`, `ResetSync`, `ResetBridge`, `GrayCounter`, `AsyncFifo` |
 | `std::math` | `flog2`, `is_pow2`, `gray`/`ungray`, `leading_zeros`, `priority_encode`, `onehot`, `min`/`max`/`abs`, `sat_add`/`sat_sub`, `widen_signed`, rounding; `Multiplier`, `Divider`, `Sqrt`, `Mac`, `Cordic`, `Fixed<I, F>`, `Lfsr` |
 | `std::mem` | `RomTable`, `SinglePortRam`, `SimpleDualPortRam`, `TrueDualPortRam`, `RegFile`, `Cam`, `ShiftReg`, `DelayLine`, `Lut` |
-| `std::crc` | `Crc` (bit-, byte- and word-parallel), presets `Crc8`, `Crc16Ccitt`, `Crc16Modbus`, `Crc32`, `Crc32C`; `Scrambler` |
+| `std::crc` | `Crc<W, Poly, Init, RefIn, RefOut, XorOut>` (bit-, byte- and word-parallel through a last payload-type generic), presets `Crc8`, `Crc16Ccitt`, `Crc16Modbus`, `Crc32`, `Crc32C`; `Scrambler<Poly>` |
 | `std::encoding` | `Enc8b10b`/`Dec8b10b`, Manchester, NRZI, Hamming SECDED, `Parity`, `PriorityMux`, Base64 helpers |
 | `std::io` | `UartTx`, `UartRx`, `Uart`, `SpiMaster`, `SpiSlave`, `QspiMaster`, `I2cMaster`, `I2cSlave`, `Pwm`, `Debounce`, `EdgeDetect`, `QuadratureDecoder`, `Ws2812`, `SevenSegment`, `Ps2`, `OneWire`, `Sdio` (SPI-mode SD card) |
 | `std::bus` | bundles `Axi4`, `Axi4Lite`, `Axi4Stream`, `Apb`, `Ahb`, `Wishbone`, `TileLinkUL`; `RegisterFile`; bridges; `Axi4Crossbar`, `Axi4Interconnect`, `AxiDma`, `WishboneArbiter` |
 | `std::dsp` | `Fir`, `IirBiquad`, `Cic`, `Nco`, `MovingAverage`, `Accumulator`, `Fft` |
-| `std::clk`, `std::timer` | `Divider`, `Enable`, `Gate` (the one legal clock gate), `Strobe`; `Timer`, `Prescaler`, `Pulse`, `Stopwatch`, `Rtc`, `Watchdog` |
-| `std::video` | `VgaTiming` with presets from 640x480 to 1920x1080, `Tmds` (DVI/HDMI), `Framebuffer`, `TextMode`, `Rgb565`/`Rgb888` |
-| `std::debug` | `Ila` (trigger and capture), `Heartbeat`, `ErrorLatch` |
-| `std::sim` (tests only) | `StreamDriver`, `StreamMonitor`, `Scoreboard`, `ExpectEventually`, `ClockModel`, `Axi4LiteDriver`, `Axi4StreamDriver`, `UartModel`, `SpiModel`, `I2cModel` |
+| `std::clk`, `std::timer` | `Divider`, `Enable`, `Gate` (the one legal clock gate), `Strobe<Hz>`, `Watchdog`; `Timer`, `Prescaler`, `Pulse`, `Stopwatch`, `Rtc` |
+| `std::video` | `VgaTiming` with presets from 640x480 to 1920x1080 (`Vga640x480`, `Svga800x600`, `Xga1024x768`, `Hd1280x720`, `Sxga1280x1024`, `Hdp1600x900`, `Hd1920x1080`), `Tmds` (DVI/HDMI), `Framebuffer`, `TextMode`, `Rgb565`/`Rgb888` |
+| `std::debug` | `Ila` (trigger and capture), read out by `IlaUart` or `IlaAxiLite`; the `#[probe]` attribute; `Heartbeat`, `ErrorLatch` |
+| `std::sim` (tests only) | `StreamDriver`, `StreamMonitor`, `Scoreboard`, `ExpectEventually` (and `dut.expect_eventually(cond, max: n)`), `ClockModel`, `Axi4LiteDriver`, `Axi4StreamDriver`, `UartModel`, `SpiModel`, `I2cModel` |
 | `std::target` | `xilinx` (`Mmcm`, `Pll`, `Bufg`, `Iddr`/`Oddr`, `Iobuf`, ...), `lattice` (`SbPll`, `SbIo`, `EcpPll`, ...), `intel` (`Pll`, `AltIobuf`, ...), and `generic` behavioural fallbacks so every design also simulates |
 
-The maintainers' notes in [std/README.md](../../std/README.md) and
-[std/README-part2.md](../../std/README-part2.md) list where `std` deviates
-from the spec's tables (for example, `Arbiter`'s `.Weighted` policy is not
-implemented, and `Strobe`, `Rtc` and `Heartbeat` take `ClkHz` as a generic).
+[std/README.md](../../std/README.md) and
+[std/README-part2.md](../../std/README-part2.md) audit every component
+against the spec's tables. The few deviations are of shape, not substance:
+`Gearbox`'s `last` support is the separate `GearboxLast`, the line codes
+come as encoder/decoder pairs (`ManchesterEnc`/`ManchesterDec`,
+`HammingEnc`/`HammingDec`), and `Lut` takes its table as the result of a
+const fn call.
 
 ## Using components
 
@@ -82,15 +90,13 @@ test "crc-32 of 123456789" {
 ```
 
 A debounced button that toggles an LED, with the PWM brightness set by a
-counter. `ClkHz` is a project constant, and the debounce window is
-computed from it:
+counter. The debounce window is computed from the clock's frequency, which
+`clock_hz(clk)` reads from the port's `#[clock(hz: ..)]`:
 
 ```tern
 package panel
 
 use std::io::{Debounce, Pwm}
-
-const ClkHz: uint = 12_000_000
 
 #[top]
 module Panel {
@@ -100,7 +106,7 @@ module Panel {
     out led: bool
     out dim: bool
 
-    let btn = Debounce<Cycles: ClkHz / 100>(d: button)   // 10 ms
+    let btn = Debounce<Cycles: clock_hz(clk) / 100>(d: button)   // 10 ms
     reg lit: bool = false
     reg level: u8 = 0
     on clk {
@@ -138,21 +144,136 @@ module Soc {
 
     let rx = UartRx<ClkHz: 100_000_000, Baud: 3_000_000>(rxd) @ io
     let words = Gearbox<u8, u32>(in: rx.out) @ io
-    let xfifo = AsyncFifo<u32, 512>(
-        push: words.out,
-        src: io.clock,
-        dst: sys.clock,
-        src_rst: io.reset,
-        dst_rst: sys.reset,
-    )
-    let crc = Crc32(in: xfifo.pop, clear: false) @ sys
+    let xfifo = AsyncFifo<u32, 512>(push: words.out, src: io.clock, dst: sys.clock)
+    let crc = Crc32(in: xfifo.pop) @ sys
     crc_value = crc.crc
 }
 ```
 
-Compared with the spec's four-line version, `AsyncFifo` needs its two resets
-connected explicitly and `Crc32` its `clear` input. `Crc32`'s payload type
-(`u32`) is inferred from the stream connected to `in`.
+The four instances are the spec's four lines. `AsyncFifo` takes its resets
+from the domains of `src` and `dst`, `Crc32`'s payload type (`u32`) is
+inferred from the stream connected to `in`, and its `clear` input declares
+a default (`in clear: bool = false`), so a running CRC needs no
+connection.
+
+## Clock frequencies
+
+`#[clock(hz: N)]` on a top's clock port records its nominal frequency
+(spec §7.5). Inside a module `clock_hz(clk)` reads it at elaboration. A
+component that needs the frequency declares it as a generic with that
+default, `ClkHz: uint = clock_hz(clk)`: at each instantiation the default
+reads the frequency of the clock connected to `clk` (by name, through
+`@ dom`, or inherited), so `Strobe<Hz>`, `Rtc`, `Heartbeat`, the UARTs and
+the other `std::io` controllers need nothing but the clock. A module of
+your own passes the frequency down the same way, and an explicit generic
+overrides it:
+
+```tern
+package blink
+
+use std::clk::Strobe
+use std::debug::Heartbeat
+
+/// Blinks at `Hz` from whatever clock it is given.
+module Blinker<Hz: uint, ClkHz: uint = clock_hz(clk)> {
+    in clk: clock
+    in rst: reset
+    out led: bool
+
+    reg lit: bool = false
+    let tick = Strobe<2 * Hz>().tick   // clk's frequency is known here
+    on clk {
+        if tick { lit = !lit }
+    }
+    led = lit
+}
+
+#[top]
+module Board {
+    in clk: clock #[clock(hz: 50_000_000)]
+    in rst: reset
+    out led0: bool
+    out led1: bool
+    out alive: bool
+
+    led0 = Blinker<1>().led
+    led1 = Blinker<4, ClkHz: 25_000_000>().led   // pretend the clock is slower
+    alive = Heartbeat().led                      // 1 Hz
+}
+```
+
+A frequency that is not known where it is read is an error that names the
+module to fix (give it the `ClkHz` generic, or its clock port the
+attribute). Tests that simulate such a component on its own give the
+generic explicitly: `sim Strobe<10, ClkHz: 100>()`.
+
+## Arbitration policies
+
+`Arbiter<T, N, Policy>` takes its policy as an enum generic. `.Weighted`
+carries the per-input weights as a compile-time payload:
+
+```tern
+package arb
+
+use std::stream::Arbiter
+
+#[top]
+module Merge {
+    in clk: clock
+    in rst: reset
+    in a: Stream<u8>
+    in b: Stream<u8>
+    in c: Stream<u8>
+    out out: Stream<u8>
+    out from: uint<2>
+
+    // a gets up to 3 consecutive beats, b one, c two, while they have data
+    let arb = Arbiter<u8, 3, .Weighted<[3, 1, 2]>>(in: [a, b, c])
+    out = arb.out
+    from = arb.index
+}
+```
+
+Each distinct weight vector is its own module (`Arbiter_u8_3_Weighted_3_1_2`
+in the emitted SystemVerilog).
+
+## Debugging with an Ila
+
+`#[probe]` on a port or a module-level `let`, `var` or `reg` marks it for
+capture: the compiler collects the probed signals of the module into a
+struct type `Probes` and a value `probes`, and an `Ila` records them.
+`IlaUart` arms on any byte received on `rxd` and sends the captured window
+back on `txd`; `IlaAxiLite` does the same through registers on an
+AXI4-Lite bus. Probed signals also carry `(* mark_debug = "true" *)` in the
+emitted SystemVerilog for vendor debug flows.
+
+```tern
+package probed
+
+use std::debug::IlaUart
+
+#[top]
+module Counter {
+    in clk: clock #[clock(hz: 50_000_000)]
+    in rst: reset
+    in en: bool
+    in uart_rx: bool
+    out uart_tx: bool
+    out count: u8
+
+    #[probe]
+    reg n: u8 = 0
+    #[probe]
+    let wrapped = n == 255 and en
+    on clk {
+        if en { n = n +% 1 }
+    }
+    count = n
+
+    let ila = IlaUart<Probes, Depth: 256>(probes: probes, trigger: wrapped, rxd: uart_rx)
+    uart_tx = ila.txd
+}
+```
 
 ## Math helpers
 

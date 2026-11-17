@@ -4529,8 +4529,9 @@ static const char *const tern_std_chunks_9[] = {
     "    in probes: Probes\n"
     "    /// Trigger condition.\n"
     "    in trigger: bool\n"
-    "    /// Start recording (in addition to a byte on `rxd`).\n"
-    "    in arm: bool\n"
+    "    /// Start recording (in addition to a byte on `rxd`); never when left\n"
+    "    /// unconnected.\n"
+    "    in arm: bool = false\n"
     "    /// Serial input (asynchronous), idle high: any byte arms the Ila.\n"
     "    in rxd: bool\n"
     "    /// Serial output, idle high: the captured window.\n"
@@ -4544,8 +4545,8 @@ static const char *const tern_std_chunks_9[] = {
     "    pub const BYTES: uint = (Probes::WIDTH + 7) / 8\n"
     "    /// Cycles from the end of the capture to the first start bit.\n"
     "    pub const LATENCY: uint = 3\n"
-    "\n"
-    "    let _rx = UartRx<ClkHz, Baud>(rxd: rxd)\n",
+    "\n",
+    "    let _rx = UartRx<ClkHz, Baud>(rxd: rxd)\n"
     "    _rx.out.ready = true\n"
     "    let ila = Ila<Probes, Depth, Pre>(probes: probes, trigger: trigger, arm: arm or _rx.out.valid)\n"
     "\n"
@@ -4676,9 +4677,9 @@ static const char *const tern_std_chunks_9[] = {
     "    let reg_idx = rq.addr[3:2]\n"
     "    let wr_arm = fe.req.valid and rq.write and reg_idx == 0 and rq.wdata[0]\n"
     "    let rd_data = fe.req.valid and !rq.write and reg_idx == 2\n"
-    "\n"
-    "    let ila = Ila<Probes, Depth, Pre>(probes: probes, trigger: trigger, arm: wr_arm)\n"
     "\n",
+    "    let ila = Ila<Probes, Depth, Pre>(probes: probes, trigger: trigger, arm: wr_arm)\n"
+    "\n"
     "    // the sample being read, one word at a time\n"
     "    reg cur: bit<WORDS * DW> = all0\n"
     "    reg have: bool = false\n"
@@ -4809,13 +4810,13 @@ static const char *const tern_std_chunks_9[] = {
     "        if cnt == HALF - 1 {\n"
     "            cnt = 0\n"
     "            l = !l\n"
-    "        } else {\n"
+    "        } else {\n",
     "            cnt = cnt +% 1\n"
     "        }\n"
     "    }\n"
     "\n"
     "    led = l\n"
-    "\n",
+    "\n"
     "    /// The half-period counter stays in range.\n"
     "    property count_bounded {\n"
     "        always cnt < HALF\n"
@@ -21184,7 +21185,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/cdc/cdc.tern", tern_std_chunks_6, 5, 17298},
     {"std/clk/clk.tern", tern_std_chunks_7, 3, 10349},
     {"std/crc/crc.tern", tern_std_chunks_8, 4, 15539},
-    {"std/debug/debug.tern", tern_std_chunks_9, 5, 19406},
+    {"std/debug/debug.tern", tern_std_chunks_9, 5, 19451},
     {"std/dsp/average.tern", tern_std_chunks_10, 2, 7474},
     {"std/dsp/cic.tern", tern_std_chunks_11, 2, 6781},
     {"std/dsp/dsp.tern", tern_std_chunks_12, 1, 3993},

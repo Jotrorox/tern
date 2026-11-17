@@ -219,8 +219,9 @@ pub module IlaUart<
     in probes: Probes
     /// Trigger condition.
     in trigger: bool
-    /// Start recording (in addition to a byte on `rxd`).
-    in arm: bool
+    /// Start recording (in addition to a byte on `rxd`); never when left
+    /// unconnected.
+    in arm: bool = false
     /// Serial input (asynchronous), idle high: any byte arms the Ila.
     in rxd: bool
     /// Serial output, idle high: the captured window.
