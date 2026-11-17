@@ -1,0 +1,101 @@
+package smoother_test
+
+use smoother::{Smoother, Fir, Mode, binomial, kernel}
+
+test "the kernel is a row of Pascal's triangle" {
+    expect binomial(4, 2) == 6
+    expect binomial(8, 4) == 70
+    let k = kernel<5>()
+    for (i, want) in [(0, 1), (1, 4), (2, 6), (3, 4), (4, 1)] {
+        expect k[i] == want
+    }
+}
+
+test "the filter's impulse response is the kernel" {
+    let dut = sim Fir<12, 5>()
+    dut.reset()
+    dut.in = Valid { valid: true, data: 16 }    // 16 = the kernel's sum
+    dut.step()
+    dut.in.data = 0
+    var got: [uint; 8] = [0, 0, 0, 0, 0, 0, 0, 0]
+    for i in 0..8 {
+        dut.step()
+        expect dut.out.valid
+        got[i] = dut.out.data
+    }
+    // two cycles of latency, then 1 4 6 4 1
+    for (i, want) in [(0, 0), (1, 1), (2, 4), (3, 6), (4, 4), (5, 1), (6, 0)] {
+        expect got[i] == want
+    }
+}
+
+test "a run warms up for Taps samples, then outputs every sample" {
+    let dut = sim Smoother<Taps: 5>()
+    dut.reset()
+    dut.gain_sel = 4                               // gain 1.0
+    dut.samples = Valid { valid: false, data: 0 }
+    dut.stop = false
+    dut.start = true
+    dut.step()
+    dut.start = false
+    expect dut.mode == Mode::Warmup
+    dut.samples = Valid { valid: true, data: 1000 }
+    dut.step(4)
+    expect dut.mode == Mode::Warmup
+    dut.step()
+    expect dut.mode == Mode::Run
+    var outputs = 0
+    for _ in 0..20 {
+        dut.step()
+        if dut.out.valid {
+            expect dut.out.data == 1000            // a constant passes unchanged
+            outputs = outputs + 1
+        }
+    }
+    expect outputs >= 16
+    dut.stop = true
+    dut.step()
+    dut.stop = false
+    expect dut.mode == Mode::Idle
+    dut.step(4)
+    expect !dut.out.valid
+}
+
+test "the gain table scales and saturates" {
+    let dut = sim Smoother()
+    dut.reset()
+    dut.stop = false
+    dut.start = true
+    dut.step()
+    dut.start = false
+    dut.samples = Valid { valid: true, data: 0xFFF }
+    dut.step(12)
+    for (sel, want) in [(4, 0xFFF), (2, 0x7FF), (15, 0xFFF), (0, 0), (1, 0x3FF)] {
+        dut.gain_sel = sel
+        dut.step(2)
+        expect dut.out.valid and dut.out.data == want
+    }
+}
+
+test "the signature restarts with every run" {
+    let dut = sim Smoother()
+    dut.reset()
+    dut.stop = false
+    dut.gain_sel = 4
+    dut.samples = Valid { valid: true, data: 0x31 }
+    dut.start = true
+    dut.step()
+    dut.start = false
+    dut.step(20)
+    let first = dut.crc
+    expect first != 0xFFFF
+    dut.stop = true
+    dut.step()
+    dut.stop = false
+    dut.step(3)                                    // let the last outputs drain
+    dut.start = true
+    dut.step()
+    dut.start = false
+    dut.step(20)
+    expect dut.crc == first
+}

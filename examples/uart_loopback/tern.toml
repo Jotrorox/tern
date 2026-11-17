@@ -1,0 +1,13 @@
+[package]
+name = "uart_loopback"
+version = "0.1.0"
+description = "UART echo bridge: receive FIFO, AXI4-Lite register file with a runtime baud divider"
+license = "MIT"
+
+[target.default]
+top = "UartLoopback"
+std = "sv"
+
+[target.v2005]
+top = "UartLoopback"
+std = "verilog2005"

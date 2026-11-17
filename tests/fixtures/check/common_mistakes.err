@@ -1,0 +1,90 @@
+common_mistakes.tern:9:5: error: cannot assign to input port `a`
+  |
+9 |     a = 3
+  |     ^^^^^
+  = help: inputs are driven by the instantiating module; for a value computed here use an `out` port or a `let`/`var`
+  in: AssignInput
+
+common_mistakes.tern:16:5: error: cannot assign to input port `s.valid`
+   |
+16 |     s.valid = true
+   |     ^^^^^^^^^^^^^^
+   = help: `s.valid` flows into this module: on an `in` bundle port only the `flip` fields are outputs
+  in: AssignBundleInput
+
+common_mistakes.tern:26:12: error: register `r` can only be assigned in an `on` block
+   |
+26 |     comb { r = a }
+   |            ^^^^^
+   = help: a `comb` block assigns `var`s and outputs: declare `var r: ...` for a combinational value, or assign the register in `on`
+  in: RegInComb
+
+common_mistakes.tern:34:5: error: cannot assign to `t`: a `let` is assigned once, at its declaration
+   |
+34 |     t = a +% 1
+   |     ^^^^^^^^^^
+   = help: for a value assigned in a block, declare `var t: ...` (comb) or `reg t: ...` (on)
+  in: LetReassign
+
+common_mistakes.tern:47:21: error: module `Child` has no port `b`
+   |
+47 |     y = Child(a: a, b: a).y
+   |                     ^
+   = help: its ports are `a`, `y`
+  in: UnknownPort
+
+common_mistakes.tern:54:11: error: module `Child` has no port `yy`
+   |
+54 |     y = c.yy
+   |           ^^
+   = help: its ports are `a`, `y`
+  in: MisspelledPort
+
+common_mistakes.tern:60:16: error: enum `Op` has no variant `Ad`
+   |
+60 |     y = op == .Ad
+   |                ^^
+   = help: did you mean `.Add`?
+  in: EnumTypo
+
+common_mistakes.tern:67:9: error: cannot compare uint<8> with bool
+   |
+67 |     y = a == b
+   |         ^^^^^^
+   = help: convert the bool with `b as uint<1>`, or test the integer with `x != 0`
+  in: CompareBool
+
+common_mistakes.tern:74:9: error: an `if` used as a value needs an `else`
+   |
+74 |     y = if c { a }
+   |         ^^^^^^^^^^
+   = help: add `else { ... }` with a value of the same type
+  in: IfWithoutElse
+
+common_mistakes.tern:82:17: error: the reset value of `r` must be a compile-time constant
+   |
+82 |     reg r: u8 = a
+   |                 ^
+   = help: a reset value is a constant; to load a signal, assign it in the `on` block
+  in: ResetNotConstant
+
+common_mistakes.tern:91:12: error: register `r` cannot hold a bundle (Valid<uint<8>>)
+   |
+91 |     reg r: Valid<u8>
+   |            ^^^^^^^^^
+   = help: declare one register per field (`reg r_valid: bool`), or use a struct type
+  in: RegBundle
+
+common_mistakes.tern:110:9: error: instance `clocked_0` of `Clocked` has unconnected input `clk`
+    |
+110 |     y = Clocked(a: a).y
+    |         ^^^^^^^^^^^^^
+    = help: clock and reset ports are inherited only from a default domain (a module with one clock); connect `clk: ...` or put the instance in a domain: `Clocked(..) @ dom`
+  in: TwoClocks
+
+common_mistakes.tern:116:36: error: cannot find `missing` in this scope
+    |
+116 |     y = Valid { valid: true, data: missing }
+    |                                    ^^^^^^^
+  in: LiteralCascade
+

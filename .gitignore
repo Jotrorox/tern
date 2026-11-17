@@ -16,3 +16,4 @@
 .claude/
 tools/embed.dSYM/
 !/tests/fixtures/**/*.vcd
+/examples/*/build/

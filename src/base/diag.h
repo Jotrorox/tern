@@ -109,6 +109,8 @@ int diag_parse_format(const char *name, DiagFormat *out);  /* "human"/"short"/"j
 void diag_set_color(int on);              /* ANSI colour in human output (default off) */
 void diag_set_strict(int on);             /* warnings become errors */
 void diag_set_output(FILE *f);            /* default (NULL) is stderr */
+void diag_set_path_base(const char *dir);  /* human/short output prints paths below dir relative to it */
+const char *diag_path_display(const char *path);  /* path as printed: relative to the base when below it */
 
 int diag_error_count(void);
 int diag_warning_count(void);

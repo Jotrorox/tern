@@ -1,0 +1,13 @@
+[package]
+name = "sensor_bridge"
+version = "0.1.0"
+description = "Two clock domains: ADC samples cross into the system clock through an AsyncFifo"
+license = "MIT"
+
+[target.default]
+top = "SensorBridge"
+std = "sv"
+
+[target.v2005]
+top = "SensorBridge"
+std = "verilog2005"

@@ -560,7 +560,7 @@ void check_print_cdc_report(const IrDesign *d, FILE *out)
         if (x->signal)
             fprintf(out, ", signal %s", x->signal);
         if (f && f->path)
-            fprintf(out, " (%s:%u)", f->path, (unsigned)x->loc.line);
+            fprintf(out, " (%s:%u)", diag_path_display(f->path), (unsigned)x->loc.line);
         fputc('\n', out);
     }
 }

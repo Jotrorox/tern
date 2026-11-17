@@ -349,6 +349,7 @@ int cmd_add(int argc, char **argv)
 {
     ArgParser ap;
     const char *tag = NULL, *rev = NULL, *branch = NULL, *path = NULL, *git = NULL, *name_opt = NULL;
+    char *git_owned = NULL;   /* git URL made from a local directory */
     VEC(const char *) specs = {0};
     CpkgProject p;
     PkgGitProvider g;
@@ -376,6 +377,22 @@ int cmd_add(int argc, char **argv)
     if (!git && !path && specs.len == 1 && cpkg_is_url(specs.data[0])) {
         git = specs.data[0];
         specs.len = 0;
+    } else if (!git && !path && specs.len == 1 && os_is_dir(specs.data[0])) {
+        /* a local directory: a git dependency on its repository (and tags) */
+        char *abs = os_path_abs(specs.data[0]), *dotgit = os_path_join(abs, ".git");
+        if (os_exists(dotgit)) {
+            StrBuf u = {0};
+            sb_puts(&u, abs[0] == '/' ? "file://" : "file:///");
+            sb_puts(&u, abs);
+            git_owned = sb_take(&u);
+            git = git_owned;
+            specs.len = 0;
+        } else {
+            args_error(&ap, "`%s` is a directory but not a git repository; for a path dependency use "
+                            "`tern add --path %s`", specs.data[0], specs.data[0]);
+        }
+        free(dotgit);
+        free(abs);
     }
     if ((tag != NULL) + (rev != NULL) + (branch != NULL) > 1)
         args_error(&ap, "use only one of --tag, --rev and --branch");
@@ -391,10 +408,12 @@ int cmd_add(int argc, char **argv)
         args_error(&ap, "invalid package name `%s`", name_opt);
     if (ap.errors) {
         vec_free(specs);
+        free(git_owned);
         return TERN_EXIT_USAGE;
     }
     if (cpkg_open(&p) != 0) {
         vec_free(specs);
+        free(git_owned);
         cpkg_close(&p);
         return TERN_EXIT_FAIL;
     }
@@ -674,6 +693,7 @@ out:
     vec_free(specs);
     sb_free(&text);
     free(index_url);
+    free(git_owned);
     cpkg_close(&p);
     return rc;
 }

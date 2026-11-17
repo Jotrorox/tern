@@ -1,0 +1,7 @@
+running 2 tests
+test a gated stream passes beats only while enabled ... ok
+test a real loop inside one block is reported ... FAILED
+    comb_split.tern:34:13: error: combinational loop: r -> p -> r
+
+FAILED: 1 passed, 1 failed
+replay a failing test with: tern test --seed 1 "<name>"

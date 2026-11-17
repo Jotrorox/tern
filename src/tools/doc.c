@@ -1152,6 +1152,10 @@ static void doc_parse_md(const char *text, DocBlockVec *out)
             sb_append(&b.text, p + skip, n - skip);
             vec_push(*out, b);
             cur = &vec_last(*out);
+        } else if (cur && cur->kind == DOC_B_CODE && i >= 4) {
+            /* next line of an indented code block */
+            sb_putc(&cur->text, '\n');
+            sb_append(&cur->text, p + 4, n - 4);
         } else if (cur && (cur->kind == DOC_B_PARA || (cur->kind == DOC_B_ITEM && i >= 2))) {
             sb_putc(&cur->text, ' ');
             sb_append(&cur->text, p + i, n - i);
@@ -1162,7 +1166,7 @@ static void doc_parse_md(const char *text, DocBlockVec *out)
             b.kind = DOC_B_CODE;
             sb_append(&b.text, p + 4, n - 4);
             vec_push(*out, b);
-            cur = NULL;
+            cur = &vec_last(*out);
         } else {
             DocBlock b;
             memset(&b, 0, sizeof b);
@@ -1378,7 +1382,7 @@ static void doc_inline_text(const char *s, StrBuf *out)
                 i = (size_t)(pe - s) + 1;
                 continue;
             }
-            if (close && close > s + i + 1) {
+            if (close && close > s + i + 1 && (i == 0 || s[i - 1] != '#')) { /* not #[attr] */
                 size_t k;
                 int ident = 1;
                 for (k = i + 1; s + k < close; k++) {

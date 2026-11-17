@@ -615,16 +615,16 @@ static const char *const tern_std_chunks_1[] = {
     "// This file holds the bundle definitions and the protocol constants shared by\n"
     "// every other file of the package:\n"
     "//\n"
-    "//   bus.tern           bundles (Axi4, Axi4Lite, Axi4Stream, Apb, Ahb, Wishbone,\n"
-    "//                      TileLinkUL), response/burst codes, axi_next_addr\n"
-    "//   lite.tern          RegReq/RegRsp, Axi4LiteSlave (front-end), Axi4LiteMaster\n"
-    "//                      (back-end) \342\200\224 the building blocks of everything below\n"
-    "//   regfile.tern       RegBus, Axi4LiteRegPort, ApbRegPort, WishboneRegPort,\n"
-    "//                      RegisterFile<Map, Bus>\n"
-    "//   bridges.tern       Axi4LiteToApb, Axi4ToAxi4Lite, ApbBridge<N>,\n"
-    "//                      WishboneToAxi4Lite\n"
-    "//   interconnect.tern  Axi4Crossbar, Axi4Interconnect, WishboneArbiter<N>\n"
-    "//   dma.tern           AxiDma\n"
+    "//     bus.tern           bundles (Axi4, Axi4Lite, Axi4Stream, Apb, Ahb, Wishbone,\n"
+    "//                        TileLinkUL), response/burst codes, axi_next_addr\n"
+    "//     lite.tern          RegReq/RegRsp, Axi4LiteSlave (front-end), Axi4LiteMaster\n"
+    "//                        (back-end) \342\200\224 the building blocks of everything below\n"
+    "//     regfile.tern       RegBus, Axi4LiteRegPort, ApbRegPort, WishboneRegPort,\n"
+    "//                        RegisterFile<Map, Bus>\n"
+    "//     bridges.tern       Axi4LiteToApb, Axi4ToAxi4Lite, ApbBridge<N>,\n"
+    "//                        WishboneToAxi4Lite\n"
+    "//     interconnect.tern  Axi4Crossbar, Axi4Interconnect, WishboneArbiter<N>\n"
+    "//     dma.tern           AxiDma\n"
     "//\n"
     "// Direction convention: a bus port is declared from the point of view of the\n"
     "// component. A component that *answers* requests (a slave / subordinate) has\n"
@@ -712,8 +712,8 @@ static const char *const tern_std_chunks_1[] = {
     "}\n"
     "\n"
     "/// Full AXI4 memory-mapped interface (manager view when used as `out`).\n"
-    "///\n"
-    "/// Five independent channels, each a `Stream` with the standard AXI rule that\n",
+    "///\n",
+    "/// Five independent channels, each a `Stream` with the standard AXI rule that\n"
     "/// valid must not wait for ready and that valid and data are held until the\n"
     "/// handshake.\n"
     "pub bundle Axi4<AW: uint = 32, DW: uint = 32, IDW: uint = 4> {\n"
@@ -821,9 +821,9 @@ static const char *const tern_std_chunks_1[] = {
     "/// (see ApbBridge).\n"
     "pub bundle Apb<AW: uint = 32, DW: uint = 32> {\n"
     "    /// PSEL: this slave is selected.\n"
-    "    psel: bool,\n"
+    "    psel: bool,\n",
     "    /// PENABLE: second and later cycles of a transfer.\n"
-    "    penable: bool,\n",
+    "    penable: bool,\n"
     "    /// PWRITE: write transfer (false: read).\n"
     "    pwrite: bool,\n"
     "    /// PADDR: byte address.\n"
@@ -928,9 +928,9 @@ static const char *const tern_std_chunks_1[] = {
     "    flip ack: bool,\n"
     "    /// ERR_I: the request failed.\n"
     "    flip err: bool,\n"
-    "    /// STALL_I: the slave cannot accept a request in this cycle.\n"
+    "    /// STALL_I: the slave cannot accept a request in this cycle.\n",
     "    flip stall: bool,\n"
-    "    /// DAT_I of the master: read data, valid with `ack`.\n",
+    "    /// DAT_I of the master: read data, valid with `ack`.\n"
     "    flip dat_r: uint<DW>,\n"
     "\n"
     "    /// True in a cycle where a request is accepted by the slave.\n"
@@ -8442,17 +8442,18 @@ static const char *const tern_std_chunks_24[] = {
     "// std::io: peripheral and pin-level protocol engines.\n"
     "//\n"
     "// Files in this package:\n"
-    "//   io.tern          EdgeDetect, Debounce\n"
-    "//   uart.tern        UartTxCore, UartRxCore, UartTx, UartRx, Uart\n"
-    "//   spi.tern         SpiMaster, SpiSlave, QspiMaster\n"
-    "//   i2c.tern         I2cMaster, I2cSlave\n"
-    "//   pwm.tern         Pwm\n"
-    "//   quadrature.tern  QuadratureDecoder\n"
-    "//   ws2812.tern      Ws2812\n"
-    "//   sevenseg.tern    SevenSegment, hex_to_segments\n"
-    "//   ps2.tern         Ps2\n"
-    "//   onewire.tern     OneWire\n"
-    "//   sdio.tern        Sdio (SPI-mode SD card)\n"
+    "//\n"
+    "//     io.tern          EdgeDetect, Debounce\n"
+    "//     uart.tern        UartTxCore, UartRxCore, UartTx, UartRx, Uart\n"
+    "//     spi.tern         SpiMaster, SpiSlave, QspiMaster\n"
+    "//     i2c.tern         I2cMaster, I2cSlave\n"
+    "//     pwm.tern         Pwm\n"
+    "//     quadrature.tern  QuadratureDecoder\n"
+    "//     ws2812.tern      Ws2812\n"
+    "//     sevenseg.tern    SevenSegment, hex_to_segments\n"
+    "//     ps2.tern         Ps2\n"
+    "//     onewire.tern     OneWire\n"
+    "//     sdio.tern        Sdio (SPI-mode SD card)\n"
     "//\n"
     "// Conventions for pins:\n"
     "// * Inputs coming from pins are asynchronous; every engine that samples a pin\n"
@@ -20445,7 +20446,7 @@ static const char *const tern_std_chunks_57[] = {
 
 const StdEmbedFile tern_std_files[] = {
     {"std/bus/bridges.tern", tern_std_chunks_0, 5, 19874},
-    {"std/bus/bus.tern", tern_std_chunks_1, 4, 14439},
+    {"std/bus/bus.tern", tern_std_chunks_1, 4, 14459},
     {"std/bus/dma.tern", tern_std_chunks_2, 4, 12437},
     {"std/bus/interconnect.tern", tern_std_chunks_3, 6, 20125},
     {"std/bus/lite.tern", tern_std_chunks_4, 4, 12539},
@@ -20468,7 +20469,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/fifo/fifo.tern", tern_std_chunks_21, 4, 15117},
     {"std/fifo/packet.tern", tern_std_chunks_22, 2, 6372},
     {"std/io/i2c.tern", tern_std_chunks_23, 6, 20944},
-    {"std/io/io.tern", tern_std_chunks_24, 2, 5514},
+    {"std/io/io.tern", tern_std_chunks_24, 2, 5539},
     {"std/io/onewire.tern", tern_std_chunks_25, 3, 10605},
     {"std/io/ps2.tern", tern_std_chunks_26, 3, 10921},
     {"std/io/pwm.tern", tern_std_chunks_27, 1, 3592},

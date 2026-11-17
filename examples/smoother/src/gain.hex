@@ -1,0 +1,5 @@
+// output gain in Q4.4 (0x10 = 1.0), indexed by gain_sel
+00 04 08 0c
+10 14 18 1c
+20 24 28 2c
+30 38 40 50

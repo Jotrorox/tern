@@ -1,0 +1,147 @@
+package uart_loopback_test
+
+use uart_loopback::{UartLoopback, UartRegs}
+use std::bus::{RESP_OKAY, RESP_SLVERR}
+
+// The bench drives the AXI4-Lite port by hand: one access per loop
+// iteration, waiting for the response with step_until.
+
+test "registers come out of reset with their documented values" {
+    let dut = sim UartLoopback<4>()
+    dut.rxd = true
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.reset()
+    for (addr, want) in [(0x00, 0x1), (0x04, 868), (0x08, 0), (0x10, 0)] {
+        dut.bus.ar = Stream { valid: true, data: addr }
+        dut.step()
+        dut.bus.ar.valid = false
+        dut.step_until(dut.bus.r.valid, max: 10)
+        expect dut.bus.r.data.resp == RESP_OKAY
+        expect dut.bus.r.data.data == want
+        dut.step()
+    }
+    expect dut.txd and !dut.irq
+}
+
+test "an unmapped offset answers SLVERR" {
+    let dut = sim UartLoopback<4>()
+    dut.rxd = true
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.reset()
+    dut.bus.ar = Stream { valid: true, data: 0x40 }
+    dut.step()
+    dut.bus.ar.valid = false
+    dut.step_until(dut.bus.r.valid, max: 10)
+    expect dut.bus.r.data.resp == RESP_SLVERR
+}
+
+test "a byte received on rxd is echoed on txd at the programmed baud rate" {
+    let dut = sim UartLoopback<4>()
+    dut.rxd = true
+    dut.bus.ar.valid = false
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.reset()
+    // 8 cycles per bit
+    dut.bus.aw = Stream { valid: true, data: 0x04 }
+    dut.bus.w.valid = true
+    dut.bus.w.data.data = 8
+    dut.bus.w.data.strb = 0b1111
+    dut.step()
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.step_until(dut.bus.b.valid, max: 10)
+    expect dut.bus.b.data == RESP_OKAY
+    expect dut.regs.baud_div == 8
+    dut.step()
+
+    let v: u8 = 0xA5
+    let frame = [false, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], true]
+    for b in frame {
+        dut.rxd = b
+        dut.step(8)
+    }
+    // the echo starts with a start bit within a few bit times
+    dut.step_until(!dut.txd, max: 64)
+    dut.step(4)                         // middle of the start bit
+    expect !dut.txd
+    for i in 0..8 {
+        dut.step(8)
+        expect dut.txd == v[i]
+    }
+    dut.step(8)
+    expect dut.txd                      // stop bit
+}
+
+test "internal loopback queues written bytes in the receive FIFO" {
+    let dut = sim UartLoopback<4>()
+    dut.rxd = true
+    dut.bus.ar.valid = false
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.reset()
+    // echo off, loopback on; 4 cycles per bit; then two bytes
+    for (addr, data) in [(0x00, 0x2), (0x04, 4), (0x0C, 0x31), (0x0C, 0x32)] {
+        dut.bus.aw = Stream { valid: true, data: addr }
+        dut.bus.w.valid = true
+        dut.bus.w.data.data = data
+        dut.bus.w.data.strb = 0b1111
+        dut.step()
+        dut.bus.aw.valid = false
+        dut.bus.w.valid = false
+        dut.step_until(dut.bus.b.valid, max: 200)
+        expect dut.bus.b.data == RESP_OKAY
+        dut.step()
+    }
+    dut.step_until(dut.fifo.count == 2, max: 200)
+    expect dut.fifo.pop.valid and dut.fifo.pop.data == 0x31
+    expect !dut.irq
+    // status reports the level
+    dut.bus.ar = Stream { valid: true, data: 0x08 }
+    dut.step()
+    dut.bus.ar.valid = false
+    dut.step_until(dut.bus.r.valid, max: 10)
+    expect dut.bus.r.data.data == 0x202      // rx_pending, level 2
+}
+
+test "a frame error raises irq until software clears it" {
+    let dut = sim UartLoopback<4>()
+    dut.rxd = true
+    dut.bus.ar.valid = false
+    dut.bus.b.ready = true
+    dut.bus.r.ready = true
+    dut.reset()
+    dut.bus.aw = Stream { valid: true, data: 0x04 }
+    dut.bus.w.valid = true
+    dut.bus.w.data.data = 8
+    dut.bus.w.data.strb = 0b1111
+    dut.step()
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.step_until(dut.bus.b.valid, max: 10)
+    dut.step()
+    // a frame whose stop bit is low
+    for b in [false, true, false, true, false, true, false, true, false, false] {
+        dut.rxd = b
+        dut.step(8)
+    }
+    dut.rxd = true
+    dut.step_until(dut.irq, max: 32)
+    expect dut.regs.errors == 0b01
+    // write 1 to clear
+    dut.bus.aw = Stream { valid: true, data: 0x10 }
+    dut.bus.w.valid = true
+    dut.bus.w.data.data = 0b01
+    dut.step()
+    dut.bus.aw.valid = false
+    dut.bus.w.valid = false
+    dut.step_until(dut.bus.b.valid, max: 10)
+    dut.step()
+    expect !dut.irq
+}

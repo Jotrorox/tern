@@ -73,7 +73,7 @@ uint64_t testrun_test_seed(uint64_t base, const char *name)
 static void tr_loc(Span sp, StrBuf *out)
 {
     const SourceFile *f = src_get(sp.file);
-    sb_printf(out, "%s:%u:%u", f ? f->path : "<unknown>", (unsigned)sp.line, (unsigned)sp.col);
+    sb_printf(out, "%s:%u:%u", f ? diag_path_display(f->path) : "<unknown>", (unsigned)sp.line, (unsigned)sp.col);
 }
 
 /* source text of a span with whitespace runs collapsed */
@@ -1695,7 +1695,7 @@ void testcov_report(TestCov *c, StrBuf *out)
                 any_cover = 1;
         }
         if (lines || br) {
-            sb_printf(out, "  %s: lines ", file);
+            sb_printf(out, "  %s: lines ", diag_path_display(file));
             tr_pct(out, lines_hit, lines);
             sb_puts(out, ", branches ");
             tr_pct(out, br_hit, br);
@@ -1719,8 +1719,9 @@ void testcov_report(TestCov *c, StrBuf *out)
                 sb_printf(out, "    property %s", p->name ? p->name : "_");
             else
                 sb_puts(out, "    cover");
-            sb_printf(out, " (%s:%u:%u): %llu hit%s%s\n", p->file, (unsigned)p->line, (unsigned)p->col,
-                      (unsigned long long)p->count, p->count == 1 ? "" : "s", p->count ? "" : "  <- never hit");
+            sb_printf(out, " (%s:%u:%u): %llu hit%s%s\n", diag_path_display(p->file), (unsigned)p->line,
+                      (unsigned)p->col, (unsigned long long)p->count, p->count == 1 ? "" : "s",
+                      p->count ? "" : "  <- never hit");
         }
     }
 }

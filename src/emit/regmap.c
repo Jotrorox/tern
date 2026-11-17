@@ -66,16 +66,37 @@ static void rmap_type(const IrType *t, StrBuf *out)
     ir_type_print(t, out);
 }
 
-/* one-line doc text (first line, trimmed) */
-static void rmap_doc_line(const char *doc, StrBuf *out)
+/* one-line doc text: the first paragraph, its lines joined with spaces */
+static void rmap_doc_para(const char *doc, StrBuf *out)
 {
     size_t i = 0;
     if (!doc)
         return;
     while (doc[i] == ' ' || doc[i] == '\t')
         i++;
-    for (; doc[i] && doc[i] != '\n'; i++)
-        sb_putc(out, doc[i] == '*' && doc[i + 1] == '/' ? '-' : doc[i]);
+    for (; doc[i]; i++) {
+        if (doc[i] == '\n') {
+            size_t j = i + 1;
+            while (doc[j] == ' ' || doc[j] == '\t')
+                j++;
+            if (!doc[j] || doc[j] == '\n')
+                break; /* blank line: end of the paragraph */
+            sb_putc(out, ' ');
+            i = j - 1;
+            continue;
+        }
+        sb_putc(out, doc[i]);
+    }
+}
+
+static void rmap_doc_line(const char *doc, StrBuf *out)
+{
+    StrBuf p = {0};
+    size_t i;
+    rmap_doc_para(doc, &p);
+    for (i = 0; i < p.len; i++)
+        sb_putc(out, p.data[i] == '*' && p.data[i + 1] == '/' ? '-' : p.data[i]);
+    sb_free(&p);
 }
 
 /* -------------------------------------------------------------- header -- */
@@ -306,7 +327,13 @@ static void rmap_md_text(const char *s, int cell, StrBuf *out)
     }
 }
 
-static void rmap_md_cell(const char *s, StrBuf *out) { rmap_md_text(s, 1, out); }
+static void rmap_md_cell(const char *s, StrBuf *out)
+{
+    StrBuf p = {0};
+    rmap_doc_para(s, &p);
+    rmap_md_text(sb_cstr(&p), 1, out);
+    sb_free(&p);
+}
 
 void rmap_emit_markdown(const IrRegmap *r, StrBuf *out)
 {

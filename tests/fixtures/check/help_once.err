@@ -1,0 +1,7 @@
+help_once.tern:10:11: error: cannot find `stat` in this scope
+   |
+10 |     led = stat
+   |           ^^^^
+   = help: did you mean `state`?
+  in: Blink<4>
+

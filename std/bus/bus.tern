@@ -5,16 +5,16 @@ package std::bus
 // This file holds the bundle definitions and the protocol constants shared by
 // every other file of the package:
 //
-//   bus.tern           bundles (Axi4, Axi4Lite, Axi4Stream, Apb, Ahb, Wishbone,
-//                      TileLinkUL), response/burst codes, axi_next_addr
-//   lite.tern          RegReq/RegRsp, Axi4LiteSlave (front-end), Axi4LiteMaster
-//                      (back-end) — the building blocks of everything below
-//   regfile.tern       RegBus, Axi4LiteRegPort, ApbRegPort, WishboneRegPort,
-//                      RegisterFile<Map, Bus>
-//   bridges.tern       Axi4LiteToApb, Axi4ToAxi4Lite, ApbBridge<N>,
-//                      WishboneToAxi4Lite
-//   interconnect.tern  Axi4Crossbar, Axi4Interconnect, WishboneArbiter<N>
-//   dma.tern           AxiDma
+//     bus.tern           bundles (Axi4, Axi4Lite, Axi4Stream, Apb, Ahb, Wishbone,
+//                        TileLinkUL), response/burst codes, axi_next_addr
+//     lite.tern          RegReq/RegRsp, Axi4LiteSlave (front-end), Axi4LiteMaster
+//                        (back-end) — the building blocks of everything below
+//     regfile.tern       RegBus, Axi4LiteRegPort, ApbRegPort, WishboneRegPort,
+//                        RegisterFile<Map, Bus>
+//     bridges.tern       Axi4LiteToApb, Axi4ToAxi4Lite, ApbBridge<N>,
+//                        WishboneToAxi4Lite
+//     interconnect.tern  Axi4Crossbar, Axi4Interconnect, WishboneArbiter<N>
+//     dma.tern           AxiDma
 //
 // Direction convention: a bus port is declared from the point of view of the
 // component. A component that *answers* requests (a slave / subordinate) has

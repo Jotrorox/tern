@@ -82,10 +82,10 @@ static const MainCmd main_cmds[] = {
      "  step [n] | run <ns> | reset | settle | dump <file.vcd> | signals | help | quit\n"
      "  other lines run as Tern statements of a test body, e.g.\n"
      "  `expect dut.count == 3`, `log(\"{}\", dut.y)`, `dut.step_until(dut.done, max: 100)`\n"},
-    {"prove", cmd_prove, "Verification", "<module> [--depth <n>] [--induct]",
+    {"prove", cmd_prove, "Verification", "[<module>] [--depth <n>] [--induct]",
      "formal verification via Yosys and SymbiYosys",
-     "  <module>            module to prove (its default generics, else the\n"
-     "                      instantiation in the design's top)\n"
+     "  <module>            module to prove, e.g. Fifo or 'Fifo<u8, 4>' (default: the #[top]);\n"
+     "                      by name: its default generics, else the instantiation in the top\n"
      "  --depth <n>         bounded model checking depth (default 20)\n"
      "  --induct            also try k-induction for an unbounded proof\n"
      "  --engine \"<e>\"      sby [engines] line (default: smtbmc yices)\n"
@@ -347,6 +347,12 @@ int main(int argc, char **argv)
     if (!c) {
         main_unknown_command(name);
         return TERN_EXIT_USAGE;
+    }
+    {
+        /* diagnostics name files relative to the working directory */
+        char *cwd = os_getcwd();
+        diag_set_path_base(cwd);
+        free(cwd);
     }
     rc = c->fn(argc - 1, argv + 1);
     diag_flush();

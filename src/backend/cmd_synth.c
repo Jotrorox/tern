@@ -267,12 +267,25 @@ int cmd_synth(int argc, char **argv)
            syn_script_name(tool));
     syn_command(tool, &cmdline);
     exe = os_find_program(tool == BK_TOOL_VIVADO ? "vivado" : tool == BK_TOOL_QUARTUS ? "quartus_sh" : "yosys");
-    if (no_run || !exe) {
-        if (!exe && !no_run)
-            printf("  %s is not on PATH; run the script yourself:\n", tool == BK_TOOL_QUARTUS ? "quartus_sh" : bk_tool_name(tool));
-        else
-            printf("  run it:\n");
+    if (no_run) {
+        printf("  run it:\n");
         printf("    cd %s && %s\n", sdisp, cmdline.data);
+        goto done;
+    }
+    if (!exe) {
+        /* like `tern prove` without sby: the files are written, but nothing
+         * was synthesized, so the status says so (exit 2) */
+        fflush(stdout);
+        fprintf(stderr,
+                "tern synth: error: %s is not on PATH; the script is in %s/\n"
+                "  install %s,\n  then run `tern synth` again, or run the script yourself:\n"
+                "    cd %s && %s\n",
+                tool == BK_TOOL_QUARTUS ? "quartus_sh" : bk_tool_name(tool), sdisp,
+                tool == BK_TOOL_VIVADO    ? "Vivado"
+                : tool == BK_TOOL_QUARTUS ? "Quartus Prime"
+                                          : "Yosys (e.g. from the OSS CAD Suite, https://github.com/YosysHQ/oss-cad-suite-build)",
+                sdisp, cmdline.data);
+        rc = TERN_EXIT_USAGE;
         goto done;
     }
     {
