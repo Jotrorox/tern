@@ -308,6 +308,10 @@ Beyond the parts described in `elab.h`, `sema.h` and `check.h`:
   `val_equal`, `val_mangle` (`Weighted_3_1_2`) and `mono_key` already
   cover payloads, so comparison, `match` and monomorphization work as for
   plain variants.
+* **Input defaults** (`in clear: bool = false`, docs/grammar.md §4.3):
+  `ModPort.has_default/deflt`; `elb_finish` drives the default into the
+  parent wire of every instance input that is still unassigned, before the
+  unconnected-input check.
 * **`#[probe]`**: `elb_probe_body` appends generated Tern text (`type
   Probes = struct { s: typeof(s), .. }`, `let probes = Probes { .. }`,
   source `<#[probe] signals of M>`) to the module body; such a module
@@ -557,9 +561,11 @@ and `lsp_nav.c` (definition, hover, references, symbols, completion,
   assigned a literal or another handle's bundle (`dec.in = enc.out`); bundle
   methods (`dut.out.fire()`) run on the bundle value read from the handle.
   Methods: `reset()`, `step(n)`, `step_until(cond, max: n)` (the condition is
-  re-evaluated each cycle through `Elab.opq_call`), `settle()`,
-  `run(ns: n)`, `dump(file)`, `cycle()`, `time_ns()`; `dut.<domain or clock
-  port>.step(n)` steps one domain.
+  re-evaluated each cycle through `Elab.opq_call`; a timeout stops the
+  test), `expect_eventually(cond, max: n)` (std::sim's `expect_eventually`:
+  the same wait, but a timeout is recorded like `expect` and the test
+  goes on), `settle()`, `run(ns: n)`, `dump(file)`, `cycle()`,
+  `time_ns()`; `dut.<domain or clock port>.step(n)` steps one domain.
 * **`#[test_port]`** (spec §11.1, "a signal a test must drive is exposed
   with #[test_port]"; the spec has no `force`). Semantics: a test_port may
   be driven by a test; once the test assigns it, the test's value wins
