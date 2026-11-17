@@ -1,0 +1,76 @@
+// §4 Packages and files: `use` forms, re-exports, `pub`, and every kind of
+// top-level item.
+package uart::rx
+
+use std::stream::Stream
+use std::fifo::{Fifo, FifoFwft}
+use std::math::*
+use std::{io::UartRx, fifo::AsyncFifo, stream::Gearbox, crc::Crc32}
+pub use std::prelude::{clog2, count_ones}
+pub use std::fifo::AsyncFifo
+
+pub module A {
+    in d: D<u8>
+    out q: u8
+    q = k(d.x) +% J_OF_I
+}
+
+module B {}
+
+extern module C("c.sv") {
+    in a: bool
+}
+
+pub bundle D<T: type> { x: T }
+
+struct E { a: u8 }
+
+pub enum F { G, H }
+
+const I: uint = 1
+
+const J_OF_I: u8 = j(I)
+
+pub const fn j(n: uint) -> uint { n }
+
+fn k(x: u8) -> u8 { x }
+
+pub type L = uint<8>
+
+regmap M { 0x00 r: rw u8 }
+
+test "n" {}
+
+property o { always true }
+
+assert property p { always true }
+
+assume property q { always true }
+
+cover property r { true }
+
+sequence s { true ##1 true }
+
+static_assert(I == 1, "file-level static_assert")
+
+#[top]
+module Packages {
+    in clk: clock
+    in rst: reset
+    in d: u8
+    in push: Stream<u8>
+    out q: L
+    out e: E
+    out f: F
+    out ones: uint<4>
+    out pop: Stream<u8>
+
+    let a = A(d: D { x: d })
+    q = a.q
+    e = E { a: d }
+    f = .H
+    ones = count_ones(d) // from std::prelude via `pub use`, and std::math
+    let fifo = Fifo<u8, 4>(push)
+    pop = fifo.pop
+    let c = C(a: true)
+}

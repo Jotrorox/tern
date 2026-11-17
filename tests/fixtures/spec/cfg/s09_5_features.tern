@@ -21,6 +21,10 @@ module Features {
         q = d
     }
     fast = cfg::fast_path
+    if cfg::debug {
+        // Appendix B: `ifdef DEBUG ... `endif
+        static_assert(false, "not elaborated: debug is off")
+    }
     let p = Probe(d)
     dbg = p.q
 }

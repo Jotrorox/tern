@@ -6,3 +6,4 @@ version = "0.1.0"
 [features]
 debug_ila = false
 fast_path = true
+debug = false

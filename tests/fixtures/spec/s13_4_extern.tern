@@ -1,0 +1,32 @@
+// §13.4 Importing SystemVerilog: extern modules are typed black boxes.
+use std::bus::Axi4Lite
+
+extern module pll_wrapper("ip/pll_wrapper.sv") {
+    in refclk: clock
+    in rst: reset<async, high>
+    out outclk: clock
+    out locked: bool
+}
+
+extern module legacy_dma("rtl/dma.sv") <AW: uint = 32> {
+    in clk: clock
+    in rst: reset<sync, low>
+    #[sv_name("s_axi_lite")]
+    in s_axi: Axi4Lite<AW, 32> // maps to s_axi_awvalid etc. by convention; override with #[sv_name]
+    out irq: bool
+}
+
+#[top]
+module Board {
+    in clk: clock
+    in rst: reset<async, high>
+    in rst_n: reset<sync, low>
+    in bus: Axi4Lite<16, 32>
+    out locked: bool
+    out irq: bool
+
+    let pll = pll_wrapper(refclk: clk, rst)
+    locked = pll.locked
+    let dma = legacy_dma<16>(clk: pll.outclk, rst: rst_n, s_axi: bus)
+    irq = dma.irq
+}

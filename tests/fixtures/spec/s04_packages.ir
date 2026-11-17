@@ -1,0 +1,109 @@
+struct E (8 bits) { a: uint<8> @0 }
+enum F (1 bits, tag 1, binary) { G = 1'h0, H = 1'h1 }
+module A in uart::rx
+  0: in d_x (d.x): uint<8>
+  1: out q: uint<8>
+  assign q = (d_x + 8'h1)
+end
+module Fifo_u8_4_3 "Fifo<uint<8>, 4, 3>" in std::fifo
+  param Depth = 32'h4
+  param AlmostFull = 32'h3
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in push_valid (push.valid): bool @0
+  3: in push_data (push.data): uint<8> @0
+  4: out push_ready (push.ready): bool @0 flipped
+  5: out pop_valid (pop.valid): bool @0
+  6: out pop_data (pop.data): uint<8> @0
+  7: in pop_ready (pop.ready): bool @0 flipped
+  8: out count: uint<3> @0
+  9: out empty: bool @0
+  10: out full: bool @0
+  11: out almost_full: bool @0
+  12: mem buf: uint<8> x 4
+  13: reg wr_ptr: uint<3> @0 = 3'h0
+  14: reg rd_ptr: uint<3> @0 = 3'h0
+  15: reg wr_vis: uint<3> @0 = 3'h0
+  16: wire used: uint<3>
+  17: wire rd_next: uint<3>
+  18: reg buf_rd0: uint<8> @0
+  assign used = (wr_ptr - rd_ptr)
+  assign full = (used == 3'h4)
+  assign empty = (used == 3'h0)
+  assign count = used
+  assign almost_full = (used >= 3'h3)
+  assign push_ready = !full
+  assign pop_valid = (rd_ptr != wr_vis)
+  assign rd_next = ((pop_valid && pop_ready) ? (rd_ptr + 3'h1) : rd_ptr)
+  assign pop_data = buf_rd0
+  on 0 regs(buf_rd0) {
+    buf_rd0 = buf[zext2(rd_next)]
+  }
+  on 0 regs(wr_ptr, rd_ptr, wr_vis) {
+    if (push_valid && push_ready) {
+      buf[zext2(wr_ptr)] = push_data
+      wr_ptr = (wr_ptr + 3'h1)
+    }
+    wr_vis = wr_ptr
+    rd_ptr = rd_next
+  }
+  assert property count_bounded @0: always (count <= 3'h4)
+  assert property visible_within_used @0: always ((wr_vis - rd_ptr) <= used)
+  assert property pop_stable @0: always ((pop_valid && !pop_ready) |=> (pop_valid && (pop_data == past(pop_data, 1))))
+  cover property fills_up @0: full
+  cover property wraps_around @0: (full ##[1:$] empty)
+end
+module C in uart::rx extern("c.sv")
+  0: in a: bool
+end
+module Packages in uart::rx top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in d: uint<8> @0
+  3: in push_valid (push.valid): bool @0
+  4: in push_data (push.data): uint<8> @0
+  5: out push_ready (push.ready): bool @0 flipped
+  6: out q: uint<8> @0
+  7: out e: E @0
+  8: out f: F @0
+  9: out ones: uint<4> @0
+  10: out pop_valid (pop.valid): bool @0
+  11: out pop_data (pop.data): uint<8> @0
+  12: in pop_ready (pop.ready): bool @0 flipped
+  13: wire a_d_x (a.d.x): uint<8>
+  14: wire a_q (a.q): uint<8>
+  15: wire _t0: uint<4>
+  16: wire _t1: uint<4>
+  17: wire fifo_push_valid (fifo.push.valid): bool @0
+  18: wire fifo_push_data (fifo.push.data): uint<8> @0
+  19: wire fifo_push_ready (fifo.push.ready): bool @0
+  20: wire fifo_pop_valid (fifo.pop.valid): bool @0
+  21: wire fifo_pop_data (fifo.pop.data): uint<8> @0
+  22: wire fifo_pop_ready (fifo.pop.ready): bool @0
+  23: wire fifo_count (fifo.count): uint<3> @0
+  24: wire fifo_empty (fifo.empty): bool @0
+  25: wire fifo_full (fifo.full): bool @0
+  26: wire fifo_almost_full (fifo.almost_full): bool @0
+  27: wire c_a (c.a): bool
+  assign a_d_x = d
+  assign q = a_q
+  assign e = {d}
+  assign f = 1'h1
+  assign _t0 = ((((4'h0 + zext4(d[0])) + zext4(d[1])) + zext4(d[2])) + zext4(d[3]))
+  assign _t1 = ((((_t0 + zext4(d[4])) + zext4(d[5])) + zext4(d[6])) + zext4(d[7]))
+  assign ones = _t1
+  assign fifo_push_valid = push_valid
+  assign fifo_push_data = push_data
+  assign push_ready = fifo_push_ready
+  assign pop_valid = fifo_pop_valid
+  assign pop_data = fifo_pop_data
+  assign fifo_pop_ready = pop_ready
+  assign c_a = 1'h1
+  inst a: A (d_x = a_d_x, q -> a_q)
+  inst fifo: Fifo_u8_4_3 (clk = clk, rst = rst, push_valid = fifo_push_valid, push_data = fifo_push_data, push_ready -> fifo_push_ready, pop_valid -> fifo_pop_valid, pop_data -> fifo_pop_data, pop_ready = fifo_pop_ready, count -> fifo_count, empty -> fifo_empty, full -> fifo_full, almost_full -> fifo_almost_full)
+  inst c: C (a = c_a)
+end
+regmap M
+  0x0 r: rw 8

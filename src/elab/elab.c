@@ -923,6 +923,73 @@ static uint32_t elb_map_child_domain(Elab *el, ModInfo *mi, IrExpr **clk_conn, u
     return fallback;
 }
 
+static int elb_pure_expr(const Expr *e)
+{
+    while (e && (e->kind == EXPR_FIELD || e->kind == EXPR_INDEX || e->kind == EXPR_PAREN))
+        e = e->kind == EXPR_FIELD ? e->u.field.base : e->kind == EXPR_INDEX ? e->u.index.base : e->u.inner;
+    return e && e->kind == EXPR_PATH;
+}
+
+/* Generic arguments of a module instantiated without `<..>`, inferred from
+ * the types of the connected inputs (`Crc32(in: words)` with
+ * `in in: Stream<T>`); generics that cannot be inferred keep their defaults.
+ * Returns the number of inferred arguments. */
+static uint32_t elb_infer_generics(Elab *el, Item *it, FileUnit *file, Expr *call, Env *env, ElabArgs *out)
+{
+    GenericParams *gp = it->kind == ITEM_MODULE ? &it->u.module.generics : &it->u.extern_mod.generics;
+    Stmt **body = it->kind == ITEM_MODULE ? it->u.module.body : it->u.extern_mod.body;
+    uint32_t nbody = it->kind == ITEM_MODULE ? it->u.module.nbody : it->u.extern_mod.nbody;
+    uint32_t i, k, n = 0;
+    Env *genv;
+    memset(out, 0, sizeof *out);
+    if (!gp->n || !call->u.call.nargs)
+        return 0;
+    if (!file)
+        file = sema_file_of_item(el->S, it);
+    genv = elab_env_new(el, NULL, file);
+    for (i = 0; i < gp->n; i++) {
+        Value ph = val_void(el->S);
+        ph.aux = 1;
+        elab_env_bind(el, genv, gp->items[i].name.name, ph, gp->items[i].name.span)->sem = SEM_GENERIC;
+    }
+    for (i = 0; i < call->u.call.nargs; i++) {
+        Arg *a = &call->u.call.args[i];
+        const char *pn = a->name.name;
+        Stmt *port = NULL;
+        Value v;
+        int q;
+        if (!pn && a->value->kind == EXPR_PATH && a->value->u.path.nsegs == 1)
+            pn = a->value->u.path.segs[0].name.name;
+        if (!pn || !elb_pure_expr(a->value))
+            continue;
+        for (k = 0; k < nbody; k++)
+            if (body[k]->kind == STMT_PORT && body[k]->u.port.dir == PORT_IN && body[k]->u.port.name.name == pn)
+                port = body[k];
+        if (!port)
+            continue;
+        q = el->quiet;
+        el->quiet = 1;
+        v = elab_eval(el, a->value, env, NULL);
+        el->quiet = q;
+        el->quiet_errors = 0;
+        if (v.kind != VAL_ERROR && v.ty)
+            el_unify_type(el, port->u.port.type, v.ty, genv);
+    }
+    out->items = ANEWN(&el->arena, ElabArg, gp->n);
+    for (i = 0; i < gp->n; i++) {
+        Binding *b = ce_lookup_local_binding(genv, gp->items[i].name.name);
+        if (!b || (b->val.kind == VAL_VOID && b->val.aux == 1) || b->val.kind == VAL_ERROR)
+            continue;
+        out->items[n].name = gp->items[i].name.name;
+        out->items[n].val = b->val;
+        out->items[n].span = call->span;
+        n++;
+    }
+    out->n = n;
+    elab_env_free(genv);
+    return n;
+}
+
 Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Value calleev)
 {
     ModCtx *mc = el->mod;
@@ -947,8 +1014,13 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
         return calleev;
     if (calleev.kind == VAL_MODULE)
         vm = calleev.u.mod;
-    else if (calleev.kind == VAL_ITEM)
-        vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, NULL, call->u.call.callee->span);
+    else if (calleev.kind == VAL_ITEM) {
+        ElabArgs inferred;
+        if (elb_infer_generics(el, calleev.u.fn->item, calleev.u.fn->file, call, env, &inferred))
+            vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, &inferred, call->u.call.callee->span);
+        else
+            vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, NULL, call->u.call.callee->span);
+    }
     else {
         el_error(el, call->u.call.callee->span, "`%s` is not a module", el_text(call->u.call.callee));
         return val_error();
@@ -1902,6 +1974,78 @@ static void elb_fwd_block(ElbFwd *f, const IrBlock *b, IrExpr *cond)
         elb_fwd_stmt(f, b->stmts[i], cond);
 }
 
+/* read ports of the memories (distinct IRE_MEMREAD nodes, §10.1) */
+typedef struct ElbPorts {
+    Map seen;
+    uint32_t *count;          /* per signal */
+} ElbPorts;
+
+static void elb_ports_expr(ElbPorts *pc, const IrExpr *e)
+{
+    uint32_t i;
+    if (!e || map_has(&pc->seen, MAP_PTR(e)))
+        return;
+    map_put(&pc->seen, MAP_PTR(e), 1);
+    if (e->kind == IRE_MEMREAD)
+        pc->count[e->sig]++;
+    for (i = 0; i < e->nargs; i++)
+        elb_ports_expr(pc, e->args[i]);
+}
+
+static void elb_ports_block(ElbPorts *pc, const IrBlock *b)
+{
+    uint32_t i, k;
+    for (i = 0; i < b->n; i++) {
+        const IrStmt *s = b->stmts[i];
+        elb_ports_expr(pc, s->rhs);
+        elb_ports_expr(pc, s->cond);
+        elb_ports_expr(pc, s->subject);
+        elb_ports_expr(pc, s->addr);
+        elb_ports_expr(pc, s->data);
+        elb_ports_expr(pc, s->lhs.index);
+        elb_ports_block(pc, &s->then_b);
+        elb_ports_block(pc, &s->else_b);
+        for (k = 0; k < s->narms; k++)
+            elb_ports_block(pc, &s->arms[k].body);
+    }
+}
+
+static void elb_check_mem_ports(Elab *el, ModCtx *mc)
+{
+    IrModule *m = mc->ir;
+    ElbPorts pc;
+    uint32_t i, k;
+    int any = 0;
+    for (i = 0; i < m->nsigs && !any; i++)
+        any = m->sigs[i].kind == IRS_MEM;
+    if (!any)
+        return;
+    memset(&pc, 0, sizeof pc);
+    pc.count = (uint32_t *)xcalloc(m->nsigs, sizeof(uint32_t));
+    for (i = 0; i < m->nassigns; i++) {
+        elb_ports_expr(&pc, m->assigns[i].rhs);
+        elb_ports_expr(&pc, m->assigns[i].lhs.index);
+    }
+    for (i = 0; i < m->nprocs; i++)
+        elb_ports_block(&pc, &m->procs[i].body);
+    for (i = 0; i < m->nsigs; i++) {
+        int distributed = 0;
+        if (m->sigs[i].kind != IRS_MEM || pc.count[i] <= 2)
+            continue;
+        for (k = 0; k < m->sigs[i].nattrs; k++)
+            if (strcmp(m->sigs[i].attrs[k].name, "ram") == 0 && m->sigs[i].attrs[k].args &&
+                (strstr(m->sigs[i].attrs[k].args, "distributed") || strstr(m->sigs[i].attrs[k].args, "registers")))
+                distributed = 1;
+        if (distributed)
+            continue;
+        el_error(el, m->sigs[i].loc, "mem `%s` has %u read ports; the target supports 2", m->sigs[i].name,
+                 (unsigned)pc.count[i]);
+        el_help(el, "share a port between the readers, duplicate the memory, or mark it #[ram(distributed)]");
+    }
+    free(pc.count);
+    map_free(&pc.seen);
+}
+
 static void elb_finish(Elab *el, ModCtx *mc)
 {
     IrModule *m = mc->ir;
@@ -1938,6 +2082,7 @@ static void elb_finish(Elab *el, ModCtx *mc)
                 elb_fwd_block(&f, &m->procs[j].body, NULL);
         rp->body.stmts[0]->rhs = f.result;
     }
+    elb_check_mem_ports(el, mc);
     /* unconnected instance inputs */
     for (i = 0; i < mc->pendings.len; i++) {
         PendingIn *pi = &mc->pendings.data[i];

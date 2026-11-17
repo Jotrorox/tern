@@ -1,0 +1,522 @@
+enum Event (2 bits, tag 2, binary) { None = 2'h0, Start = 2'h1, Done = 2'h2, Abort = 2'h3 }
+enum State (2 bits, tag 2, binary) { Idle = 2'h0, Run = 2'h1, Finish = 2'h2 }
+enum Mode (2 bits, tag 2, binary) { Off = 2'h0, Slow = 2'h1, Fast = 2'h2, Turbo = 2'h3 }
+struct Ctrl_Ctrl (3 bits) { mode: Mode @1, enable: bool @0 }
+struct Ctrl_Status (2 bits) { err: bool @1, busy: bool @0 }
+struct RegReq_32_32 (69 bits) { addr: uint<32> @37, wdata: uint<32> @5, strb: bit<4> @1, write: bool @0 }
+struct RegRsp_32 (34 bits) { rdata: uint<32> @2, resp: bit<2> @0 }
+module Fsm
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in event: Event @0
+  3: out is_busy: bool @0
+  4: reg state: State @0 = 2'h0
+  5: wire busy: bool
+  assign busy = ((state == 2'h1) || (state == 2'h2))
+  assign is_busy = busy
+  on 0 regs(state) {
+    state = (((state == 2'h0) && (event == 2'h1)) ? 2'h1 : (((state == 2'h1) && (event == 2'h2)) ? 2'h2 : (((state == 2'h1) && (event == 2'h3)) ? 2'h0 : ((state == 2'h2) ? 2'h0 : state))))
+  }
+end
+module Mems
+  domain 0 "" clock=clk reset=none default
+  0: in clk: clock
+  1: in we: bool @0
+  2: in wr_addr: uint<10> @0
+  3: in wr_data: uint<32> @0
+  4: in mask_we: bool @0
+  5: in mask: bit<4> @0
+  6: in rd_addr: uint<10> @0
+  7: in idx: uint<6> @0
+  8: out rd_q: uint<32> @0
+  9: out old_q: uint<32> @0
+  10: out lut_q: uint<8> @0
+  11: mem buf: uint<32> x 1024
+  12: mem lut: uint<8> x 64 mem_init include_hex("sine.hex") #[ram(distributed)]
+  13: reg buf_rd0: uint<32> @0
+  14: wire rd: uint<32>
+  15: reg buf_rd1: uint<32> @0
+  16: wire old: uint<32>
+  17: wire async_rd: uint<8>
+  assign rd = buf_rd0
+  assign old = buf_rd1
+  assign async_rd = lut[idx]
+  assign rd_q = rd
+  assign old_q = old
+  assign lut_q = async_rd
+  on 0 regs(buf_rd0) {
+    buf_rd0 = buf[rd_addr]
+  }
+  on 0 regs(buf_rd1) {
+    buf_rd1 = buf[rd_addr]
+  }
+  on 0 regs() {
+    if we {
+      buf[wr_addr] = wr_data
+    }
+    if mask_we {
+      buf[wr_addr] = wr_data mask mask
+    }
+  }
+end
+module Cpu
+  0: out axi_lite_aw_valid (axi_lite.aw.valid): bool
+  1: out axi_lite_aw_data (axi_lite.aw.data): uint<32>
+  2: in axi_lite_aw_ready (axi_lite.aw.ready): bool flipped
+  3: out axi_lite_w_valid (axi_lite.w.valid): bool
+  4: out axi_lite_w_data (axi_lite.w.data): struct { data: uint<32>, strb: bit<4> }
+  5: in axi_lite_w_ready (axi_lite.w.ready): bool flipped
+  6: in axi_lite_b_valid (axi_lite.b.valid): bool flipped
+  7: in axi_lite_b_data (axi_lite.b.data): bit<2> flipped
+  8: out axi_lite_b_ready (axi_lite.b.ready): bool
+  9: out axi_lite_ar_valid (axi_lite.ar.valid): bool
+  10: out axi_lite_ar_data (axi_lite.ar.data): uint<32>
+  11: in axi_lite_ar_ready (axi_lite.ar.ready): bool flipped
+  12: in axi_lite_r_valid (axi_lite.r.valid): bool flipped
+  13: in axi_lite_r_data (axi_lite.r.data): struct { data: uint<32>, resp: bit<2> } flipped
+  14: out axi_lite_r_ready (axi_lite.r.ready): bool
+  assign axi_lite_aw_valid = 1'h0
+  assign axi_lite_aw_data = 32'h0
+  assign axi_lite_w_valid = 1'h0
+  assign axi_lite_w_data.data = 32'h0
+  assign axi_lite_w_data.strb = 4'h0
+  assign axi_lite_b_ready = 1'h1
+  assign axi_lite_ar_valid = 1'h0
+  assign axi_lite_ar_data = 32'h0
+  assign axi_lite_r_ready = 1'h1
+end
+module Axi4LiteSlave_32_32 "Axi4LiteSlave<32, 32>" in std::bus
+  param AW = 32'h20
+  param DW = 32'h20
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in s_aw_valid (s.aw.valid): bool @0
+  3: in s_aw_data (s.aw.data): uint<32> @0
+  4: out s_aw_ready (s.aw.ready): bool @0 flipped
+  5: in s_w_valid (s.w.valid): bool @0
+  6: in s_w_data (s.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  7: out s_w_ready (s.w.ready): bool @0 flipped
+  8: out s_b_valid (s.b.valid): bool @0 flipped
+  9: out s_b_data (s.b.data): bit<2> @0 flipped
+  10: in s_b_ready (s.b.ready): bool @0
+  11: in s_ar_valid (s.ar.valid): bool @0
+  12: in s_ar_data (s.ar.data): uint<32> @0
+  13: out s_ar_ready (s.ar.ready): bool @0 flipped
+  14: out s_r_valid (s.r.valid): bool @0 flipped
+  15: out s_r_data (s.r.data): struct { data: uint<32>, resp: bit<2> } @0 flipped
+  16: in s_r_ready (s.r.ready): bool @0
+  17: out req_valid (req.valid): bool @0
+  18: out req_data (req.data): RegReq_32_32 @0
+  19: in req_ready (req.ready): bool @0 flipped
+  20: in rsp_valid (rsp.valid): bool @0
+  21: in rsp_data (rsp.data): RegRsp_32 @0
+  22: reg aw_full: bool @0 = 1'h0
+  23: reg aw_addr: uint<32> @0 = 32'h0
+  24: reg w_full: bool @0 = 1'h0
+  25: reg w_data: uint<32> @0 = 32'h0
+  26: reg w_strb: bit<4> @0 = 4'h0
+  27: reg ar_full: bool @0 = 1'h0
+  28: reg ar_addr: uint<32> @0 = 32'h0
+  29: reg req_valid: bool @0 = 1'h0
+  30: reg req_q: RegReq_32_32 @0 = 69'h0
+  31: reg busy: bool @0 = 1'h0
+  32: reg prefer_read: bool @0 = 1'h0
+  33: reg b_valid: bool @0 = 1'h0
+  34: reg b_resp: bit<2> @0 = 2'h0
+  35: reg r_valid: bool @0 = 1'h0
+  36: reg r_data: uint<32> @0 = 32'h0
+  37: reg r_resp: bit<2> @0 = 2'h0
+  38: wire can_write: bool
+  39: wire can_read: bool
+  40: wire idle: bool
+  41: wire do_read: bool
+  42: wire do_write: bool
+  43: wire waiting: bool
+  assign can_write = ((aw_full && w_full) && !b_valid)
+  assign can_read = (ar_full && !r_valid)
+  assign idle = (!req_valid && !busy)
+  assign do_read = ((idle && can_read) && (!can_write || prefer_read))
+  assign do_write = ((idle && can_write) && !do_read)
+  assign waiting = (busy || (req_valid && req_ready))
+  assign s_aw_ready = !aw_full
+  assign s_w_ready = !w_full
+  assign s_ar_ready = !ar_full
+  assign s_b_valid = b_valid
+  assign s_b_data = b_resp
+  assign s_r_valid = r_valid
+  assign s_r_data.data = r_data
+  assign s_r_data.resp = r_resp
+  assign req_valid = req_valid
+  assign req_data = req_q
+  on 0 regs(aw_full, aw_addr, w_full, w_data, w_strb, ar_full, ar_addr, req_valid, req_q, busy, prefer_read, b_valid, b_resp, r_valid, r_data, r_resp) {
+    if (s_aw_valid && s_aw_ready) {
+      aw_full = 1'h1
+      aw_addr = s_aw_data
+    }
+    if (s_w_valid && s_w_ready) {
+      w_full = 1'h1
+      w_data = s_w_data.data
+      w_strb = s_w_data.strb
+    }
+    if (s_ar_valid && s_ar_ready) {
+      ar_full = 1'h1
+      ar_addr = s_ar_data
+    }
+    if ((idle && can_read) && can_write) {
+      prefer_read = !prefer_read
+    }
+    if do_write {
+      req_valid = 1'h1
+      req_q = {aw_addr, w_data, w_strb, 1'h1}
+      aw_full = 1'h0
+      w_full = 1'h0
+    }
+    if do_read {
+      req_valid = 1'h1
+      req_q = {ar_addr, 32'h0, 4'h0, 1'h0}
+      ar_full = 1'h0
+    }
+    if (req_valid && req_ready) {
+      req_valid = 1'h0
+      busy = 1'h1
+    }
+    if (waiting && rsp_valid) {
+      busy = 1'h0
+      if req_q.write {
+        b_valid = 1'h1
+        b_resp = rsp_data.resp
+      } else {
+        r_valid = 1'h1
+        r_data = rsp_data.rdata
+        r_resp = rsp_data.resp
+      }
+    }
+    if (s_b_valid && s_b_ready) {
+      b_valid = 1'h0
+    }
+    if (s_r_valid && s_r_ready) {
+      r_valid = 1'h0
+    }
+  }
+  assert property b_held @0: always ((s_b_valid && !s_b_ready) |=> (s_b_valid && (s_b_data == past(s_b_data, 1))))
+  assert property r_held @0: always ((s_r_valid && !s_r_ready) |=> (s_r_valid && (s_r_data == past(s_r_data, 1))))
+  assert property req_held @0: always ((req_valid && !req_ready) |=> (req_valid && (req_data == past(req_data, 1))))
+  assert property one_outstanding @0: never (req_valid && busy)
+end
+module Axi4LiteRegPort_32_32 "Axi4LiteRegPort<32, 32>" in std::bus
+  param AW = 32'h20
+  param DW = 32'h20
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in s_aw_valid (s.aw.valid): bool @0
+  3: in s_aw_data (s.aw.data): uint<32> @0
+  4: out s_aw_ready (s.aw.ready): bool @0 flipped
+  5: in s_w_valid (s.w.valid): bool @0
+  6: in s_w_data (s.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  7: out s_w_ready (s.w.ready): bool @0 flipped
+  8: out s_b_valid (s.b.valid): bool @0 flipped
+  9: out s_b_data (s.b.data): bit<2> @0 flipped
+  10: in s_b_ready (s.b.ready): bool @0
+  11: in s_ar_valid (s.ar.valid): bool @0
+  12: in s_ar_data (s.ar.data): uint<32> @0
+  13: out s_ar_ready (s.ar.ready): bool @0 flipped
+  14: out s_r_valid (s.r.valid): bool @0 flipped
+  15: out s_r_data (s.r.data): struct { data: uint<32>, resp: bit<2> } @0 flipped
+  16: in s_r_ready (s.r.ready): bool @0
+  17: out regs_req_valid (regs.req.valid): bool @0
+  18: out regs_req_data (regs.req.data): RegReq_32_32 @0
+  19: in regs_rdata (regs.rdata): uint<32> @0 flipped
+  20: in regs_err (regs.err): bool @0 flipped
+  21: wire front_s_aw_valid (front.s.aw.valid): bool @0
+  22: wire front_s_aw_data (front.s.aw.data): uint<32> @0
+  23: wire front_s_aw_ready (front.s.aw.ready): bool @0
+  24: wire front_s_w_valid (front.s.w.valid): bool @0
+  25: wire front_s_w_data (front.s.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  26: wire front_s_w_ready (front.s.w.ready): bool @0
+  27: wire front_s_b_valid (front.s.b.valid): bool @0
+  28: wire front_s_b_data (front.s.b.data): bit<2> @0
+  29: wire front_s_b_ready (front.s.b.ready): bool @0
+  30: wire front_s_ar_valid (front.s.ar.valid): bool @0
+  31: wire front_s_ar_data (front.s.ar.data): uint<32> @0
+  32: wire front_s_ar_ready (front.s.ar.ready): bool @0
+  33: wire front_s_r_valid (front.s.r.valid): bool @0
+  34: wire front_s_r_data (front.s.r.data): struct { data: uint<32>, resp: bit<2> } @0
+  35: wire front_s_r_ready (front.s.r.ready): bool @0
+  36: wire front_req_valid (front.req.valid): bool @0
+  37: wire front_req_data (front.req.data): RegReq_32_32 @0
+  38: wire front_req_ready (front.req.ready): bool @0
+  39: wire front_rsp_valid (front.rsp.valid): bool @0
+  40: wire front_rsp_data (front.rsp.data): RegRsp_32 @0
+  assign front_s_aw_valid = s_aw_valid
+  assign front_s_aw_data = s_aw_data
+  assign s_aw_ready = front_s_aw_ready
+  assign front_s_w_valid = s_w_valid
+  assign front_s_w_data = s_w_data
+  assign s_w_ready = front_s_w_ready
+  assign s_b_valid = front_s_b_valid
+  assign s_b_data = front_s_b_data
+  assign front_s_b_ready = s_b_ready
+  assign front_s_ar_valid = s_ar_valid
+  assign front_s_ar_data = s_ar_data
+  assign s_ar_ready = front_s_ar_ready
+  assign s_r_valid = front_s_r_valid
+  assign s_r_data = front_s_r_data
+  assign front_s_r_ready = s_r_ready
+  assign front_req_ready = 1'h1
+  assign regs_req_valid = front_req_valid
+  assign regs_req_data = front_req_data
+  assign front_rsp_valid = front_req_valid
+  assign front_rsp_data = {regs_rdata, (regs_err ? 2'h2 : 2'h0)}
+  inst front: Axi4LiteSlave_32_32 (clk = clk, rst = rst, s_aw_valid = front_s_aw_valid, s_aw_data = front_s_aw_data, s_aw_ready -> front_s_aw_ready, s_w_valid = front_s_w_valid, s_w_data = front_s_w_data, s_w_ready -> front_s_w_ready, s_b_valid -> front_s_b_valid, s_b_data -> front_s_b_data, s_b_ready = front_s_b_ready, s_ar_valid = front_s_ar_valid, s_ar_data = front_s_ar_data, s_ar_ready -> front_s_ar_ready, s_r_valid -> front_s_r_valid, s_r_data -> front_s_r_data, s_r_ready = front_s_r_ready, req_valid -> front_req_valid, req_data -> front_req_data, req_ready = front_req_ready, rsp_valid = front_rsp_valid, rsp_data = front_rsp_data)
+  assert property one_cycle_access @0: always (regs_req_valid |=> !regs_req_valid)
+end
+module RegisterFile_Ctrl_Regs_Axi4Lite_32_32 "RegisterFile<Ctrl::Regs, Axi4Lite<32, 32>>" in std::bus
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in bus_aw_valid (bus.aw.valid): bool @0
+  3: in bus_aw_data (bus.aw.data): uint<32> @0
+  4: out bus_aw_ready (bus.aw.ready): bool @0 flipped
+  5: in bus_w_valid (bus.w.valid): bool @0
+  6: in bus_w_data (bus.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  7: out bus_w_ready (bus.w.ready): bool @0 flipped
+  8: out bus_b_valid (bus.b.valid): bool @0 flipped
+  9: out bus_b_data (bus.b.data): bit<2> @0 flipped
+  10: in bus_b_ready (bus.b.ready): bool @0
+  11: in bus_ar_valid (bus.ar.valid): bool @0
+  12: in bus_ar_data (bus.ar.data): uint<32> @0
+  13: out bus_ar_ready (bus.ar.ready): bool @0 flipped
+  14: out bus_r_valid (bus.r.valid): bool @0 flipped
+  15: out bus_r_data (bus.r.data): struct { data: uint<32>, resp: bit<2> } @0 flipped
+  16: in bus_r_ready (bus.r.ready): bool @0
+  17: out ctrl: Ctrl_Ctrl @0
+  18: in status: Ctrl_Status @0
+  19: out count: uint<32> @0
+  20: out fifo_valid (fifo.valid): bool @0
+  21: out fifo_data (fifo.data): uint<8> @0
+  22: in fifo_ready (fifo.ready): bool @0 flipped
+  23: wire rf__port_s_aw_valid (rf__port.s.aw.valid): bool @0
+  24: wire rf__port_s_aw_data (rf__port.s.aw.data): uint<32> @0
+  25: wire rf__port_s_aw_ready (rf__port.s.aw.ready): bool @0
+  26: wire rf__port_s_w_valid (rf__port.s.w.valid): bool @0
+  27: wire rf__port_s_w_data (rf__port.s.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  28: wire rf__port_s_w_ready (rf__port.s.w.ready): bool @0
+  29: wire rf__port_s_b_valid (rf__port.s.b.valid): bool @0
+  30: wire rf__port_s_b_data (rf__port.s.b.data): bit<2> @0
+  31: wire rf__port_s_b_ready (rf__port.s.b.ready): bool @0
+  32: wire rf__port_s_ar_valid (rf__port.s.ar.valid): bool @0
+  33: wire rf__port_s_ar_data (rf__port.s.ar.data): uint<32> @0
+  34: wire rf__port_s_ar_ready (rf__port.s.ar.ready): bool @0
+  35: wire rf__port_s_r_valid (rf__port.s.r.valid): bool @0
+  36: wire rf__port_s_r_data (rf__port.s.r.data): struct { data: uint<32>, resp: bit<2> } @0
+  37: wire rf__port_s_r_ready (rf__port.s.r.ready): bool @0
+  38: wire rf__port_regs_req_valid (rf__port.regs.req.valid): bool @0
+  39: wire rf__port_regs_req_data (rf__port.regs.req.data): RegReq_32_32 @0
+  40: wire rf__port_regs_rdata (rf__port.regs.rdata): uint<32> @0
+  41: wire rf__port_regs_err (rf__port.regs.err): bool @0
+  42: wire rf__req: RegReq_32_32
+  43: wire rf__valid: bool
+  44: wire rf__wr: bool
+  45: wire rf__word: bit<30>
+  46: wire rf__wdata: uint<32>
+  47: wire rf__wmask: bit<32>
+  48: wire rf__ctrl_hit0: bool
+  49: reg rf__ctrl_q: bit<3> @0 = 3'h0
+  50: wire rf__status_hit0: bool
+  51: wire rf__status_pk: bit<2>
+  52: wire rf__status_rd: bit<2>
+  53: wire rf__count_hit0: bool
+  54: reg rf__count_q: bit<32> @0 = 32'h0
+  55: wire rf__fifo_hit0: bool
+  56: reg rf__fifo_valid: bool @0 = 1'h0
+  57: reg rf__fifo_data: bit<8> @0 = 8'h0
+  58: wire rf__fifo_room: bool
+  59: wire rf__mapped: bool
+  assign rf__port_s_aw_valid = bus_aw_valid
+  assign rf__port_s_aw_data = bus_aw_data
+  assign bus_aw_ready = rf__port_s_aw_ready
+  assign rf__port_s_w_valid = bus_w_valid
+  assign rf__port_s_w_data = bus_w_data
+  assign bus_w_ready = rf__port_s_w_ready
+  assign bus_b_valid = rf__port_s_b_valid
+  assign bus_b_data = rf__port_s_b_data
+  assign rf__port_s_b_ready = bus_b_ready
+  assign rf__port_s_ar_valid = bus_ar_valid
+  assign rf__port_s_ar_data = bus_ar_data
+  assign bus_ar_ready = rf__port_s_ar_ready
+  assign bus_r_valid = rf__port_s_r_valid
+  assign bus_r_data = rf__port_s_r_data
+  assign rf__port_s_r_ready = bus_r_ready
+  assign rf__req = rf__port_regs_req_data
+  assign rf__valid = rf__port_regs_req_valid
+  assign rf__wr = (rf__valid && rf__req.write)
+  assign rf__word = rf__req.addr[2+:30]
+  assign rf__wdata = rf__req.wdata
+  assign rf__wmask = {{{(rf__req.strb[3] ? 8'hff : 8'h0), (rf__req.strb[2] ? 8'hff : 8'h0)}, (rf__req.strb[1] ? 8'hff : 8'h0)}, (rf__req.strb[0] ? 8'hff : 8'h0)}
+  assign rf__ctrl_hit0 = (rf__word == 30'h0)
+  assign ctrl = zext3({rf__ctrl_q[1+:2], rf__ctrl_q[0]})
+  assign rf__status_hit0 = (rf__word == 30'h1)
+  assign rf__status_pk = status
+  assign rf__status_rd = {rf__status_pk[1], rf__status_pk[0]}
+  assign rf__count_hit0 = (rf__word == 30'h2)
+  assign count = zext32(rf__count_q)
+  assign rf__fifo_hit0 = (rf__word == 30'h4)
+  assign rf__fifo_room = (!rf__fifo_valid || fifo_ready)
+  assign fifo_valid = rf__fifo_valid
+  assign fifo_data = zext8(rf__fifo_data)
+  assign rf__port_regs_rdata = (((32'h0 | (rf__ctrl_hit0 ? zext32(rf__ctrl_q[0+:3]) : 32'h0)) | (rf__status_hit0 ? zext32(rf__status_rd[0+:2]) : 32'h0)) | (rf__count_hit0 ? rf__count_q[0+:32] : 32'h0))
+  assign rf__mapped = (((rf__ctrl_hit0 || rf__status_hit0) || rf__count_hit0) || rf__fifo_hit0)
+  assign rf__port_regs_err = (rf__valid && (!rf__mapped || ((rf__req.write && rf__fifo_hit0) && !rf__fifo_room)))
+  on 0 regs(rf__ctrl_q, rf__count_q, rf__fifo_valid, rf__fifo_data) {
+    if (rf__wr && rf__ctrl_hit0) {
+      rf__ctrl_q = ((rf__ctrl_q[0+:3] & ~(rf__wmask[0+:3] & 3'h7)) | (rf__wdata[0+:3] & (rf__wmask[0+:3] & 3'h7)))
+    }
+    if (rf__wr && rf__count_hit0) {
+      rf__count_q = ((rf__count_q[0+:32] & ~rf__wmask[0+:32]) | (rf__wdata[0+:32] & rf__wmask[0+:32]))
+    }
+    if fifo_ready {
+      rf__fifo_valid = 1'h0
+    }
+    if ((rf__wr && rf__fifo_hit0) && rf__fifo_room) {
+      rf__fifo_valid = 1'h1
+      rf__fifo_data = rf__wdata[0+:8]
+    }
+  }
+  inst rf__port: Axi4LiteRegPort_32_32 (clk = clk, rst = rst, s_aw_valid = rf__port_s_aw_valid, s_aw_data = rf__port_s_aw_data, s_aw_ready -> rf__port_s_aw_ready, s_w_valid = rf__port_s_w_valid, s_w_data = rf__port_s_w_data, s_w_ready -> rf__port_s_w_ready, s_b_valid -> rf__port_s_b_valid, s_b_data -> rf__port_s_b_data, s_b_ready = rf__port_s_b_ready, s_ar_valid = rf__port_s_ar_valid, s_ar_data = rf__port_s_ar_data, s_ar_ready -> rf__port_s_ar_ready, s_r_valid -> rf__port_s_r_valid, s_r_data -> rf__port_s_r_data, s_r_ready = rf__port_s_r_ready, regs_req_valid -> rf__port_regs_req_valid, regs_req_data -> rf__port_regs_req_data, regs_rdata = rf__port_regs_rdata, regs_err = rf__port_regs_err)
+end
+module Engine
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in enable: bool @0
+  3: in mode: Mode @0
+  4: in in_valid (in.valid): bool @0
+  5: in in_data (in.data): uint<8> @0
+  6: out in_ready (in.ready): bool @0 flipped
+  7: out busy: bool @0
+  8: out err: bool @0
+  9: reg n: uint<8> @0 = 8'h0
+  assign in_ready = enable
+  assign busy = ((n != 8'h0) && (mode != 2'h0))
+  assign err = 1'h0
+  on 0 regs(n) {
+    if (in_valid && in_ready) {
+      n = (n + 8'h1)
+    }
+  }
+end
+module Soc top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in event: Event @0
+  3: in we: bool @0
+  4: in addr: uint<10> @0
+  5: in data: uint<32> @0
+  6: in idx: uint<6> @0
+  7: out busy: bool @0
+  8: out q: uint<32> @0
+  9: out wave: uint<8> @0
+  10: out engine_busy: bool @0
+  11: wire fsm_event (fsm.event): Event @0
+  12: wire fsm_is_busy (fsm.is_busy): bool @0
+  13: wire mems_we (mems.we): bool @0
+  14: wire mems_wr_addr (mems.wr_addr): uint<10> @0
+  15: wire mems_wr_data (mems.wr_data): uint<32> @0
+  16: wire mems_mask_we (mems.mask_we): bool @0
+  17: wire mems_mask (mems.mask): bit<4> @0
+  18: wire mems_rd_addr (mems.rd_addr): uint<10> @0
+  19: wire mems_idx (mems.idx): uint<6> @0
+  20: wire mems_rd_q (mems.rd_q): uint<32> @0
+  21: wire mems_old_q (mems.old_q): uint<32> @0
+  22: wire mems_lut_q (mems.lut_q): uint<8> @0
+  23: wire cpu_axi_lite_aw_valid (cpu.axi_lite.aw.valid): bool
+  24: wire cpu_axi_lite_aw_data (cpu.axi_lite.aw.data): uint<32>
+  25: wire cpu_axi_lite_aw_ready (cpu.axi_lite.aw.ready): bool
+  26: wire cpu_axi_lite_w_valid (cpu.axi_lite.w.valid): bool
+  27: wire cpu_axi_lite_w_data (cpu.axi_lite.w.data): struct { data: uint<32>, strb: bit<4> }
+  28: wire cpu_axi_lite_w_ready (cpu.axi_lite.w.ready): bool
+  29: wire cpu_axi_lite_b_valid (cpu.axi_lite.b.valid): bool
+  30: wire cpu_axi_lite_b_data (cpu.axi_lite.b.data): bit<2>
+  31: wire cpu_axi_lite_b_ready (cpu.axi_lite.b.ready): bool
+  32: wire cpu_axi_lite_ar_valid (cpu.axi_lite.ar.valid): bool
+  33: wire cpu_axi_lite_ar_data (cpu.axi_lite.ar.data): uint<32>
+  34: wire cpu_axi_lite_ar_ready (cpu.axi_lite.ar.ready): bool
+  35: wire cpu_axi_lite_r_valid (cpu.axi_lite.r.valid): bool
+  36: wire cpu_axi_lite_r_data (cpu.axi_lite.r.data): struct { data: uint<32>, resp: bit<2> }
+  37: wire cpu_axi_lite_r_ready (cpu.axi_lite.r.ready): bool
+  38: wire regs_bus_aw_valid (regs.bus.aw.valid): bool @0
+  39: wire regs_bus_aw_data (regs.bus.aw.data): uint<32> @0
+  40: wire regs_bus_aw_ready (regs.bus.aw.ready): bool @0
+  41: wire regs_bus_w_valid (regs.bus.w.valid): bool @0
+  42: wire regs_bus_w_data (regs.bus.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  43: wire regs_bus_w_ready (regs.bus.w.ready): bool @0
+  44: wire regs_bus_b_valid (regs.bus.b.valid): bool @0
+  45: wire regs_bus_b_data (regs.bus.b.data): bit<2> @0
+  46: wire regs_bus_b_ready (regs.bus.b.ready): bool @0
+  47: wire regs_bus_ar_valid (regs.bus.ar.valid): bool @0
+  48: wire regs_bus_ar_data (regs.bus.ar.data): uint<32> @0
+  49: wire regs_bus_ar_ready (regs.bus.ar.ready): bool @0
+  50: wire regs_bus_r_valid (regs.bus.r.valid): bool @0
+  51: wire regs_bus_r_data (regs.bus.r.data): struct { data: uint<32>, resp: bit<2> } @0
+  52: wire regs_bus_r_ready (regs.bus.r.ready): bool @0
+  53: wire regs_ctrl (regs.ctrl): Ctrl_Ctrl @0
+  54: wire regs_status (regs.status): Ctrl_Status @0
+  55: wire regs_count (regs.count): uint<32> @0
+  56: wire regs_fifo_valid (regs.fifo.valid): bool @0
+  57: wire regs_fifo_data (regs.fifo.data): uint<8> @0
+  58: wire regs_fifo_ready (regs.fifo.ready): bool @0
+  59: wire engine_enable (engine.enable): bool @0
+  60: wire engine_mode (engine.mode): Mode @0
+  61: wire engine_in_valid (engine.in.valid): bool @0
+  62: wire engine_in_data (engine.in.data): uint<8> @0
+  63: wire engine_in_ready (engine.in.ready): bool @0
+  64: wire engine_busy (engine.busy): bool @0
+  65: wire engine_err (engine.err): bool @0
+  assign fsm_event = event
+  assign busy = fsm_is_busy
+  assign mems_we = we
+  assign mems_wr_addr = addr
+  assign mems_wr_data = data
+  assign mems_mask_we = 1'h0
+  assign mems_mask = 4'h0
+  assign mems_rd_addr = addr
+  assign mems_idx = idx
+  assign q = (mems_rd_q ^ mems_old_q)
+  assign wave = mems_lut_q
+  assign regs_bus_aw_valid = cpu_axi_lite_aw_valid
+  assign regs_bus_aw_data = cpu_axi_lite_aw_data
+  assign cpu_axi_lite_aw_ready = regs_bus_aw_ready
+  assign regs_bus_w_valid = cpu_axi_lite_w_valid
+  assign regs_bus_w_data = cpu_axi_lite_w_data
+  assign cpu_axi_lite_w_ready = regs_bus_w_ready
+  assign cpu_axi_lite_b_valid = regs_bus_b_valid
+  assign cpu_axi_lite_b_data = regs_bus_b_data
+  assign regs_bus_b_ready = cpu_axi_lite_b_ready
+  assign regs_bus_ar_valid = cpu_axi_lite_ar_valid
+  assign regs_bus_ar_data = cpu_axi_lite_ar_data
+  assign cpu_axi_lite_ar_ready = regs_bus_ar_ready
+  assign cpu_axi_lite_r_valid = regs_bus_r_valid
+  assign cpu_axi_lite_r_data = regs_bus_r_data
+  assign regs_bus_r_ready = cpu_axi_lite_r_ready
+  assign engine_enable = regs_ctrl.enable
+  assign engine_mode = regs_ctrl.mode
+  assign engine_in_valid = regs_fifo_valid
+  assign engine_in_data = regs_fifo_data
+  assign regs_fifo_ready = engine_in_ready
+  assign regs_status = {engine_err, engine_busy}
+  assign engine_busy = engine_busy
+  inst fsm: Fsm (clk = clk, rst = rst, event = fsm_event, is_busy -> fsm_is_busy)
+  inst mems: Mems (clk = clk, we = mems_we, wr_addr = mems_wr_addr, wr_data = mems_wr_data, mask_we = mems_mask_we, mask = mems_mask, rd_addr = mems_rd_addr, idx = mems_idx, rd_q -> mems_rd_q, old_q -> mems_old_q, lut_q -> mems_lut_q)
+  inst cpu: Cpu (axi_lite_aw_valid -> cpu_axi_lite_aw_valid, axi_lite_aw_data -> cpu_axi_lite_aw_data, axi_lite_aw_ready = cpu_axi_lite_aw_ready, axi_lite_w_valid -> cpu_axi_lite_w_valid, axi_lite_w_data -> cpu_axi_lite_w_data, axi_lite_w_ready = cpu_axi_lite_w_ready, axi_lite_b_valid = cpu_axi_lite_b_valid, axi_lite_b_data = cpu_axi_lite_b_data, axi_lite_b_ready -> cpu_axi_lite_b_ready, axi_lite_ar_valid -> cpu_axi_lite_ar_valid, axi_lite_ar_data -> cpu_axi_lite_ar_data, axi_lite_ar_ready = cpu_axi_lite_ar_ready, axi_lite_r_valid = cpu_axi_lite_r_valid, axi_lite_r_data = cpu_axi_lite_r_data, axi_lite_r_ready -> cpu_axi_lite_r_ready)
+  inst regs: RegisterFile_Ctrl_Regs_Axi4Lite_32_32 (clk = clk, rst = rst, bus_aw_valid = regs_bus_aw_valid, bus_aw_data = regs_bus_aw_data, bus_aw_ready -> regs_bus_aw_ready, bus_w_valid = regs_bus_w_valid, bus_w_data = regs_bus_w_data, bus_w_ready -> regs_bus_w_ready, bus_b_valid -> regs_bus_b_valid, bus_b_data -> regs_bus_b_data, bus_b_ready = regs_bus_b_ready, bus_ar_valid = regs_bus_ar_valid, bus_ar_data = regs_bus_ar_data, bus_ar_ready -> regs_bus_ar_ready, bus_r_valid -> regs_bus_r_valid, bus_r_data -> regs_bus_r_data, bus_r_ready = regs_bus_r_ready, ctrl -> regs_ctrl, status = regs_status, count -> regs_count, fifo_valid -> regs_fifo_valid, fifo_data -> regs_fifo_data, fifo_ready = regs_fifo_ready)
+  inst engine: Engine (clk = clk, rst = rst, enable = engine_enable, mode = engine_mode, in_valid = engine_in_valid, in_data = engine_in_data, in_ready -> engine_in_ready, busy -> engine_busy, err -> engine_err)
+end
+regmap Ctrl
+  0x0 ctrl: rw 8 enable@[0+:1] mode@[1+:2]
+  0x4 status: ro 8 busy@[0+:1] err@[1+:1]
+  0x8 count: rw 32
+  0x10 fifo: wo 8 stream
