@@ -41,7 +41,7 @@ typedef struct TestRunOptions {
     uint64_t seed;            /* this test's seed (testrun_test_seed) */
     const char *waves_path;   /* record a VCD of the (first) simulated design here, or NULL */
     int cover;                /* collect coverage into the TestCov */
-    uint64_t step_limit;      /* interpreter step limit (0: 10^8) */
+    uint64_t step_limit;      /* interpreter step limit (0: 5*10^7) */
 } TestRunOptions;
 
 /* Coverage merged over designs, tests and worker processes. Points are

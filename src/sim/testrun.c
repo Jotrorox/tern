@@ -1354,7 +1354,7 @@ static void tr_ctx_init(TrCtx *c, Driver *dr, const TestRunOptions *o, TestCov *
     c->el = driver_elab_new(dr, NULL);
     elab_set_step_limit(c->el, o->step_limit ? o->step_limit : dr->opt.const_eval_limit
                                                                 ? dr->opt.const_eval_limit
-                                                                : UINT64_C(100000000));
+                                                                : UINT64_C(50000000));
     c->el->hooks.user = c;
     c->el->hooks.sim = tr_hook_sim;
     c->el->hooks.call = tr_hook_call;
@@ -1635,7 +1635,7 @@ void testcov_report(TestCov *c, StrBuf *out)
     TestCovPoint *pts = c->pts.data;
     int any_cover = 0;
     if (!n) {
-        sb_puts(out, "coverage: no design was simulated\n");
+        sb_puts(out, "coverage: no statements, branches or cover properties of these files were simulated\n");
         return;
     }
     qsort(pts, n, sizeof *pts, tr_cov_cmp);

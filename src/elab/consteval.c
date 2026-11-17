@@ -5372,11 +5372,26 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
     }
     case STMT_ASSIGN: {
         Place *p;
+        Place whole;
         Value v;
         Ty *hint = NULL;
+        Expr *lhs = s->u.assign.lhs;
+        Binding *lb = NULL;
         if (s->u.assign.constraint)
             el_error(el, s->u.assign.constraint->span, "`where` on an assignment is only allowed in tests");
-        p = el_place_of(el, s->u.assign.lhs, env);
+        if (lhs->kind == EXPR_PATH && lhs->u.path.nsegs == 1 && lhs->u.path.segs[0].name.name &&
+            !lhs->u.path.segs[0].has_args)
+            lb = elab_env_find(env, lhs->u.path.segs[0].name.name);
+        if (lb && !lb->lazy && lb->is_mut && lb->val.kind != VAL_OPAQUE) {
+            /* `x = e` on a whole mutable local: no arena Place (hot in test loops) */
+            memset(&whole, 0, sizeof whole);
+            whole.kind = PL_LOCAL;
+            whole.bind = lb;
+            whole.ty = lb->val.ty;
+            p = &whole;
+        } else {
+            p = el_place_of(el, lhs, env);
+        }
         if (!p) {
             elab_eval(el, s->u.assign.rhs, env, NULL);
             return;

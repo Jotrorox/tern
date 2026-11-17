@@ -56,7 +56,7 @@ static const MainCmd main_cmds[] = {
      "  --cover             report line, branch (if / match arm) and cover property coverage\n"
      "  -j <n>              number of parallel worker processes (default: CPU count)\n"
      "  --list              list the tests instead of running them\n"
-     "  --const-eval-limit <n>  interpreter step limit per test (default 10^8)\n"},
+     "  --const-eval-limit <n>  interpreter step limit per test (default 5*10^7)\n"},
     {"sim", cmd_sim, "Verification", "<top> [--vcd <file>] [<script>] [<paths>]",
      "interactive stimulus REPL or a stimulus script against a top",
      "  <top>               module to simulate, e.g. Top or 'Fifo<u8, 4>' (default: the #[top])\n"

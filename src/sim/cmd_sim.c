@@ -289,6 +289,7 @@ int cmd_sim(int argc, char **argv)
         rc = TERN_EXIT_FAIL;
         goto done;
     }
+    driver_sema(c.dr)->record_info = 0;   /* no hover/definition info needed */
     if (!top) {
         DriverItemVec v = {0};
         driver_tops(c.dr, &v);

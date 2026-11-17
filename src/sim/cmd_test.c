@@ -492,6 +492,7 @@ int cmd_test(int argc, char **argv)
         vec_free(t.filters);
         return TERN_EXIT_FAIL;
     }
+    driver_sema(dr)->record_info = 0;   /* no hover/definition info needed */
     driver_tests(dr, &all);
     if (t.worker) {
         rc = test_worker(&t, dr, &all);
@@ -540,7 +541,21 @@ int cmd_test(int argc, char **argv)
         test_print_ready(&t);
     }
     if (t.cover) {
+        /* report the user's files only (not std or dependencies they instantiate) */
         StrBuf sb = {0};
+        TestCov mine;
+        Map user = {0};
+        Sema *S = driver_sema(dr);
+        memset(&mine, 0, sizeof mine);
+        for (i = 0; i < S->files.len; i++)
+            if (S->files.data[i]->is_user)
+                map_put(&user, MAP_PTR(intern_cstr(S->files.data[i]->ast->path)), 1);
+        for (i = 0; i < t.cov.pts.len; i++)
+            if (map_has(&user, MAP_PTR(t.cov.pts.data[i].file)))
+                testcov_add(&mine, &t.cov.pts.data[i]);
+        map_free(&user);
+        testcov_free(&t.cov);
+        t.cov = mine;
         putchar('\n');
         testcov_report(&t.cov, &sb);
         fputs(sb_cstr(&sb), stdout);
