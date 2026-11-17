@@ -175,7 +175,8 @@ code.
 ```sh
 tern add axi                  # newest release, recorded as axi = "1.2.3"
 tern add axi@1.2 dma@~0.4     # explicit requirements
-tern add https://github.com/acme/tern-uart --tag v2.0.1
+tern add https://github.com/acme/tern-uart           # newest tag, recorded as version = "^X.Y.Z"
+tern add https://github.com/acme/tern-uart --tag v2.0.1   # pinned: update never moves it
 tern add --path ../vendor-ip
 tern update                   # newer compatible versions
 tern vendor                   # copy everything into vendor/ for offline builds
