@@ -168,6 +168,46 @@ static void drv_load_std(Driver *dr, Map *user_std)
     dr->std_source = intern_cstr("embedded");
 }
 
+/* single-file mode: `--features a,-b` defines the features (cfg::a is
+ * true, cfg::b false); later lists update them */
+static void drv_loose_features(Driver *dr, const char *list)
+{
+    Sema *S = dr->S;
+    const char *p = list;
+    while (p && *p) {
+        const char *e = p;
+        size_t n, i;
+        int on = 1;
+        const char *name;
+        while (*e && *e != ',' && *e != ' ')
+            e++;
+        n = (size_t)(e - p);
+        if (n && (*p == '-' || *p == '!')) {
+            on = 0;
+            p++;
+            n--;
+        } else if (n > 3 && strncmp(p, "no-", 3) == 0) {
+            on = 0;
+            p += 3;
+            n -= 3;
+        }
+        if (n) {
+            name = intern(p, n);
+            for (i = 0; i < S->nfeatures; i++)
+                if (S->feature_names[i] == name || strcmp(S->feature_names[i], name) == 0)
+                    break;
+            if (i == S->nfeatures) {
+                S->feature_names = (const char **)xrealloc((void *)S->feature_names, (i + 1) * sizeof(char *));
+                S->feature_values = (int *)xrealloc(S->feature_values, (i + 1) * sizeof(int));
+                S->feature_names[i] = name;
+                S->nfeatures = i + 1;
+            }
+            S->feature_values[i] = on;
+        }
+        p = *e ? e + 1 : e;
+    }
+}
+
 static int drv_path_in(const DrvPaths *p, const char *path)
 {
     size_t i;
@@ -245,8 +285,8 @@ Driver *driver_open(const DriverOptions *opt)
             dr->S->feature_names[i] = dr->prj.manifest.features[i].name;
             dr->S->feature_values[i] = dr->prj.manifest.features[i].enabled;
         }
-    } else if (r < 0) {
-        /* manifest errors were reported; continue in single-file mode */
+    } else if (opt->features) {
+        drv_loose_features(dr, opt->features);
     }
     if (r < 0)
         diag_flush(); /* the manifest errors first */
@@ -459,8 +499,8 @@ int driver_apply_features(Driver *dr, const char *list)
     if (!list || !*list)
         return 0;
     if (!dr->has_project) {
-        diag_error(span_none(), "features `%s` given, but there is no tern.toml declaring [features]", list);
-        return -1;
+        drv_loose_features(dr, list);
+        return 0;
     }
     if (pkg_features_apply(&dr->prj.manifest, list) != 0)
         return -1;

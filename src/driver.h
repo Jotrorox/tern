@@ -14,7 +14,8 @@
  *   - project mode (a tern.toml at or above the current directory): sources
  *     are src/ (plus tests/ with include_tests), dependencies' src/ roots
  *     are library sources, [features] become cfg::name;
- *   - single-file mode (no tern.toml): the files/directories given.
+ *   - single-file mode (no tern.toml): the files/directories given;
+ *     `--features a,-b` defines cfg::a (true) and cfg::b (false).
  *   Explicit paths always win: they are the "user" files that are checked and
  *   whose roots are elaborated; the rest of the project is library code.
  *
@@ -98,7 +99,7 @@ size_t driver_targets(Driver *dr, const TernTarget **out);
 /* Applies a feature list "a,-b" on top of the current cfg values (`tern
  * build` applies the target's features, then --features; elaboration reads
  * them, so call this before elaborating). 0, or -1 after a diagnostic
- * (unknown feature, or no tern.toml). */
+ * (unknown feature). Without a tern.toml the list defines the features. */
 int driver_apply_features(Driver *dr, const char *list);
 
 /* Evaluates every top-level `const` and file-level static_assert of the

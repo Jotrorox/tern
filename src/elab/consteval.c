@@ -1365,7 +1365,8 @@ static Value ce_eval_path(Elab *el, Path *p, Env *env, Ty *expect, int type_ctx)
         if (!sema_feature(el->S, f, &on)) {
             el_error(el, p->segs[1].name.span, "unknown feature `cfg::%s`", f);
             el_help(el, "%s", el->S->has_manifest ? "declare it under [features] in tern.toml"
-                                                  : "features come from [features] in tern.toml");
+                                                  : "features come from [features] in tern.toml, or "
+                                                    "`--features name` for files outside a project");
             return val_error();
         }
         return el_mk_bool(el, on);
