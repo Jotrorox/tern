@@ -1,0 +1,117 @@
+// Spec §6.5: a reset-less register read before any write is a warning.
+
+enum State { Idle, Run, Done }
+
+module Flagged {
+    in clk: clock
+    in rst: reset
+    in d: u8
+    in go: bool
+    out sum: u8
+    out busy: bool
+    out cnt: u8
+    out rnd: u8
+    out tick: bool
+
+    // (a) accumulator: its next value is computed from its current one
+    reg acc: u8
+    on clk { acc = acc +% d }
+    sum = acc
+
+    // (b) reset-less FSM state
+    reg state: State
+    on clk {
+        match state {
+            .Idle => if go { state = .Run },
+            .Run => state = .Done,
+            .Done => state = .Idle,
+        }
+    }
+    busy = state != .Idle
+
+    // (a) through a wire
+    reg count: u8
+    let next = count +% 1
+    on clk { if go { count = next } }
+    cnt = count
+
+    // (a) an LFSR
+    reg lfsr: u8
+    on clk { lfsr = lfsr[6:0] ++ (lfsr[7] ^ lfsr[5]) }
+    rnd = lfsr
+
+    // (b) the only load depends on the register itself
+    reg div: uint<4>
+    on clk {
+        if div == 9 { div = 0 } else if go { div = 3 }
+    }
+    tick = div == 0
+
+    // (b) through a wire
+    reg toggle: bool
+    let swap = toggle and go
+    on clk {
+        if swap { toggle = false } else { toggle = true }
+    }
+}
+
+module Clean {
+    in clk: clock
+    in rst: reset
+    in d: u8
+    in valid: bool
+    in start: bool
+    in rx: bool
+    in addr: uint<4>
+    out q: u8
+    out ok: bool
+    out byte: u8
+    out rdata: u8
+    out hit: bool
+    out sel: bool
+
+    // a data register qualified by a valid bit with a reset
+    reg data: u8
+    reg v: bool = false
+    on clk {
+        v = valid
+        if valid { data = d }
+    }
+    q = data
+    ok = v and data == 3
+
+    // a shift register that keeps shifting data in
+    reg sr: u8
+    on clk { sr = rx ++ sr[7:1] }
+    byte = sr
+
+    // loaded on start, then iterated
+    reg rem: u8
+    reg busy: bool = false
+    on clk {
+        if start {
+            rem = d
+            busy = true
+        } else if busy {
+            rem = rem >> 1
+            if rem == 1 { busy = false }
+        }
+    }
+    hit = busy
+
+    // a synchronous memory read
+    mem m: [u8; 16]
+    on clk {
+        if valid { m.write(addr, d) }
+    }
+    rdata = m.read(addr)
+
+    // written on every edge, then used as control
+    reg pin_q: bool
+    on clk { pin_q = rx }
+    sel = if pin_q { valid } else { start }
+
+    // a reset value
+    reg n: u8 = 0
+    on clk { n = n +% 1 }
+}

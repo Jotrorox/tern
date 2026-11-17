@@ -11,6 +11,8 @@
  *              combinational loops                   (chk_assign, chk_loops)
  *   cdc.c      clock-domain crossings + CDC report   (chk_cdc, chk_crossings)
  *   unused.c   unused signals (--unused)             (chk_unused)
+ *   poweron.c  reset-less registers read before a
+ *              write (§6.5)                          (chk_poweron)
  *
  * Node kinds:
  *   CHK_N_ASSIGN   one continuous assignment (IrAssign)
@@ -160,6 +162,7 @@ void chk_loops(ChkMod *cm);
 void chk_summary(ChkMod *cm);              /* records the module's port summary (check.c) */
 void chk_cdc(ChkMod *cm);
 void chk_unused(ChkMod *cm);
+void chk_poweron(ChkMod *cm);             /* poweron.c: reset-less registers read before a write */
 void chk_unused_report(ChkCtx *cx);        /* after all modules */
 void chk_crossings(ChkCtx *cx);            /* fills d->crossings, prints the report */
 

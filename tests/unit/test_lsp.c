@@ -45,6 +45,7 @@
 #include "../../src/check/assign.c"
 #include "../../src/check/cdc.c"
 #include "../../src/check/unused.c"
+#include "../../src/check/poweron.c"
 #include "../../src/pkg/toml.c"
 #include "../../src/pkg/manifest.c"
 #include "../../src/pkg/lock.c"

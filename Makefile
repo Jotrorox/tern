@@ -192,13 +192,15 @@ CHECK_SRCS = \
 	src/check/drivers.c \
 	src/check/assign.c \
 	src/check/cdc.c \
-	src/check/unused.c
+	src/check/unused.c \
+	src/check/poweron.c
 CHECK_OBJS = \
 	$(OBJ)/check_check.o \
 	$(OBJ)/check_drivers.o \
 	$(OBJ)/check_assign.o \
 	$(OBJ)/check_cdc.o \
-	$(OBJ)/check_unused.o
+	$(OBJ)/check_unused.o \
+	$(OBJ)/check_poweron.o
 $(OBJ)/check_check.o: src/check/check.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/check/check.c -o $@
 $(OBJ)/check_drivers.o: src/check/drivers.c $(HDRS) $(OBJ)/.dir
@@ -209,6 +211,8 @@ $(OBJ)/check_cdc.o: src/check/cdc.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/check/cdc.c -o $@
 $(OBJ)/check_unused.o: src/check/unused.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/check/unused.c -o $@
+$(OBJ)/check_poweron.o: src/check/poweron.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/check/poweron.c -o $@
 
 # --- emit/
 EMIT_SRCS = \

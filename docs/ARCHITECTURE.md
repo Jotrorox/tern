@@ -48,7 +48,7 @@ spaces — the real syntax is ASCII).
 | `src/sema/` | `resolve.c types.c info.c syninfo.c` (+ `sema.h`) | name binding, type/width rules, semantic info for tooling |
 | `src/elab/` | `value.[ch] consteval.c elab.c mono.c regfile.c` (+ `elab.h`) | const interpreter, generics, unrolling, AST→IR, generated RegisterFile bodies |
 | `src/ir/` | `ir.h ir_build.c ir_json.c` | typed IR (contract below) and JSON form |
-| `src/check/` | `check.c` | multiple/missing drivers, no-latch proof, clock-domain mixing |
+| `src/check/` | `check.c drivers.c assign.c cdc.c unused.c poweron.c` | multiple/missing drivers, no-latch proof, clock-domain mixing |
 | `src/emit/` | `sv.c constraints.c regmap.c` | SystemVerilog/Verilog-2005, .xdc/.sdc, regmap .h/.svd/.md |
 | `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
 | `src/backend/` | `target.c build.c verilator.c vcdread.c formal.c prove.c synth.c cmd_synth.c` (+ `backend.h`) | `tern build`, `tern prove`, `tern synth`: targets, emitted-file output, SymbiYosys / Yosys / Vivado / Quartus scripts and result parsers |
@@ -355,6 +355,19 @@ constraint files' CDC report comment) and returns the error count.
   elaborated only as default roots are skipped; `_`-prefixed names,
   #[test_port], #[keep] and non-user files (`CheckOptions.is_user_file`) are
   exempt.
+
+* `poweron.c` (§6.5, "a reset-less reg read before any write"): works on
+  the IR directly, bit-accurately through wires and comb variables. A
+  register without a reset value is fine when it has a *load* (an
+  assignment whose value and enclosing conditions do not depend on the
+  register itself: data registers under a valid bit, datapaths loaded on
+  `start`). Without one it warns when (a) its next value is computed from
+  its current value (`acc = acc +% d`, counters, LFSRs; routing its own bits
+  as in a shift register does not count) or (b) it steers an `if`/`match`
+  condition, an if-expression select, a memory address or a dynamic index
+  (a reset-less FSM state) unless it is assigned unconditionally every
+  edge. Sync-memory-read registers, #[test_port] and non-user files are
+  exempt. std and the examples check clean.
 
 Diagnostics go through `chk_error`/`chk_warning`, which drop duplicates (the
 same message at the same span from monomorphized copies of a module).

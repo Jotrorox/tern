@@ -869,6 +869,7 @@ int check_design(IrDesign *d, const CheckOptions *opt)
         chk_loops(&cm);
         chk_summary(&cm);
         chk_cdc(&cm);
+        chk_poweron(&cm);
         if (cx.opt->unused)
             chk_unused(&cm);
         diag_pop_path();
