@@ -253,7 +253,8 @@ static int tc_compare_cov(const char *name, SimModel *a, SimModel *b)
     size_t na = sim_coverage(a, &pa), nb, i;
     SimCovPoint *copy = (SimCovPoint *)xcalloc(na + 1, sizeof(SimCovPoint));
     int ok = 1;
-    memcpy(copy, pa, sizeof(SimCovPoint) * na);
+    if (na)
+        memcpy(copy, pa, sizeof(SimCovPoint) * na);
     nb = sim_coverage(b, &pb);
     if (na != nb) {
         fprintf(stderr, "test_simc: %s: %u coverage points interpreted, %u compiled\n", name, (unsigned)na,
