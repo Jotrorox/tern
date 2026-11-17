@@ -655,8 +655,8 @@ code that was never elaborated.
 `build/test_simc` (`tests/unit/test_simc.c`, skipped without a host C
 compiler, and on Windows when `cl` cannot build a model) checks the
 compiled simulator: it re-runs every check of `test_sim.c` with
-`SIM_ENGINE_COMPILED`, runs every module of `tests/fixtures/**` that
-`tern ir --json --top <M>` elaborates on the interpreter and on its
+`SIM_ENGINE_COMPILED`, runs every module of `tests/fixtures/**` and `std/`
+that `tern ir --json --top <M>` elaborates on the interpreter and on its
 compiled model side by side (random pokes, test_port releases, steps of
 random domains, `run_ns`, resets; every signal, memory word, failure
 count, pending obligation and coverage count compared after every step),

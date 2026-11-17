@@ -7,9 +7,10 @@
  *   1. every check of test_sim.c again, with sim_new compiling each model
  *      (SIM_ENGINE_COMPILED): all instruction kinds against their expected
  *      values, wide arithmetic against a bignum reference;
- *   2. a differential test: every module of tests/fixtures/ that
- *      `tern ir --json --top <M>` elaborates is simulated by the interpreter
- *      and by the compiled model side by side on the same random stimulus
+ *   2. a differential test: every module of tests/fixtures/ and std/ that
+ *      `tern ir --json --top <M>` elaborates (std: generics with defaults) is
+ *      simulated by the interpreter and by the compiled model side by side
+ *      on the same random stimulus
  *      (pokes, #[test_port] releases, steps of random domains, run_ns,
  *      resets) and every signal, memory word, failure count and coverage
  *      count is compared after every step;
@@ -369,6 +370,7 @@ static void test_differential(void)
     size_t i, nb = (size_t)os_cpu_count() * 2, designs = 0, compiled = 0;
     uint64_t t0 = os_time_ns();
     tc_walk("tests/fixtures", &items);
+    tc_walk("std", &items); /* modules whose generics all have defaults */
     tc_elaborate_all(&items);
     if (nb > 32)
         nb = 32;
@@ -420,7 +422,7 @@ static void test_differential(void)
             tc_pair_free(p);
         }
     }
-    printf("simc differential: %u fixture designs (of %u modules), %u compiled and identical to the interpreter "
+    printf("simc differential: %u fixture and std designs (of %u modules), %u compiled and identical to the interpreter "
            "(%.1f s)\n",
            (unsigned)designs, (unsigned)items.len, (unsigned)compiled, (double)(os_time_ns() - t0) / 1e9);
     TS_CHECK(designs > 50);
