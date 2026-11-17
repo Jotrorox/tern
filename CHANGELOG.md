@@ -6,6 +6,8 @@ contain breaking changes.
 
 ## 0.1.0 (unreleased)
 
+Release candidate `v0.1.0-rc1` was tagged on 2026-11-17.
+
 The first release of the reference implementation. It implements the language
 of spec version 0.1 (`docs/tern-spec.pdf`) and every command of spec §13.2.
 

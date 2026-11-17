@@ -1,4 +1,4 @@
-$version tern 0.1.0 $end
+$version tern 0.1.0-rc1 $end
 $timescale 1ps $end
 $scope module Blink $end
 $var wire 1 ! clk $end

@@ -16,7 +16,7 @@
 #include <string.h>
 #include <limits.h>
 
-#define TERN_VERSION "0.1.0"
+#define TERN_VERSION "0.1.0-rc1"
 
 /* TERN_STATIC_ASSERT(cond, name): file- or block-scope compile-time check.
  * `name` must be a valid identifier fragment, unique in its scope. */
