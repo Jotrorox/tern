@@ -1,6 +1,8 @@
 #!/bin/sh
-# lint_emitted.sh — check the golden emitted HDL in tests/fixtures/emit/ with
-# external tools (run by CI; see docs/emitted-sv.md):
+# lint_emitted.sh — check the golden emitted HDL in tests/fixtures/emit/ and
+# the parameterized-module goldens tests/fixtures/build/param_*.sv (split
+# into build/lint_emitted/) with external tools (run by CI; see
+# docs/emitted-sv.md):
 #
 #   * every file set:            verilator --lint-only -Wall
 #   * Verilog-2005 file sets:    yosys read_verilog -sv; synth -auto-top
@@ -12,6 +14,16 @@ set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 if [ $# -eq 0 ]; then
     set -- "$root"/tests/fixtures/emit/*/
+    # `tern build --stdout` concatenations: one directory per golden
+    for g in "$root"/tests/fixtures/build/param_*.sv; do
+        [ -f "$g" ] || continue
+        d="$root/build/lint_emitted/$(basename "$g" .sv)"
+        mkdir -p "$d"
+        rm -f "$d"/*.sv "$d"/*.v
+        awk -v dir="$d" '/^\/\/ ---- file: .* ----$/ { f = $4; next }
+            f ~ /\.(sv|v)$/ { print > (dir "/" f) }' "$g"
+        set -- "$@" "$d"
+    done
 fi
 
 # Style-only warnings are waived; widths are checked exactly by test_emit

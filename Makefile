@@ -47,7 +47,7 @@ HDRS = \
 	src/os/os.h \
 	src/syntax/token.h src/syntax/lexer.h src/syntax/ast.h src/syntax/parser.h \
 	src/ir/ir.h \
-	src/emit/emit.h \
+	src/emit/emit.h src/emit/svparam.h \
 	src/sim/sim.h src/sim/sim_impl.h src/sim/testrun.h \
 	src/pkg/pkg.h \
 	src/lsp/lsp.h src/lsp/lsp_impl.h \
@@ -217,16 +217,20 @@ $(OBJ)/check_poweron.o: src/check/poweron.c $(HDRS) $(OBJ)/.dir
 # --- emit/
 EMIT_SRCS = \
 	src/emit/sv.c \
+	src/emit/svparam.c \
 	src/emit/constraints.c \
 	src/emit/regmap.c \
 	src/emit/cmd_emit.c
 EMIT_OBJS = \
 	$(OBJ)/emit_sv.o \
+	$(OBJ)/emit_svparam.o \
 	$(OBJ)/emit_constraints.o \
 	$(OBJ)/emit_regmap.o \
 	$(OBJ)/emit_cmd_emit.o
 $(OBJ)/emit_sv.o: src/emit/sv.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/emit/sv.c -o $@
+$(OBJ)/emit_svparam.o: src/emit/svparam.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/emit/svparam.c -o $@
 $(OBJ)/emit_constraints.o: src/emit/constraints.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/emit/constraints.c -o $@
 $(OBJ)/emit_regmap.o: src/emit/regmap.c $(HDRS) $(OBJ)/.dir
@@ -240,6 +244,7 @@ SIM_SRCS = \
 	src/sim/netlist.c \
 	src/sim/eval.c \
 	src/sim/vcd.c \
+	src/sim/remote.c \
 	src/sim/testrun.c \
 	src/sim/cmd_test.c \
 	src/sim/cmd_sim.c
@@ -248,6 +253,7 @@ SIM_OBJS = \
 	$(OBJ)/sim_netlist.o \
 	$(OBJ)/sim_eval.o \
 	$(OBJ)/sim_vcd.o \
+	$(OBJ)/sim_remote.o \
 	$(OBJ)/sim_testrun.o \
 	$(OBJ)/sim_cmd_test.o \
 	$(OBJ)/sim_cmd_sim.o
@@ -259,6 +265,8 @@ $(OBJ)/sim_eval.o: src/sim/eval.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/eval.c -o $@
 $(OBJ)/sim_vcd.o: src/sim/vcd.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/vcd.c -o $@
+$(OBJ)/sim_remote.o: src/sim/remote.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/remote.c -o $@
 $(OBJ)/sim_testrun.o: src/sim/testrun.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/testrun.c -o $@
 $(OBJ)/sim_cmd_test.o: src/sim/cmd_test.c $(HDRS) $(OBJ)/.dir
@@ -270,6 +278,9 @@ $(OBJ)/sim_cmd_sim.o: src/sim/cmd_sim.c $(HDRS) $(OBJ)/.dir
 BACKEND_SRCS = \
 	src/backend/target.c \
 	src/backend/build.c \
+	src/backend/params.c \
+	src/backend/vlsim.c \
+	src/backend/vlharness.c \
 	src/backend/verilator.c \
 	src/backend/vcdread.c \
 	src/backend/formal.c \
@@ -279,6 +290,9 @@ BACKEND_SRCS = \
 BACKEND_OBJS = \
 	$(OBJ)/backend_target.o \
 	$(OBJ)/backend_build.o \
+	$(OBJ)/backend_params.o \
+	$(OBJ)/backend_vlsim.o \
+	$(OBJ)/backend_vlharness.o \
 	$(OBJ)/backend_verilator.o \
 	$(OBJ)/backend_vcdread.o \
 	$(OBJ)/backend_formal.o \
@@ -289,6 +303,12 @@ $(OBJ)/backend_target.o: src/backend/target.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/target.c -o $@
 $(OBJ)/backend_build.o: src/backend/build.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/build.c -o $@
+$(OBJ)/backend_params.o: src/backend/params.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/params.c -o $@
+$(OBJ)/backend_vlsim.o: src/backend/vlsim.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/vlsim.c -o $@
+$(OBJ)/backend_vlharness.o: src/backend/vlharness.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/vlharness.c -o $@
 $(OBJ)/backend_verilator.o: src/backend/verilator.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/verilator.c -o $@
 $(OBJ)/backend_vcdread.o: src/backend/vcdread.c $(HDRS) $(OBJ)/.dir
@@ -495,12 +515,22 @@ test: $(BIN) tests/run build/doc_snippets $(UNIT_TESTS)
 	./$(BIN) fmt --check std
 	./tests/run --tern ./$(BIN)
 	$(MAKE) examples
+	$(MAKE) test-verilator
 	./build/doc_snippets --tern ./$(BIN)
 
 # The example projects (about a second): tern check, test, build (SV and
 # Verilog-2005) and fmt --check in each; with iverilog on PATH, also their
 # sim/tb_*.sv benches against the emitted RTL. Output only on failure.
 EXAMPLES = uart_loopback sensor_bridge smoother
+# `tern test --backend verilator` on tests/fixtures/verilator (an extern
+# SystemVerilog module), and without --backend (extern designs pick
+# Verilator); skipped when verilator is not installed
+test-verilator: $(BIN)
+	@if command -v verilator >/dev/null 2>&1; then \
+	  cd tests/fixtures/verilator && ../../../$(BIN) test --backend verilator && \
+	  ../../../$(BIN) test; \
+	else echo "test-verilator: verilator not installed, skipped"; fi
+
 examples: $(BIN)
 	@for e in $(EXAMPLES); do \
 	  d=examples/$$e; t=../../$(BIN); \
@@ -563,4 +593,4 @@ clean:
 	rm -rf build tests/out
 	rm -f tern tern.exe tools/embed tools/embed.exe tests/run tests/run.exe
 
-.PHONY: all test test-std test-docs examples unity check-warnings fuzz install clean FORCE
+.PHONY: all test test-std test-verilator test-docs examples unity check-warnings fuzz install clean FORCE

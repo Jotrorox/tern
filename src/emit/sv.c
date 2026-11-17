@@ -16,6 +16,7 @@
  * it unsigned (IEEE 1800-2017 11.8.2).
  */
 #include "emit.h"
+#include "svparam.h"
 #include "../base/arena.h"
 #include "../base/str.h"
 #include "../base/vec.h"
@@ -247,6 +248,7 @@ struct SvNames {
     Map tagty;       /* payload enum IrType* -> synthetic tag enum IrType* */
     Map varname;     /* IrVariant* -> enum constant name */
     Map fieldname;   /* IrField* -> field name */
+    Map grpname;     /* SvPGroup* -> module name (parameterized modules, one per group) */
     const char *pkg;
 };
 
@@ -311,10 +313,13 @@ SvNames *sv_names_new(const IrDesign *d)
     n->d = d;
     for (i = 0; i < d->ntypes; i++)
         svn_register_type(n, d->types[i]);
-    /* modules: externs keep their names; everything else is made legal and unique */
+    /* modules: externs keep their declared names (an extern module with
+     * generics is one SV module, parameterized with #(...)); everything
+     * else is made legal and unique */
     for (i = 0; i < d->nmodules; i++)
         if (d->modules[i]->is_extern)
-            map_put(&n->modused, MAP_PTR(intern_cstr(d->modules[i]->name)), 1);
+            map_put(&n->modused,
+                    MAP_PTR(intern_cstr(d->modules[i]->tern_name ? d->modules[i]->tern_name : d->modules[i]->name)), 1);
     sb_printf(&b, "%s_types_pkg", d->top ? d->top->name : "tern");
     n->pkg = svn_claim(&n->modused, svn_sanitize(sb_cstr(&b)));
     sb_free(&b);
@@ -345,6 +350,7 @@ void sv_names_free(SvNames *n)
     map_free(&n->tagty);
     map_free(&n->varname);
     map_free(&n->fieldname);
+    map_free(&n->grpname);
     arena_release(&n->arena);
     free(n);
 }
@@ -367,14 +373,27 @@ static SvModNames *svn_mod(SvNames *n, const IrModule *m)
     map_put(&n->modidx, MAP_PTR(m), MAP_PTR(mn));
     vec_push(n->mods, mn);
     if (m->is_extern) {
-        mn->name = intern_cstr(m->name);
+        mn->name = intern_cstr(m->tern_name ? m->tern_name : m->name);
         for (i = 0; i < m->nsigs; i++)
             mn->sig[i] = intern_cstr(m->sigs[i].name);
         for (i = 0; i < m->nparams; i++)
             mn->param[i] = intern_cstr(m->params[i].name);
         return mn;
     }
-    mn->name = svn_claim(&n->modused, svn_sanitize(m->name));
+    {
+        /* the members of a parameterized group share one module name */
+        uint64_t pv;
+        const SvPGroup *grp = NULL;
+        if (n->d->sv_params && map_get(&n->d->sv_params->views, MAP_PTR(m), &pv))
+            grp = ((const SvPView *)(uintptr_t)pv)->g;
+        if (grp && map_get(&n->grpname, MAP_PTR(grp), &pv)) {
+            mn->name = (const char *)(uintptr_t)pv;
+        } else {
+            mn->name = svn_claim(&n->modused, svn_sanitize(grp ? grp->name : m->name));
+            if (grp)
+                map_put(&n->grpname, MAP_PTR(grp), MAP_PTR(mn->name));
+        }
+    }
     while (map_next(&n->global, &it, &k, &v))
         map_put(&mn->used, k, 1);
     for (i = 0; i < m->nports; i++)
@@ -489,7 +508,20 @@ typedef struct SvCtx {
     int v2005;
     int errors;
     const char *pkg;
+    /* parameterized modules: the plan (views of the members of accepted
+     * groups); while a plan is being made, `validating` emits into `text`
+     * without diagnostics and names group modules by SvPGroup.name */
+    const struct SvParamPlan *plan;
+    int validating;
+    StrBuf *text;
 } SvCtx;
+
+typedef struct SvPConst {     /* Verilog-2005: localparam holding a parameter-dependent constant */
+    const char *name;
+    const SvXExpr *wx, *vx;   /* width / value expression (NULL: the number) */
+    uint32_t w;
+    uint64_t v;
+} SvPConst;
 
 typedef struct SvTemp {
     const char *name;
@@ -518,6 +550,13 @@ typedef struct SvGen {
     unsigned char *drv;
     unsigned char *memw;
     int uses_pkg;
+    /* parameterized emission (NULL / empty otherwise) */
+    const SvPView *pv;
+    const SvXExpr *kwidth;    /* width of the constant printed next (reset values) */
+    const SvXExpr *sel_w;     /* width / low bit of the slice printed next (sv_slice_of) */
+    const SvXExpr *sel_lo;
+    VEC(SvPConst) pconsts;
+    Arena *xa;                /* scratch SvXExpr nodes */
 } SvGen;
 
 typedef struct SvEx {
@@ -530,7 +569,8 @@ static SvEx sv_ex(SvGen *g, const IrExpr *e, int self, StrBuf *out);
 
 static void sv_error(SvGen *g, Span loc, const char *msg)
 {
-    diag_error(loc, "SystemVerilog emitter: %s (module %s)", msg, g->m->name);
+    if (!g->c->validating)
+        diag_error(loc, "SystemVerilog emitter: %s (module %s)", msg, g->m->name);
     g->c->errors++;
 }
 
@@ -620,6 +660,127 @@ static void sv_str_lit(const char *s, StrBuf *out, int fmt)
             sb_putc(out, ch);
     }
     sb_putc(out, '"');
+}
+
+/* ----------------------------------------------- parameterized modules -- */
+
+static const SvXExpr *svp_get(const SvGen *g, const void *p, int tag)
+{
+    uint64_t v;
+    if (!g->pv || !p || !map_get(&g->pv->slots, SVP_KEY(p, tag), &v))
+        return NULL;
+    return (const SvXExpr *)(uintptr_t)v;
+}
+
+static const char *const *svp_pn(const SvGen *g) { return g->pv->g->pnames; }
+
+static const SvXExpr *svp_k(SvGen *g, int64_t k)
+{
+    SvXExpr *x = ANEW(g->xa, SvXExpr);
+    x->op = SVX_K;
+    x->k = k;
+    return x;
+}
+
+static const SvXExpr *svp_bin(SvGen *g, SvXOp op, const SvXExpr *a, const SvXExpr *b)
+{
+    SvXExpr *x = ANEW(g->xa, SvXExpr);
+    x->op = op;
+    x->a = (SvXExpr *)a;
+    x->b = (SvXExpr *)b;
+    return x;
+}
+
+/* "[W-1:0]" */
+static void svp_range(SvGen *g, const SvXExpr *w, StrBuf *out)
+{
+    sb_putc(out, '[');
+    svp_print_m1(w, svp_pn(g), out);
+    sb_puts(out, ":0]");
+}
+
+/* A constant of width w (wx: expression or NULL) and value b (vx:
+ * expression or NULL): SV-2012 `W'(V)`, Verilog-2005 a localparam. */
+static void svp_const(SvGen *g, const SvXExpr *wx, const SvXExpr *vx, uint32_t width, const IrBits *b,
+                      StrBuf *out)
+{
+    uint64_t v = b && b->width <= 64 ? ir_bits_low64(b) : 0;
+    if (!g->c->v2005) {
+        svp_print_castw(wx ? wx : svp_k(g, width), svp_pn(g), out);
+        sb_puts(out, "'(");
+        if (vx)
+            svp_print(vx, svp_pn(g), SVX_PREC_COND, out);
+        else if (!b || (b->width <= 64 && v < 0x80000000u))
+            sb_printf(out, "%llu", (unsigned long long)v);
+        else
+            sv_lit(b, out);
+        sb_putc(out, ')');
+        return;
+    }
+    {
+        size_t i;
+        SvPConst pc;
+        for (i = 0; i < g->pconsts.len; i++) {
+            const SvPConst *q = &g->pconsts.data[i];
+            if (q->wx == wx && q->vx == vx && (wx || q->w == width) && (vx || q->v == v)) {
+                sb_puts(out, q->name);
+                return;
+            }
+        }
+        memset(&pc, 0, sizeof pc);
+        {
+            char buf[32];
+            uint32_t n = (uint32_t)g->pconsts.len;
+            for (;;) {
+                snprintf(buf, sizeof buf, "pk_%u", n++);
+                if (!map_has(&g->mn->used, MAP_PTR(intern_cstr(buf))))
+                    break;
+            }
+            pc.name = svn_fresh(g->mn, buf);
+        }
+        pc.wx = wx;
+        pc.vx = vx;
+        pc.w = width;
+        pc.v = v;
+        vec_push(g->pconsts, pc);
+        sb_puts(out, pc.name);
+    }
+}
+
+/* the constant node e: a literal, or a parameter-dependent constant */
+static void sv_klit(SvGen *g, const IrExpr *e, StrBuf *out)
+{
+    const SvXExpr *wx = svp_get(g, e, SVK_EXPRW), *vx = svp_get(g, e->bits.w, SVK_CONST);
+    if (!wx)
+        wx = g->kwidth;
+    if (!wx && !vx) {
+        sv_lit(&e->bits, out);
+        return;
+    }
+    svp_const(g, wx, vx, e->width, &e->bits, out);
+}
+
+/* SV-2012: a zero constant of parameter-dependent width in a
+ * context-determined position (an operand sized by its context, or the
+ * value of an assignment) is the fill literal '0 */
+static int sv_kfill0(SvGen *g, const IrExpr *e, StrBuf *out)
+{
+    if (g->c->v2005 || e->kind != IRE_CONST || !ir_bits_is_zero(&e->bits) ||
+        svp_get(g, e->bits.w, SVK_CONST) || !(svp_get(g, e, SVK_EXPRW) || g->kwidth))
+        return 0;
+    sb_puts(out, "'0");
+    return 1;
+}
+
+/* zero of e's width */
+static void sv_zero_e(SvGen *g, const IrExpr *e, StrBuf *out)
+{
+    const SvXExpr *wx = svp_get(g, e, SVK_EXPRW);
+    if (!wx) {
+        sv_zero(e->width, out);
+        return;
+    }
+    svp_const(g, wx, NULL, e->width, NULL, out);
 }
 
 static int sv_expr_eq(const IrExpr *a, const IrExpr *b)
@@ -737,6 +898,30 @@ static void sv_decl_type(SvGen *g, const IrType *t, StrBuf *out)
         sb_printf(out, "[%u:0]", dims[i] - 1);
     if (!sv_typed(g, b) && b->width > 1)
         sb_printf(out, "[%u:0]", b->width - 1);
+}
+
+/* Declaration type of a signal: a scalar whose width is a parameter
+ * expression gets `logic [W-1:0]` (`[W-1:0]` in Verilog-2005). */
+static void sv_sig_type(SvGen *g, uint32_t sig, StrBuf *out)
+{
+    const IrType *t = g->m->sigs[sig].type;
+    const SvXExpr *wx = svp_get(g, &g->m->sigs[sig], SVK_SIGW);
+    if (!wx || t->kind == IRT_ARRAY || t->kind == IRT_STRUCT || t->kind == IRT_ENUM) {
+        sv_decl_type(g, t, out);
+        return;
+    }
+    if (!g->c->v2005)
+        sb_puts(out, t->kind == IRT_SINT ? "logic signed " : "logic ");
+    else if (t->kind == IRT_SINT)
+        sb_puts(out, "signed ");
+    svp_range(g, wx, out);
+}
+
+/* 1 if the declaration type of sig is non-empty in Verilog-2005 */
+static int sv_sig_has_range(SvGen *g, uint32_t sig)
+{
+    const IrType *t = g->m->sigs[sig].type;
+    return t->width > 1 || t->kind == IRT_SINT || svp_get(g, &g->m->sigs[sig], SVK_SIGW) != NULL;
 }
 
 /* collect the named types reachable from t into g->types */
@@ -947,6 +1132,9 @@ static SvSel sv_select(SvGen *g, const char *base, const IrType *t, uint32_t bw,
     SvSel r;
     StrBuf b = {0};
     uint32_t i;
+    /* parameter expressions for lo / w of a plain vector select (set by the caller) */
+    const SvXExpr *lox = g->sel_lo, *wx = g->sel_w;
+    g->sel_lo = g->sel_w = NULL;
     r.sgn = 0;
     r.ty = NULL;
     r.path = 1;
@@ -1014,6 +1202,21 @@ static SvSel sv_select(SvGen *g, const char *base, const IrType *t, uint32_t bw,
         }
     }
     r.path = 0;
+    if (lox || wx) {
+        sb_printf(out, "%s[", base);
+        if (!wx && w == 1) {
+            svp_print(lox, svp_pn(g), SVX_PREC_COND, out);
+        } else if (!lox && lo == 0) {
+            svp_print_m1(wx, svp_pn(g), out);
+            sb_puts(out, ":0");
+        } else {
+            svp_print(lox ? lox : svp_k(g, lo), svp_pn(g), SVX_PREC_COND, out);
+            sb_puts(out, " +: ");
+            svp_print(wx ? wx : svp_k(g, w), svp_pn(g), SVX_PREC_COND, out);
+        }
+        sb_putc(out, ']');
+        return r;
+    }
     if (w == 1)
         sb_printf(out, "%s[%u]", base, lo);
     else
@@ -1038,6 +1241,10 @@ static uint32_t sv_slice_base(const IrExpr *e, uint32_t *lo)
 static int sv_mem_guard(SvGen *g, const IrExpr *e)
 {
     uint32_t depth = g->m->sigs[e->sig].depth;
+    /* parameterized depth or address width: always guarded (the guard is
+     * true when the depth is a power of two) */
+    if (svp_get(g, &g->m->sigs[e->sig], SVK_DEPTH) || svp_get(g, e->args[0], SVK_EXPRW))
+        return 1;
     return sv_pow2_or_max(e->args[0]->width) > depth;
 }
 
@@ -1064,6 +1271,8 @@ static SvEx sv_slice_of(SvGen *g, const IrExpr *x, uint32_t lo, uint32_t w, int 
 {
     SvEx r;
     uint32_t base_lo, s;
+    const SvXExpr *wx = g->sel_w, *lox = g->sel_lo;
+    g->sel_w = g->sel_lo = NULL;
     r.prec = SVP_PRIM;
     r.sgn = 0;
     r.ty = NULL;
@@ -1077,11 +1286,19 @@ static SvEx sv_slice_of(SvGen *g, const IrExpr *x, uint32_t lo, uint32_t w, int 
         sv_lit(&b, out);
         return r;
     }
-    if (x->kind == IRE_SLICE)
+    if (x->kind == IRE_SLICE) {
+        const SvXExpr *xlo = svp_get(g, x, SVK_LO);
+        if (xlo || lox)
+            g->sel_lo = svp_bin(g, SVX_ADD, xlo ? xlo : svp_k(g, x->lo), lox ? lox : svp_k(g, lo));
+        g->sel_w = wx;
         return sv_slice_of(g, x->args[0], x->lo + lo, w, self, out);
+    }
     s = sv_slice_base(x, &base_lo);
     if (s != IR_NONE) {
-        SvSel sel = sv_select(g, g->mn->sig[s], sv_sigty(g, s), g->m->sigs[s].type->width,
+        SvSel sel;
+        g->sel_lo = lox;
+        g->sel_w = wx;
+        sel = sv_select(g, g->mn->sig[s], sv_sigty(g, s), g->m->sigs[s].type->width,
                               sv_sig_signed(g, s), base_lo + lo, w, out);
         r.sgn = sel.sgn;
         r.ty = sel.ty;
@@ -1136,28 +1353,42 @@ static SvEx sv_slice_of(SvGen *g, const IrExpr *x, uint32_t lo, uint32_t w, int 
     if (x->kind == IRE_MEMREAD && !sv_mem_guard(g, x)) {
         StrBuf b = {0};
         sv_ex(g, x, 1, &b);
+        g->sel_lo = lox;
+        g->sel_w = wx;
         sv_select(g, sb_cstr(&b), NULL, x->width, 0, lo, w, out);
         sb_free(&b);
         return r;
     }
     if (!g->c->v2005 && (lo == 0 || (g->written && sv_reads(x, g->written)))) {
         /* size cast: W'(x) / W'(x >> lo), exact without a temporary */
-        StrBuf t = {0};
+        StrBuf t = {0}, ws = {0}, ls = {0};
         SvEx xe = sv_ex(g, x, 1, &t);
-        if (lo == 0) {
-            sb_printf(out, "%u'(%s)", w, sb_cstr(&t));
+        if (wx)
+            svp_print_castw(wx, svp_pn(g), &ws);
+        else
+            sb_printf(&ws, "%u", w);
+        if (lox)
+            svp_print(lox, svp_pn(g), SVX_PREC_ADD, &ls);
+        else
+            sb_printf(&ls, "%u", lo);
+        if (lo == 0 && !lox) {
+            sb_printf(out, "%s'(%s)", sb_cstr(&ws), sb_cstr(&t));
             r.sgn = xe.sgn;
         } else {
             if (xe.prec < SVP_UNARY)
-                sb_printf(out, "%u'((%s) >> %u)", w, sb_cstr(&t), lo);
+                sb_printf(out, "%s'((%s) >> %s)", sb_cstr(&ws), sb_cstr(&t), sb_cstr(&ls));
             else
-                sb_printf(out, "%u'(%s >> %u)", w, sb_cstr(&t), lo);
+                sb_printf(out, "%s'(%s >> %s)", sb_cstr(&ws), sb_cstr(&t), sb_cstr(&ls));
         }
         sb_free(&t);
+        sb_free(&ws);
+        sb_free(&ls);
         return r;
     }
     {
         const char *tn = sv_temp(g, x);
+        g->sel_lo = lox;
+        g->sel_w = wx;
         sv_select(g, tn, NULL, x->width, 0, lo, w, out);
     }
     return r;
@@ -1407,6 +1638,11 @@ static int sv_prop_pattern(SvGen *g, const IrExpr *e, StrBuf *out)
  * plain decimal */
 static void sv_shift_amount(SvGen *g, const IrExpr *y, StrBuf *out)
 {
+    const SvXExpr *vx = y->kind == IRE_CONST ? svp_get(g, y->bits.w, SVK_CONST) : NULL;
+    if (vx) {
+        svp_print(vx, svp_pn(g), SVX_PREC_PRIM, out);
+        return;
+    }
     if (y->kind == IRE_CONST && y->bits.width <= 64 && ir_bits_low64(&y->bits) < 0x7FFFFFFFu &&
         (y->bits.width == 64 || (ir_bits_low64(&y->bits) >> y->bits.width) == 0)) {
         sb_printf(out, "%u", (unsigned)ir_bits_low64(&y->bits));
@@ -1477,13 +1713,13 @@ static SvEx sv_binary(SvGen *g, const IrExpr *e, int self, StrBuf *out)
             /* x / 0 == 0, x % 0 == x */
             sv_child(g, y, 0, SVP_ADD, -1, &yt);
             sb_printf(out, "%s != ", sb_cstr(&yt));
-            sv_zero(y->width, out);
+            sv_zero_e(g, y, out);
             if (wrap)
                 sb_printf(out, " ? $unsigned(%s) : ", sb_cstr(&q));
             else
                 sb_printf(out, " ? %s : ", sb_cstr(&q));
             if (op == IROP_DIV)
-                sv_zero(e->width, out);
+                sv_zero_e(g, e, out);
             else
                 sv_child(g, x, 0, SVP_TERN + 1, -1, out);
             r.prec = SVP_TERN;
@@ -1567,16 +1803,43 @@ static SvEx sv_resize(SvGen *g, const IrExpr *e, int self, StrBuf *out)
     r.prec = SVP_PRIM;
     r.sgn = 0;
     r.ty = NULL;
+    const SvXExpr *wx = svp_get(g, e, SVK_EXPRW), *xwx = svp_get(g, x, SVK_EXPRW);
     if (w == xw)
         return sv_ex(g, x, self, out);
-    if (w < xw)
+    if (w < xw) {
+        g->sel_w = wx;
         return sv_slice_of(g, x, 0, w, self, out);
+    }
     if (x->kind == IRE_CONST) {
         IrBits b = ir_bits_resize(&g->c->scratch, &x->bits, w, e->is_signed);
-        sv_lit(&b, out);
+        const SvXExpr *vx = svp_get(g, x->bits.w, SVK_CONST);
+        if ((wx || vx) && (!e->is_signed || !ir_bits_get(&x->bits, xw - 1)))
+            svp_const(g, wx, vx, w, &b, out);
+        else
+            sv_lit(&b, out);
         return r;
     }
     if (!e->is_signed) {
+        int64_t dk;
+        if ((wx || xwx) && !svp_const_diff(wx ? wx : svp_k(g, w), xwx ? xwx : svp_k(g, xw), &dk)) {
+            /* zero-extension to a parameter-dependent width */
+            StrBuf t = {0};
+            SvEx xe = sv_ex(g, x, 1, &t);
+            if (!g->c->v2005) {
+                svp_print_castw(wx ? wx : svp_k(g, w), svp_pn(g), out);
+                if (xe.sgn)
+                    sb_printf(out, "'($unsigned(%s))", sb_cstr(&t));
+                else
+                    sb_printf(out, "'(%s)", sb_cstr(&t));
+            } else {
+                sb_puts(out, "{{");
+                svp_print(svp_bin(g, SVX_SUB, wx ? wx : svp_k(g, w), xwx ? xwx : svp_k(g, xw)), svp_pn(g),
+                          SVX_PREC_PRIM, out);
+                sb_printf(out, "{1'b0}}, %s}", sb_cstr(&t));
+            }
+            sb_free(&t);
+            return r;
+        }
         sb_putc(out, '{');
         sv_zero(w - xw, out);
         sb_puts(out, ", ");
@@ -1586,14 +1849,19 @@ static SvEx sv_resize(SvGen *g, const IrExpr *e, int self, StrBuf *out)
     }
     r.sgn = 1;
     if (!g->c->v2005) {
-        StrBuf t = {0};
+        StrBuf t = {0}, ws = {0};
         SvEx xe = sv_ex(g, x, 1, &t);
         int primary = x->kind == IRE_SIG || (x->kind == IRE_SLICE && sv_slice_base(x, &lo) != IR_NONE);
-        if (primary && xe.sgn)
-            sb_printf(out, "%u'(%s)", w, sb_cstr(&t));
+        if (wx)
+            svp_print_castw(wx, svp_pn(g), &ws);
         else
-            sb_printf(out, "%u'($signed(%s))", w, sb_cstr(&t));
+            sb_printf(&ws, "%u", w);
+        if (primary && xe.sgn)
+            sb_printf(out, "%s'(%s)", sb_cstr(&ws), sb_cstr(&t));
+        else
+            sb_printf(out, "%s'($signed(%s))", sb_cstr(&ws), sb_cstr(&t));
         sb_free(&t);
+        sb_free(&ws);
         return r;
     }
     /* Verilog-2005: {{n{x[msb]}}, x} on a selectable value */
@@ -1628,7 +1896,9 @@ static SvEx sv_ex(SvGen *g, const IrExpr *e, int self, StrBuf *out)
     r.ty = NULL;
     switch (e->kind) {
     case IRE_CONST:
-        sv_lit(&e->bits, out);
+        if (!self && sv_kfill0(g, e, out))
+            return r;
+        sv_klit(g, e, out);
         return r;
     case IRE_SIG:
         if (e->sig >= g->m->nsigs || g->m->sigs[e->sig].kind == IRS_MEM) {
@@ -1641,6 +1911,8 @@ static SvEx sv_ex(SvGen *g, const IrExpr *e, int self, StrBuf *out)
         r.ty = sv_sigty(g, e->sig);
         return r;
     case IRE_SLICE:
+        g->sel_w = svp_get(g, e, SVK_EXPRW);
+        g->sel_lo = svp_get(g, e, SVK_LO);
         return sv_slice_of(g, e->args[0], e->lo, e->width, self, out);
     case IRE_INDEX:
         return sv_index(g, e, out);
@@ -1704,9 +1976,21 @@ static SvEx sv_ex(SvGen *g, const IrExpr *e, int self, StrBuf *out)
                 sb_printf(out, "(%s) < ", sb_cstr(&at));
             else
                 sb_printf(out, "%s < ", sb_cstr(&at));
-            sv_lit_u64(e->args[0]->width, g->m->sigs[e->sig].depth, out);
+            {
+                const SvXExpr *dx = svp_get(g, &g->m->sigs[e->sig], SVK_DEPTH);
+                const SvXExpr *awx = svp_get(g, e->args[0], SVK_EXPRW);
+                if (dx || awx) {
+                    /* unsized: the depth may not fit the address width */
+                    if (dx)
+                        svp_print(dx, svp_pn(g), SVX_PREC_ADD, out);
+                    else
+                        sb_printf(out, "%u", g->m->sigs[e->sig].depth);
+                } else {
+                    sv_lit_u64(e->args[0]->width, g->m->sigs[e->sig].depth, out);
+                }
+            }
             sb_printf(out, " ? %s[%s] : ", mem, sb_cstr(&at));
-            sv_zero(e->width, out);
+            sv_zero_e(g, e, out);
             r.prec = SVP_TERN;
         } else {
             sb_printf(out, "%s[%s]", mem, sb_cstr(&at));
@@ -1816,6 +2100,8 @@ static void sv_rhs(SvGen *g, const IrExpr *e, const IrType *ty, StrBuf *out)
         sb_putc(out, '}');
         return;
     }
+    if (sv_kfill0(g, e, out))
+        return;
     sv_ex(g, e, 1, out);
 }
 
@@ -1865,8 +2151,11 @@ static const IrType *sv_lvalue(SvGen *g, const IrLvalue *lv, StrBuf *out, StrBuf
     s = &g->m->sigs[lv->sig];
     st = sv_sigty(g, lv->sig);
     if (!lv->index) {
-        SvSel r = sv_select(g, g->mn->sig[lv->sig], st, s->type->width, sv_sig_signed(g, lv->sig), lv->lo,
-                            lv->width, out);
+        SvSel r;
+        g->sel_lo = svp_get(g, lv, SVK_LVLO);
+        g->sel_w = svp_get(g, lv, SVK_LVW);
+        r = sv_select(g, g->mn->sig[lv->sig], st, s->type->width, sv_sig_signed(g, lv->sig), lv->lo,
+                      lv->width, out);
         const IrType *at = sv_type_at(g, s->type, lv->lo, lv->width);
         return at ? at : r.ty;
     }
@@ -2061,8 +2350,14 @@ static void sv_case(SvGen *g, const IrStmt *s, int ind, int nb, StrBuf *out)
         for (j = 0; j < a->nvals; j++) {
             if (j)
                 sb_puts(out, ", ");
-            if (!sv_enum_name(g, et, &a->vals[j], out))
-                sv_lit(&a->vals[j], out);
+            if (!sv_enum_name(g, et, &a->vals[j], out)) {
+                const SvXExpr *vx = svp_get(g, a->vals[j].w, SVK_CONST);
+                const SvXExpr *swx = svp_get(g, s->subject, SVK_EXPRW);
+                if (vx || swx)
+                    svp_const(g, swx, vx, w, &a->vals[j], out);
+                else
+                    sv_lit(&a->vals[j], out);
+            }
         }
         sb_puts(out, ":");
         if (a->body.n == 1) {
@@ -2105,8 +2400,15 @@ static void sv_case(SvGen *g, const IrStmt *s, int ind, int nb, StrBuf *out)
                 sb_puts(out, "default: begin\n");
                 for (k = 0; k < g->m->nsigs; k++)
                     if (map_has(&tg, k) && !map_has(&g->defassigned, k)) {
+                        const SvXExpr *kx = svp_get(g, &g->m->sigs[k], SVK_SIGW);
                         sv_ind(out, ind + 2);
-                        sb_printf(out, "%s = %u'bx;\n", g->mn->sig[k], g->m->sigs[k].type->width);
+                        if (kx) {
+                            sb_printf(out, "%s = {", g->mn->sig[k]);
+                            svp_print_castw(kx, svp_pn(g), out);
+                            sb_puts(out, "{1'bx}};\n");
+                        } else {
+                            sb_printf(out, "%s = %u'bx;\n", g->mn->sig[k], g->m->sigs[k].type->width);
+                        }
                     }
                 sv_ind(out, ind + 1);
                 sb_puts(out, "end\n");
@@ -2428,7 +2730,9 @@ static void sv_reset_value(SvGen *g, uint32_t r, int ind, int nb, StrBuf *out)
     k.sig = IR_NONE;
     sv_ind(out, ind);
     sb_printf(out, "%s %s ", g->mn->sig[r], nb ? "<=" : "=");
+    g->kwidth = svp_get(g, s, SVK_SIGW);
     sv_rhs(g, &k, s->type, out);
+    g->kwidth = NULL;
     sb_puts(out, ";\n");
 }
 
@@ -2550,10 +2854,18 @@ static void sv_clocked(SvGen *g, const IrProcess *p, StrBuf *out)
                     uint32_t r = p->regs[i];
                     if (r < g->m->nsigs && map_has(&init, r)) {
                         const IrSignal *s = &g->m->sigs[r];
+                        IrExpr k;
+                        memset(&k, 0, sizeof k);
+                        k.kind = IRE_CONST;
+                        k.width = s->type->width;
+                        k.bits = s->init;
                         sb_printf(&body, "    // WARNING: power-on value of %s (", g->mn->sig[r]);
-                        sv_lit(&s->init, &body);
+                        g->kwidth = svp_get(g, s, SVK_SIGW);
+                        sv_klit(g, &k, &body);
+                        g->kwidth = NULL;
                         sb_puts(&body, ") dropped: ASIC target and the domain has no reset\n");
-                        diag_warning(s->loc,
+                        if (!g->c->validating)
+                            diag_warning(s->loc,
                                      "register `%s` has a power-on value but its domain has no reset; "
                                      "the ASIC target ignores it",
                                      s->path);
@@ -2604,7 +2916,7 @@ static void sv_comb(SvGen *g, const IrProcess *p, StrBuf *out)
         const SvTemp *t = &g->temps.data[g->locals.data[i]];
         sv_ind(out, 2);
         sb_printf(out, "%s = ", t->name);
-        sv_zero(t->width, out);
+        sv_zero_e(g, t->expr, out);
         sb_puts(out, ";\n");
     }
     sb_append(out, body.data ? body.data : "", body.len);
@@ -2864,6 +3176,34 @@ static int sv_simple_conn(const IrExpr *e)
            (e->kind == IRE_SLICE && sv_slice_base(e, &lo) != IR_NONE);
 }
 
+/* ` #(.P(v), ...)` of an extern module instance (nothing without generics) */
+static void sv_extern_params(const SvModNames *cn, const IrModule *cm, StrBuf *head)
+{
+    uint32_t i;
+    if (!cm->nparams)
+        return;
+    sb_puts(head, " #(");
+    for (i = 0; i < cm->nparams; i++) {
+        const IrParam *pp = &cm->params[i];
+        if (i)
+            sb_puts(head, ", ");
+        sb_printf(head, ".%s(", cn->param[i]);
+        if (pp->value.width <= 64 && !pp->is_signed)
+            sb_printf(head, "%llu", (unsigned long long)ir_bits_low64(&pp->value));
+        else if (pp->value.width <= 64)
+            sb_printf(head, "%lld",
+                      (long long)(pp->value.width == 64 ? ir_bits_low64(&pp->value)
+                                                         : (ir_bits_get(&pp->value, pp->value.width - 1)
+                                                                ? ir_bits_low64(&pp->value) |
+                                                                      (~UINT64_C(0) << pp->value.width)
+                                                                : ir_bits_low64(&pp->value))));
+        else
+            ir_bits_print(&pp->value, head);
+        sb_putc(head, ')');
+    }
+    sb_putc(head, ')');
+}
+
 static void sv_instance(SvGen *g, uint32_t ii, StrBuf *out)
 {
     const IrInstance *in = &g->m->insts[ii];
@@ -2904,29 +3244,32 @@ static void sv_instance(SvGen *g, uint32_t ii, StrBuf *out)
     }
     sb_append(out, g->pre.data ? g->pre.data : "", g->pre.len);
     sb_reset(&g->pre);
-    sb_printf(&head, "    %s", cn->name);
-    if (cm->is_extern && cm->nparams) {
-        sb_puts(&head, " #(");
-        for (i = 0; i < cm->nparams; i++) {
-            const IrParam *pp = &cm->params[i];
-            if (i)
-                sb_puts(&head, ", ");
-            sb_printf(&head, ".%s(", cn->param[i]);
-            if (pp->value.width <= 64 && !pp->is_signed)
-                sb_printf(&head, "%llu", (unsigned long long)ir_bits_low64(&pp->value));
-            else if (pp->value.width <= 64)
-                sb_printf(&head, "%lld",
-                          (long long)(pp->value.width == 64 ? ir_bits_low64(&pp->value)
-                                                             : (ir_bits_get(&pp->value, pp->value.width - 1)
-                                                                    ? ir_bits_low64(&pp->value) |
-                                                                          (~UINT64_C(0) << pp->value.width)
-                                                                    : ir_bits_low64(&pp->value))));
-            else
-                ir_bits_print(&pp->value, &head);
+    {
+        const SvPGroup *cg = svp_group_of(g->c->plan, cm);
+        if (cg && cg->accepted) {
+            /* an instance of a parameterized module */
+            sb_printf(&head, "    %s #(", g->c->validating ? cg->name : cn->name);
+            for (i = 0; i < cg->nparams && i < cm->origin->ngenerics; i++) {
+                uint64_t xv;
+                const IrGeneric *ge = &cm->origin->generics[i];
+                if (i)
+                    sb_puts(&head, ", ");
+                sb_printf(&head, ".%s(", cg->pnames[i]);
+                if (g->pv && map_get(&g->pv->slots, SVP_KEYI(in, i, SVK_INSTP), &xv))
+                    svp_print((const SvXExpr *)(uintptr_t)xv, svp_pn(g), SVX_PREC_COND, &head);
+                else if (cg->pbool[i])
+                    sb_printf(&head, "1'b%d", ge->value ? 1 : 0);
+                else
+                    sb_printf(&head, "%lld", (long long)ge->value);
+                sb_putc(&head, ')');
+            }
             sb_putc(&head, ')');
+        } else {
+            sb_printf(&head, "    %s", cn->name);
         }
-        sb_putc(&head, ')');
     }
+    if (cm->is_extern)
+        sv_extern_params(cn, cm, &head);
     sb_printf(&head, " %s (", g->mn->inst[ii]);
     sb_append(out, head.data, head.len);
     sv_mark(g, in->loc, out);
@@ -3072,7 +3415,7 @@ static void sv_decl_prefix(SvGen *g, uint32_t sig, StrBuf *out)
         sb_puts(out, isreg ? "reg " : "wire ");
     }
     l = out->len;
-    sv_decl_type(g, s->type, out);
+    sv_sig_type(g, sig, out);
     if (out->len == l && out->len && out->data[out->len - 1] == ' ')
         sb_truncate(out, out->len - 1);
 }
@@ -3107,8 +3450,16 @@ static void sv_decl_group(SvGen *g, IrSigKind kind, const char *title, StrBuf *o
         sb_append(out, t.data, t.len);
         sb_indent(out, (int)(width - t.len));
         sb_printf(out, " %s", g->mn->sig[i]);
-        if (s->kind == IRS_MEM)
-            sb_printf(out, " [0:%u]", s->depth - 1);
+        if (s->kind == IRS_MEM) {
+            const SvXExpr *dx = svp_get(g, s, SVK_DEPTH);
+            if (dx) {
+                sb_puts(out, " [0:");
+                svp_print_m1(dx, svp_pn(g), out);
+                sb_putc(out, ']');
+            } else {
+                sb_printf(out, " [0:%u]", s->depth - 1);
+            }
+        }
         sb_putc(out, ';');
         if (sv_has_attr(s, "unsafe_cross"))
             sb_puts(out, "  // CDC: unchecked");
@@ -3130,10 +3481,10 @@ static void sv_port_list(SvGen *g, StrBuf *out)
         if (g->c->v2005) {
             int isreg = g->drv[p] == SVD_COMB || g->drv[p] == SVD_CLOCKED;
             sb_puts(&t, m->sigs[p].kind == IRS_OUT && isreg ? "reg" : "wire");
-            if (m->sigs[p].type->width > 1 || m->sigs[p].type->kind == IRT_SINT)
+            if (sv_sig_has_range(g, p))
                 sb_putc(&t, ' ');
         }
-        sv_decl_type(g, m->sigs[p].type, &t);
+        sv_sig_type(g, p, &t);
         if (t.len > tw)
             tw = t.len;
     }
@@ -3144,10 +3495,10 @@ static void sv_port_list(SvGen *g, StrBuf *out)
         if (g->c->v2005) {
             int isreg = g->drv[p] == SVD_COMB || g->drv[p] == SVD_CLOCKED;
             sb_puts(&t, s->kind == IRS_OUT && isreg ? "reg" : "wire");
-            if (s->type->width > 1 || s->type->kind == IRT_SINT)
+            if (sv_sig_has_range(g, p))
                 sb_putc(&t, ' ');
         }
-        sv_decl_type(g, s->type, &t);
+        sv_sig_type(g, p, &t);
         sb_puts(out, "    ");
         sv_attrs(s->nattrs, s->attrs, out);
         sb_puts(out, s->kind == IRS_IN ? "input  " : "output ");
@@ -3234,16 +3585,96 @@ static void sv_enum_localparams(SvGen *g, StrBuf *out)
     }
 }
 
-static void sv_module(SvCtx *c, const IrModule *m)
+/* declaration type of a temporary */
+static void sv_temp_decl(SvGen *g, const SvTemp *tp, StrBuf *t)
+{
+    const SvXExpr *wx = tp->ty && sv_typed(g, tp->ty) ? NULL : svp_get(g, tp->expr, SVK_EXPRW);
+    if (g->c->v2005)
+        sb_puts(t, tp->local ? "reg" : "wire");
+    if (g->c->v2005 && (tp->width > 1 || wx))
+        sb_putc(t, ' ');
+    if (wx) {
+        if (!g->c->v2005)
+            sb_puts(t, tp->ty && tp->ty->kind == IRT_SINT ? "logic signed " : "logic ");
+        svp_range(g, wx, t);
+    } else if (tp->ty && !g->c->v2005)
+        sv_decl_type(g, tp->ty, t);
+    else if (!g->c->v2005)
+        sb_printf(t, tp->width > 1 ? "logic [%u:0]" : "logic", tp->width - 1);
+    else if (tp->width > 1)
+        sb_printf(t, "[%u:0]", tp->width - 1);
+}
+
+/* generic parameters of a parameterized module, and its localparams */
+static void svp_header_params(SvGen *g, StrBuf *out)
+{
+    const SvPGroup *grp = g->pv->g;
+    uint32_t i;
+    sb_puts(out, "#(\n");
+    for (i = 0; i < grp->nparams; i++) {
+        sb_puts(out, "    parameter ");
+        if (!g->c->v2005)
+            sb_puts(out, grp->pbool[i] ? "bit " : "int unsigned ");
+        if (grp->pbool[i])
+            sb_printf(out, "%s = 1'b%d", grp->pnames[i], grp->pdefault[i] ? 1 : 0);
+        else
+            sb_printf(out, "%s = %lld", grp->pnames[i], (long long)grp->pdefault[i]);
+        sb_puts(out, i + 1 < grp->nparams ? ",\n" : "\n");
+    }
+    sb_putc(out, ')');
+}
+
+static void svp_local_decls(SvGen *g, StrBuf *out)
+{
+    const SvPGroup *grp = g->pv->g;
+    size_t i;
+    if (grp->locals.len) {
+        sb_puts(out, "\n    // module constants\n");
+        for (i = 0; i < grp->locals.len; i++) {
+            const SvXExpr *x = grp->locals.data[i];
+            sb_printf(out, "    localparam %s%s = ", g->c->v2005 ? "" : "int unsigned ", x->name);
+            svp_print(x->a, svp_pn(g), SVX_PREC_COND, out);
+            sb_puts(out, ";\n");
+        }
+    }
+}
+
+static void svp_pconst_decls(SvGen *g, StrBuf *out)
+{
+    size_t i;
+    if (!g->pconsts.len)
+        return;
+    sb_puts(out, "\n    // parameter-dependent constants\n");
+    for (i = 0; i < g->pconsts.len; i++) {
+        const SvPConst *q = &g->pconsts.data[i];
+        sb_puts(out, "    localparam ");
+        if (q->wx)
+            svp_range(g, q->wx, out);
+        else
+            sb_printf(out, "[%u:0]", q->w - 1);
+        sb_printf(out, " %s = ", q->name);
+        if (q->vx)
+            svp_print(q->vx, svp_pn(g), SVX_PREC_COND, out);
+        else
+            sb_printf(out, "%llu", (unsigned long long)q->v);
+        sb_puts(out, ";\n");
+    }
+}
+
+static void sv_module_ex(SvCtx *c, const IrModule *m, const SvPView *pv)
 {
     SvGen g;
     StrBuf body = {0}, decl = {0}, file = {0}, fname = {0};
     uint32_t i, j;
     int any;
+    const char *mname;
     memset(&g, 0, sizeof g);
     g.c = c;
     g.m = m;
     g.mn = svn_mod(c->n, m);
+    g.pv = pv;
+    g.xa = &c->scratch;
+    mname = pv && c->validating ? pv->g->name : g.mn->name;
     g.drv = (unsigned char *)xcalloc(m->nsigs + 1, 1);
     g.memw = (unsigned char *)xcalloc(m->nsigs + 1, 1);
 
@@ -3337,7 +3768,9 @@ static void sv_module(SvCtx *c, const IrModule *m)
                 k.kind = IRE_CONST;
                 k.width = m->sigs[i].type->width;
                 k.bits = m->sigs[i].init;
+                g.kwidth = svp_get(&g, &m->sigs[i], SVK_SIGW);
                 sv_rhs(&g, &k, m->sigs[i].type, &body);
+                g.kwidth = NULL;
             }
             sb_puts(&body, ";  // never assigned: keeps its initial value\n");
         }
@@ -3357,7 +3790,12 @@ static void sv_module(SvCtx *c, const IrModule *m)
     }
 
     /* ---- declarations ---- */
-    sv_param_decls(&g, &decl);
+    if (pv) {
+        svp_local_decls(&g, &decl);
+        svp_pconst_decls(&g, &decl);
+    } else {
+        sv_param_decls(&g, &decl);
+    }
     if (c->v2005)
         sv_enum_localparams(&g, &decl);
     sv_decl_group(&g, IRS_WIRE, "wires", &decl);
@@ -3370,16 +3808,7 @@ static void sv_module(SvCtx *c, const IrModule *m)
         for (i = 0; i < g.temps.len; i++) {
             const SvTemp *tp = &g.temps.data[i];
             sb_reset(&t);
-            if (c->v2005)
-                sb_puts(&t, tp->local ? "reg" : "wire");
-            if (c->v2005 && tp->width > 1)
-                sb_putc(&t, ' ');
-            if (tp->ty && !c->v2005)
-                sv_decl_type(&g, tp->ty, &t);
-            else if (!c->v2005)
-                sb_printf(&t, tp->width > 1 ? "logic [%u:0]" : "logic", tp->width - 1);
-            else if (tp->width > 1)
-                sb_printf(&t, "[%u:0]", tp->width - 1);
+            sv_temp_decl(&g, tp, &t);
             if (t.len > width)
                 width = t.len;
         }
@@ -3387,16 +3816,7 @@ static void sv_module(SvCtx *c, const IrModule *m)
         for (i = 0; i < g.temps.len; i++) {
             const SvTemp *tp = &g.temps.data[i];
             sb_reset(&t);
-            if (c->v2005)
-                sb_puts(&t, tp->local ? "reg" : "wire");
-            if (c->v2005 && tp->width > 1)
-                sb_putc(&t, ' ');
-            if (tp->ty && !c->v2005)
-                sv_decl_type(&g, tp->ty, &t);
-            else if (!c->v2005)
-                sb_printf(&t, tp->width > 1 ? "logic [%u:0]" : "logic", tp->width - 1);
-            else if (tp->width > 1)
-                sb_printf(&t, "[%u:0]", tp->width - 1);
+            sv_temp_decl(&g, tp, &t);
             sb_puts(&decl, "    ");
             sb_append(&decl, t.data, t.len);
             sb_indent(&decl, (int)(width - t.len));
@@ -3406,8 +3826,8 @@ static void sv_module(SvCtx *c, const IrModule *m)
     }
 
     /* ---- file ---- */
-    sb_printf(&file, "// %s.%s: generated by tern from %s", g.mn->name, c->v2005 ? "v" : "sv",
-              m->display ? m->display : m->name);
+    sb_printf(&file, "// %s.%s: generated by tern from %s", mname, c->v2005 ? "v" : "sv",
+              pv ? pv->g->display : m->display ? m->display : m->name);
     if (m->package)
         sb_printf(&file, " (%s)", m->package);
     sb_puts(&file, ". Do not edit.\n");
@@ -3421,11 +3841,20 @@ static void sv_module(SvCtx *c, const IrModule *m)
         }
         sb_free(&at);
     }
-    sb_printf(&file, "module %s", g.mn->name);
+    sb_printf(&file, "module %s", mname);
     if (g.uses_pkg) {
         sv_mark(&g, m->loc, &file);
-        sb_printf(&file, "\n    import %s::*;\n(", c->pkg);
+        sb_printf(&file, "\n    import %s::*;\n", c->pkg);
+        if (pv) {
+            svp_header_params(&g, &file);
+            sb_putc(&file, '\n');
+        }
+        sb_putc(&file, '(');
     } else {
+        if (pv) {
+            sb_putc(&file, ' ');
+            svp_header_params(&g, &file);
+        }
         sb_puts(&file, " (");
         sv_mark(&g, m->loc, &file);
     }
@@ -3435,8 +3864,11 @@ static void sv_module(SvCtx *c, const IrModule *m)
     sb_append(&file, decl.data ? decl.data : "", decl.len);
     sb_append(&file, body.data ? body.data : "", body.len);
     sb_puts(&file, "\nendmodule\n");
-    sb_printf(&fname, "%s.%s", g.mn->name, c->v2005 ? "v" : "sv");
-    sv_output_add(c->out, sb_cstr(&fname), SV_FILE_MODULE, &file);
+    sb_printf(&fname, "%s.%s", mname, c->v2005 ? "v" : "sv");
+    if (c->text)
+        sb_append(c->text, file.data ? file.data : "", file.len);
+    else
+        sv_output_add(c->out, sb_cstr(&fname), SV_FILE_MODULE, &file);
 
     sb_free(&fname);
     sb_free(&file);
@@ -3445,6 +3877,7 @@ static void sv_module(SvCtx *c, const IrModule *m)
     sb_free(&g.pre);
     vec_free(g.temps);
     vec_free(g.locals);
+    vec_free(g.pconsts);
     map_free(&g.types);
     map_free(&g.defassigned);
     free(g.drv);
@@ -3568,14 +4001,22 @@ int sv_emit_design(const IrDesign *d, const SvOptions *o, SvOutput *out)
         sb_free(&pkg);
         sb_free(&fn);
     }
+    c.plan = d->sv_params;
     for (i = 0; i < d->nmodules; i++) {
         const IrModule *m = d->modules[i];
+        uint64_t pv = 0;
+        const SvPView *view = NULL;
         if (m->is_extern) {
             if (m->extern_file)
                 sv_output_add_extern(out, m->extern_file);
             continue;
         }
-        sv_module(&c, m);
+        if (c.plan && map_get(&c.plan->views, MAP_PTR(m), &pv)) {
+            view = (const SvPView *)(uintptr_t)pv;
+            if (view->g->rep != m)
+                continue;   /* emitted once, as the group's module */
+        }
+        sv_module_ex(&c, m, view);
     }
     for (k = 0; k < c.memout.nfiles; k++) {
         StrBuf t = {0};
@@ -3586,4 +4027,468 @@ int sv_emit_design(const IrDesign *d, const SvOptions *o, SvOutput *out)
     sv_names_free(c.n);
     arena_release(&c.scratch);
     return c.errors;
+}
+
+/* ==================================================== parameter plan == */
+/* sv_params_plan (emit.h): which generic modules become parameterized SV
+ * modules.  The IR comparison and the expressions are in svparam.c; here
+ * each candidate group is emitted once per elaboration and the texts are
+ * compared. */
+
+static int svp_eligible(const IrModule *m, const void *item, uint32_t ngen)
+{
+    uint32_t i;
+    if (!m || !m->origin || m->origin->item != item || m->is_extern || m->is_cdc || !m->origin->ngenerics ||
+        m->origin->ngenerics > 32 || (ngen && m->origin->ngenerics != ngen))
+        return 0;
+    for (i = 0; i < m->origin->ngenerics; i++) {
+        const IrGeneric *g = &m->origin->generics[i];
+        if (g->kind == IRG_BOOL)
+            continue;
+        if (g->kind != IRG_UINT || !g->fits || g->value < 0 || g->value >= (INT64_C(1) << 31))
+            return 0;
+    }
+    return 1;
+}
+
+static SvXExpr *svp_copy(Arena *a, const SvXExpr *x)
+{
+    SvXExpr *r;
+    if (!x)
+        return NULL;
+    r = ANEW(a, SvXExpr);
+    *r = *x;
+    r->a = svp_copy(a, x->a);
+    r->b = svp_copy(a, x->b);
+    r->c = svp_copy(a, x->c);
+    return r;
+}
+
+/* one module's text, emitted for comparison */
+static int svp_text(const IrDesign *d, SvNames *n, const struct SvParamPlan *plan, const IrModule *m,
+                    const SvPView *pv, const SvOptions *o, StrBuf *out)
+{
+    SvCtx c;
+    SvOutput dummy;
+    memset(&c, 0, sizeof c);
+    memset(&dummy, 0, sizeof dummy);
+    c.d = d;
+    c.o = o;
+    c.n = n;
+    c.out = &dummy;
+    c.v2005 = o->std == SV_STD_V2005;
+    c.pkg = "tern_types_pkg";
+    c.plan = plan;
+    c.validating = 1;
+    c.text = out;
+    sv_module_ex(&c, m, pv);
+    sv_output_free(&c.memout);
+    sv_output_free(&dummy);
+    arena_release(&c.scratch);
+    return c.errors;
+}
+
+static void svp_name_pair(Map *names, const char *from, const char *to)
+{
+    if (from && to && from != to)
+        map_put(names, MAP_PTR(from), MAP_PTR(to));
+}
+
+/* names of elaboration k's named types -> the same types of elaboration 0 */
+static void svp_type_names(SvNames *n0, SvNames *nk, const SvPWalk *w, uint32_t k, Map *names)
+{
+    size_t i;
+    uint32_t j;
+    for (i = 0; i < w->types.len; i++) {
+        const SvPTypePair *p = &w->types.data[i];
+        const IrType *t0 = p->t0, *tk = p->tk, *g0, *gk;
+        if (p->k != k)
+            continue;
+        svp_name_pair(names, svn_tyname(nk, tk), svn_tyname(n0, t0));
+        if (t0->kind != IRT_ENUM || t0->nvariants != tk->nvariants)
+            continue;
+        for (j = 0; j < t0->nvariants; j++)
+            svp_name_pair(names, svn_varname(nk, &tk->variants[j]), svn_varname(n0, &t0->variants[j]));
+        g0 = svn_tagty(n0, t0);
+        gk = svn_tagty(nk, tk);
+        if (g0 && gk) {
+            svp_name_pair(names, svn_tyname(nk, gk), svn_tyname(n0, g0));
+            for (j = 0; j < g0->nvariants && j < gk->nvariants; j++)
+                svp_name_pair(names, svn_varname(nk, &gk->variants[j]), svn_varname(n0, &g0->variants[j]));
+        }
+    }
+}
+
+/* text with every identifier in `names` replaced and runs of spaces
+ * collapsed (column alignment depends on the lengths of type names) */
+static void svp_subst(const StrBuf *in, const Map *names, StrBuf *out)
+{
+    size_t i = 0, n = in->len;
+    const char *s = in->data ? in->data : "";
+    while (i < n) {
+        if (s[i] == ' ') {
+            sb_putc(out, ' ');
+            while (i < n && s[i] == ' ')
+                i++;
+            continue;
+        }
+        if (tern_is_alpha((unsigned char)s[i]) || s[i] == '_') {
+            size_t j = i;
+            const char *id;
+            uint64_t v;
+            while (j < n && (tern_is_ident((unsigned char)s[j]) || s[j] == '$'))
+                j++;
+            id = intern(s + i, j - i);
+            if (map_get(names, MAP_PTR(id), &v))
+                sb_puts(out, (const char *)(uintptr_t)v);
+            else
+                sb_append(out, s + i, j - i);
+            i = j;
+        } else if (tern_is_digit((unsigned char)s[i]) || s[i] == '$') {
+            size_t j = i;
+            while (j < n && (tern_is_ident((unsigned char)s[j]) || s[j] == '$' || s[j] == '\''))
+                j++;
+            sb_append(out, s + i, j - i);
+            i = j;
+        } else {
+            sb_putc(out, s[i++]);
+        }
+    }
+}
+
+/* emits every elaboration under every option combination; 1 if all texts agree */
+static int svp_validate(const struct SvParamPlan *plan, const SvPWalk *w, const IrDesign *const *dk,
+                        SvNames *const *nk, SvPView *const *views, const SvOptions *base)
+{
+    uint32_t combo, k;
+    int ok = 1;
+    for (combo = 0; combo < 8 && ok; combo++) {
+        SvOptions o = *base;
+        StrBuf t0 = {0}, tk0 = {0};
+        Map none = {0};
+        o.std = (combo & 1) ? SV_STD_V2005 : SV_STD_SV2012;
+        o.emit_assertions = (combo & 2) ? 1 : 0;
+        o.target_kind = (combo & 4) ? SV_TARGET_ASIC : SV_TARGET_FPGA;
+        if (svp_text(dk[0], nk[0], plan, w->mods[0], views[0], &o, &tk0))
+            ok = 0;
+        svp_subst(&tk0, &none, &t0);
+        for (k = 1; k < w->n && ok; k++) {
+            StrBuf tk = {0}, ts = {0};
+            Map names = {0};
+            if (svp_text(dk[k], nk[k], plan, w->mods[k], views[k], &o, &tk))
+                ok = 0;
+            svp_type_names(nk[0], nk[k], w, k, &names);
+            svp_subst(&tk, &names, &ts);
+            if (ts.len != t0.len || (ts.len && memcmp(ts.data, t0.data, ts.len) != 0))
+                ok = 0;
+            map_free(&names);
+            sb_free(&tk);
+            sb_free(&ts);
+        }
+        sb_free(&t0);
+        sb_free(&tk0);
+    }
+    return ok;
+}
+
+static void svp_view_free(SvPView *v)
+{
+    if (!v)
+        return;
+    map_free(&v->slots);
+    free(v);
+}
+
+/* tries one group; 1 when accepted (the members' views are added to the plan) */
+static int svp_try_group(struct SvParamPlan *plan, SvPGroup *grp, const IrDesign *d, const SvParamItem *it,
+                         const SvOptions *o)
+{
+    VEC(const IrModule *) mods = {0};
+    VEC(const IrDesign *) designs = {0};
+    VEC(SvNames *) owned = {0};
+    SvNames **nk = NULL;
+    SvPView **views = NULL;
+    int64_t **pvals = NULL;
+    const SvXExpr **base = NULL;
+    SvPWalk w;
+    SvPCands cands;
+    uint32_t i, k, nmembers, nbase = 0;
+    int ok = 1;
+    SvNames *nmain = sv_names_new(d);
+    memset(&w, 0, sizeof w);
+    memset(&cands, 0, sizeof cands);
+    /* elaborations: the design's members (children first), then the probes */
+    for (i = 0; i < d->nmodules; i++)
+        if (svp_eligible(d->modules[i], grp->item, grp->nparams)) {
+            vec_push(mods, d->modules[i]);
+            vec_push(designs, d);
+        }
+    nmembers = (uint32_t)mods.len;
+    for (i = 0; i < it->nprobes; i++) {
+        const IrDesign *pd = it->probes[i];
+        if (pd && svp_eligible(pd->top, grp->item, grp->nparams)) {
+            vec_push(mods, pd->top);
+            vec_push(designs, pd);
+        }
+    }
+    if (!nmembers || mods.len < 2)
+        ok = 0;
+    /* every generic takes two values */
+    for (i = 0; ok && i < grp->nparams; i++) {
+        int two = 0;
+        for (k = 1; k < mods.len; k++)
+            if (mods.data[k]->origin->generics[i].value != mods.data[0]->origin->generics[i].value)
+                two = 1;
+        if (!two)
+            ok = 0;
+    }
+    if (ok) {
+        w.n = (uint32_t)mods.len;
+        w.mods = mods.data;
+        w.plan = plan;
+        ok = svp_walk(&w);
+    }
+    if (ok) {
+        pvals = (int64_t **)xcalloc(mods.len, sizeof(int64_t *));
+        for (k = 0; k < mods.len; k++) {
+            pvals[k] = (int64_t *)xcalloc(grp->nparams + 1, sizeof(int64_t));
+            for (i = 0; i < grp->nparams; i++)
+                pvals[k][i] = mods.data[k]->origin->generics[i].value;
+        }
+        base = (const SvXExpr **)xcalloc(grp->nparams + it->ncands + 1, sizeof(SvXExpr *));
+        for (i = 0; i < grp->nparams; i++) {
+            SvXExpr *x = ANEW(&plan->arena, SvXExpr);
+            x->op = SVX_PARAM;
+            x->param = i;
+            base[nbase++] = x;
+        }
+        for (i = 0; i < it->ncands; i++)
+            base[nbase++] = svp_copy(&plan->arena, it->cands[i]);
+        svp_cands_init(&cands, base, nbase, (const int64_t *const *)pvals, (uint32_t)mods.len, &plan->arena);
+        views = (SvPView **)xcalloc(mods.len, sizeof(SvPView *));
+        for (k = 0; k < mods.len; k++) {
+            views[k] = (SvPView *)xcalloc(1, sizeof(SvPView));
+            views[k]->g = grp;
+        }
+        for (i = 0; ok && i < w.slots.len; i++) {
+            const SvPSlot *sl = &w.slots.data[i];
+            const int64_t *v = &w.vals.data[sl->at];
+            const SvXExpr *x;
+            for (k = 1; k < w.n; k++)
+                if (v[k] != v[0])
+                    break;
+            if (k == w.n)
+                continue;
+            x = svp_match(&cands, v, &plan->arena);
+            if (!x) {
+                ok = 0;
+                break;
+            }
+            for (k = 0; k < w.n; k++) {
+                uint64_t old;
+                uint64_t key = w.keys.data[sl->at + k];
+                if (map_get(&views[k]->slots, key, &old) && old != MAP_PTR(x)) {
+                    ok = 0;
+                    break;
+                }
+                map_put(&views[k]->slots, key, MAP_PTR(x));
+            }
+        }
+    }
+    if (ok) {
+        nk = (SvNames **)xcalloc(mods.len, sizeof(SvNames *));
+        for (k = 0; k < mods.len; k++) {
+            if (designs.data[k] == d) {
+                nk[k] = nmain;
+            } else {
+                nk[k] = sv_names_new(designs.data[k]);
+                vec_push(owned, nk[k]);
+            }
+        }
+        grp->rep = mods.data[0];
+        grp->pdefault = ANEWN(&plan->arena, int64_t, grp->nparams ? grp->nparams : 1);
+        for (i = 0; i < grp->nparams; i++)
+            grp->pdefault[i] = mods.data[0]->origin->generics[i].value;
+        ok = svp_validate(plan, &w, designs.data, nk, views, o);
+    }
+    if (ok) {
+        for (k = 0; k < nmembers; k++) {
+            size_t mi = 0;
+            uint64_t key, val;
+            map_put(&plan->views, MAP_PTR(mods.data[k]), MAP_PTR(views[k]));
+            vec_push(plan->allviews, views[k]);
+            while (map_next(&views[k]->slots, &mi, &key, &val))
+                svp_collect_locals((const SvXExpr *)(uintptr_t)val, grp);
+            views[k] = NULL;
+        }
+        grp->accepted = 1;
+    }
+    for (k = 0; views && k < mods.len; k++)
+        svp_view_free(views[k]);
+    for (k = 0; pvals && k < mods.len; k++)
+        free(pvals[k]);
+    for (i = 0; i < owned.len; i++)
+        sv_names_free(owned.data[i]);
+    sv_names_free(nmain);
+    vec_free(owned);
+    free(nk);
+    free(views);
+    free(pvals);
+    free(base);
+    svp_cands_free(&cands);
+    svp_walk_free(&w);
+    vec_free(mods);
+    vec_free(designs);
+    return ok;
+}
+
+int sv_params_plan(IrDesign *d, const SvParamInput *in, const SvOptions *o)
+{
+    struct SvParamPlan *plan;
+    VEC(SvPGroup *) order = {0};
+    VEC(const SvParamItem *) items = {0};
+    SvOptions def;
+    uint32_t i, j;
+    size_t gi;
+    int accepted = 0;
+    sv_params_free(d);
+    if (!in || !in->n || !d->top)
+        return 0;
+    if (!o) {
+        sv_options_init(&def);
+        o = &def;
+    }
+    plan = (struct SvParamPlan *)xcalloc(1, sizeof *plan);
+    /* groups, in the order of their first member (children first) */
+    for (i = 0; i < d->nmodules; i++) {
+        const IrModule *m = d->modules[i];
+        const SvParamItem *it = NULL;
+        SvPGroup *grp;
+        StrBuf disp = {0};
+        size_t k;
+        if (!m->origin || map_has(&plan->groups, MAP_PTR(m->origin->item)))
+            continue;
+        for (k = 0; k < in->n; k++)
+            if (in->items[k].item == m->origin->item)
+                it = &in->items[k];
+        if (!it || !svp_eligible(m, m->origin->item, 0))
+            continue;
+        grp = ANEW(&plan->arena, SvPGroup);
+        grp->item = m->origin->item;
+        grp->name = svn_sanitize(m->tern_name ? m->tern_name : m->name);
+        grp->nparams = m->origin->ngenerics;
+        grp->pnames = ANEWN(&plan->arena, const char *, grp->nparams);
+        grp->pbool = ANEWN(&plan->arena, unsigned char, grp->nparams);
+        sb_printf(&disp, "%s<", m->tern_name ? m->tern_name : m->name);
+        for (j = 0; j < grp->nparams; j++) {
+            grp->pnames[j] = svn_sanitize(m->origin->generics[j].name);
+            grp->pbool[j] = m->origin->generics[j].kind == IRG_BOOL;
+            sb_printf(&disp, "%s%s", j ? ", " : "", grp->pnames[j]);
+        }
+        sb_putc(&disp, '>');
+        grp->display = arena_strdup(&plan->arena, sb_cstr(&disp));
+        sb_free(&disp);
+        map_put(&plan->groups, MAP_PTR(grp->item), MAP_PTR(grp));
+        vec_push(order, grp);
+        vec_push(items, it);
+    }
+    for (gi = 0; gi < order.len; gi++)
+        if (svp_try_group(plan, order.data[gi], d, items.data[gi], o))
+            accepted++;
+    vec_free(order);
+    vec_free(items);
+    d->sv_params = plan;
+    return accepted;
+}
+
+void sv_params_free(IrDesign *d)
+{
+    struct SvParamPlan *plan = d ? d->sv_params : NULL;
+    size_t i = 0;
+    uint64_t k, v;
+    if (!plan)
+        return;
+    while (map_next(&plan->groups, &i, &k, &v))
+        vec_free(((SvPGroup *)(uintptr_t)v)->locals);
+    for (i = 0; i < plan->allviews.len; i++)
+        svp_view_free(plan->allviews.data[i]);
+    vec_free(plan->allviews);
+    map_free(&plan->groups);
+    map_free(&plan->views);
+    arena_release(&plan->arena);
+    free(plan);
+    d->sv_params = NULL;
+}
+
+/* ============================================================ wrapper == */
+
+void sv_emit_wrapper(const IrDesign *d, const SvOptions *o, const char *name, StrBuf *out)
+{
+    SvCtx c;
+    SvGen g;
+    SvOptions def;
+    const IrModule *m = d->top;
+    uint32_t i;
+    size_t tw = 0, nw = 0;
+    StrBuf t = {0};
+    if (!o) {
+        sv_options_init(&def);
+        o = &def;
+    }
+    memset(&c, 0, sizeof c);
+    memset(&g, 0, sizeof g);
+    c.d = d;
+    c.o = o;
+    c.n = sv_names_new(d);
+    c.pkg = o->types_pkg ? o->types_pkg : sv_names_types_pkg(c.n);
+    c.v2005 = o->std == SV_STD_V2005;
+    g.c = &c;
+    g.m = m;
+    g.mn = svn_mod(c.n, m);
+    for (i = 0; i < m->nports; i++)
+        sv_use_type(&g, m->sigs[m->ports[i]].type);
+    sb_printf(out, "// %s.sv: test wrapper of %s, generated by tern. Do not edit.\n", name, g.mn->name);
+    sb_puts(out, "// The inputs are driven through VPI.\n// verilator lint_off UNDRIVEN\n");
+    sb_printf(out, "module %s", name);
+    if (!c.v2005 && map_len(&g.types))
+        sb_printf(out, "\n    import %s::*;\n", c.pkg);
+    sb_puts(out, ";\n");
+    for (i = 0; i < m->nports; i++) {
+        sb_reset(&t);
+        sv_decl_type(&g, m->sigs[m->ports[i]].type, &t);
+        while (t.len && t.data[t.len - 1] == ' ')
+            sb_truncate(&t, t.len - 1);
+        if (t.len > tw)
+            tw = t.len;
+        if (strlen(g.mn->sig[m->ports[i]]) > nw)
+            nw = strlen(g.mn->sig[m->ports[i]]);
+    }
+    for (i = 0; i < m->nports; i++) {
+        uint32_t p = m->ports[i];
+        sb_reset(&t);
+        if (c.v2005)
+            sb_puts(&t, m->sigs[p].kind == IRS_IN ? "reg " : "wire ");
+        sv_decl_type(&g, m->sigs[p].type, &t);
+        while (t.len && t.data[t.len - 1] == ' ')
+            sb_truncate(&t, t.len - 1);
+        sb_puts(out, "    ");
+        sb_append(out, t.data ? t.data : "", t.len);
+        sb_indent(out, (int)(tw + (c.v2005 ? 5 : 0) - t.len));
+        sb_printf(out, " %s;\n", g.mn->sig[p]);
+    }
+    sb_printf(out, "\n    %s", g.mn->name);
+    if (m->is_extern)
+        sv_extern_params(g.mn, m, out);
+    sb_puts(out, " dut (\n");
+    for (i = 0; i < m->nports; i++) {
+        const char *pn = g.mn->sig[m->ports[i]];
+        sb_printf(out, "        .%s", pn);
+        sb_indent(out, (int)(nw - strlen(pn)));
+        sb_printf(out, " (%s)%s\n", pn, i + 1 < m->nports ? "," : "");
+    }
+    sb_puts(out, "    );\n\nendmodule\n");
+    sb_free(&t);
+    map_free(&g.types);
+    sv_names_free(c.n);
+    arena_release(&c.scratch);
 }

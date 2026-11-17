@@ -755,6 +755,8 @@ static int ev_pending(const SimModel *m, const SimPPool *pl, uint32_t ref, int d
 uint32_t sim_finish(SimModel *m)
 {
     uint32_t i, j, n = 0;
+    if (m->rops)
+        return 0; /* properties are not monitored on a remote model */
     for (i = 0; i < m->mons.len; i++) {
         SimMon *mon = &m->mons.data[i];
         const SimGroup *g = &m->groups.data[mon->group];
@@ -1011,6 +1013,8 @@ void sim_free(SimModel *m)
     uint32_t i;
     if (!m)
         return;
+    if (m->rops)
+        m->rops->destroy(m);
     sim_vcd_close(m);
     for (i = 0; i < m->groups.len; i++) {
         SimGroup *g = &m->groups.data[i];
@@ -1170,6 +1174,8 @@ int sim_poke(SimModel *m, int h, const IrBits *val)
         return SIM_ERR_KIND;
     if (!s->writable)
         return SIM_ERR_NOT_WRITABLE;
+    if (m->rops)
+        return m->rops->poke(m, h, val);
     if (val->width == 0)
         bv_zero(m->v + s->off, s->width);
     else
@@ -1215,6 +1221,8 @@ int sim_peek(SimModel *m, int h, IrBits *out)
         return SIM_ERR_HANDLE;
     if (s->mem != IR_NONE)
         return SIM_ERR_KIND;
+    if (m->rops)
+        return m->rops->peek(m, h, out);
     out->width = s->width;
     memcpy(out->w, m->v + s->off, sizeof(uint64_t) * s->limbs);
     return SIM_OK;
@@ -1239,6 +1247,10 @@ uint64_t sim_peek_u64(SimModel *m, int h)
     const SimSig *s = ev_sig(m, h);
     if (!s || s->mem != IR_NONE)
         return 0;
+    if (m->rops) {
+        IrBits b = sim_peek_bits(m, h, &m->arena);
+        return b.width ? ir_bits_low64(&b) : 0;
+    }
     return m->v[s->off];
 }
 
@@ -1253,6 +1265,8 @@ int sim_mem_peek(SimModel *m, int h, uint64_t addr, IrBits *out)
     mm = &m->mems.data[s->mem];
     if (addr >= mm->depth)
         return SIM_ERR_RANGE;
+    if (m->rops)
+        return m->rops->mem_peek(m, h, addr, out);
     out->width = mm->width;
     memcpy(out->w, mm->data + addr * mm->limbs, sizeof(uint64_t) * mm->limbs);
     return SIM_OK;
@@ -1269,6 +1283,8 @@ int sim_mem_poke(SimModel *m, int h, uint64_t addr, const IrBits *val)
     mm = &m->mems.data[s->mem];
     if (addr >= mm->depth)
         return SIM_ERR_RANGE;
+    if (m->rops)
+        return SIM_ERR_IO;
     bv_resize(mm->data + addr * mm->limbs, mm->width, val->w, val->width, 0);
     m->dirty = 1;
     return SIM_OK;
@@ -1278,6 +1294,10 @@ int sim_mem_poke(SimModel *m, int h, uint64_t addr, const IrBits *val)
 
 void sim_settle(SimModel *m)
 {
+    if (m->rops) {
+        m->rops->settle(m);
+        return;
+    }
     sim_settle_now(m);
     sim_vcd_sample(m);
     sim_vcd_flush(m);
@@ -1324,6 +1344,10 @@ void sim_step(SimModel *m, uint32_t domain, uint32_t n)
 {
     if (domain >= m->topdoms.len)
         return;
+    if (m->rops) {
+        m->rops->step(m, m->topdoms.data[domain].clock, n);
+        return;
+    }
     ev_step_clock(m, m->topdoms.data[domain].clock, n);
     sim_vcd_flush(m);
 }
@@ -1332,6 +1356,10 @@ void sim_run_ns(SimModel *m, uint64_t ns)
 {
     uint64_t target = m->now_ps + ns * 1000u;
     uint32_t cs[64];
+    if (m->rops) {
+        m->rops->run_ns(m, ns);
+        return;
+    }
     for (;;) {
         uint64_t t = ~UINT64_C(0);
         uint32_t i, nc = 0;
@@ -1359,6 +1387,10 @@ void sim_reset(SimModel *m)
     uint32_t i, j;
     VEC(uint32_t) clks = {0};
     const IrModule *top = m->top;
+    if (m->rops) {
+        m->rops->reset(m);
+        return;
+    }
     m->harness_reset = 1;
     for (i = 0; i < top->nsigs; i++) {
         const IrSignal *s = &top->sigs[i];

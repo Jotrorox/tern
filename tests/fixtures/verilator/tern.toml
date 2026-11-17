@@ -1,0 +1,9 @@
+[package]
+name = "vltest"
+version = "0.1.0"
+description = "tern test --backend verilator: a design with an extern SystemVerilog module"
+license = "MIT"
+
+[target.default]
+top = "Ticker"
+std = "sv"

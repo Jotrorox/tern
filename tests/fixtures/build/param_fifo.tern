@@ -1,0 +1,88 @@
+// §13.3: a type generic always monomorphizes (Fifo_u8_4, Fifo_u4_4),
+// whatever its value generics; the same FIFO with only a depth generic is
+// one parameterized module (memory depth and pointer widths from Depth).
+
+/// Small FIFO over a register array.
+module Fifo<T: type, Depth: uint>
+where Depth >= 2
+{
+    in clk: clock
+    in rst: reset
+    in push: Stream<T>
+    out pop: Stream<T>
+
+    mem buf: [T; Depth]
+    reg wr: uint<clog2(Depth)> = 0
+    reg rd: uint<clog2(Depth)> = 0
+    reg count: uint<clog2(Depth) + 1> = 0
+
+    push.ready = count < Depth
+    pop.valid = count != 0
+    pop.data = buf[rd]
+    on clk {
+        if push.fire() {
+            buf[wr] = push.data
+            wr = if wr == Depth - 1 { 0 } else { wr +% 1 }
+        }
+        if pop.fire() {
+            rd = if rd == Depth - 1 { 0 } else { rd +% 1 }
+        }
+        count = match (push.fire(), pop.fire()) {
+            (true, false) => count +% 1,
+            (false, true) => count -% 1,
+            _ => count,
+        }
+    }
+}
+
+/// The same FIFO for bytes only.
+module ByteFifo<Depth: uint>
+where Depth >= 2
+{
+    in clk: clock
+    in rst: reset
+    in push: Stream<u8>
+    out pop: Stream<u8>
+
+    mem buf: [u8; Depth]
+    reg wr: uint<clog2(Depth)> = 0
+    reg rd: uint<clog2(Depth)> = 0
+    reg count: uint<clog2(Depth) + 1> = 0
+
+    push.ready = count < Depth
+    pop.valid = count != 0
+    pop.data = buf[rd]
+    on clk {
+        if push.fire() {
+            buf[wr] = push.data
+            wr = if wr == Depth - 1 { 0 } else { wr +% 1 }
+        }
+        if pop.fire() {
+            rd = if rd == Depth - 1 { 0 } else { rd +% 1 }
+        }
+        count = match (push.fire(), pop.fire()) {
+            (true, false) => count +% 1,
+            (false, true) => count -% 1,
+            _ => count,
+        }
+    }
+}
+
+#[top]
+module Queues {
+    in clk: clock
+    in rst: reset
+    in a: Stream<u8>
+    in b: Stream<uint<4>>
+    out x: Stream<u8>
+    out y: Stream<uint<4>>
+    in c: Stream<u8>
+    in d: Stream<u8>
+    out z: Stream<u8>
+    out w: Stream<u8>
+
+    x = Fifo<u8, 4>(push: a).pop
+    y = Fifo<uint<4>, 4>(push: b).pop
+    z = ByteFifo<4>(push: c).pop
+    w = ByteFifo<6>(push: d).pop
+}

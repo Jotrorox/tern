@@ -237,8 +237,24 @@ typedef struct SimPendWrite {
     uint32_t mask;           /* offset into pend_data, IR_NONE if none */
 } SimPendWrite;
 
+/* value operations of a remote model (remote.c) */
+typedef struct SimRemote SimRemote;
+typedef struct SimRemoteOps {
+    int (*poke)(SimModel *m, int h, const IrBits *v);
+    int (*peek)(SimModel *m, int h, IrBits *out);
+    int (*mem_peek)(SimModel *m, int h, uint64_t addr, IrBits *out);
+    void (*settle)(SimModel *m);
+    void (*step)(SimModel *m, uint32_t clock, uint32_t n);
+    void (*run_ns)(SimModel *m, uint64_t ns);
+    void (*reset)(SimModel *m);
+    int (*vcd_open)(SimModel *m, const char *path);
+    void (*destroy)(SimModel *m);
+} SimRemoteOps;
+
 struct SimModel {
     Arena arena;
+    const SimRemoteOps *rops; /* non-NULL: values live in a remote simulator */
+    SimRemote *remote;
     const IrDesign *design;
     const IrModule *top;
     uint64_t seed;

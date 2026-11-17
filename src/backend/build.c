@@ -61,7 +61,7 @@ static void bk_merge(SvOutput *dst, SvOutput *src)
 
 /* the source of an extern module's file: absolute, relative to the project
  * root (or the current directory), or relative to the declaring file */
-static char *bk_find_extern(const char *path, const char *root, Span loc)
+char *bk_find_extern_source(const char *path, const char *root, Span loc)
 {
     char *p;
     const SourceFile *sf;
@@ -102,9 +102,10 @@ static int bk_add_externs(BkBuild *b)
             base = os_path_basename(m->extern_file);
             if (sv_output_find(&b->out, base))
                 continue;
-            src = bk_find_extern(m->extern_file, b->root, m->loc);
+            src = bk_find_extern_source(m->extern_file, b->root, m->loc);
             if (!src || os_read_file(src, &text, &len) != 0) {
-                diag_error(m->loc, "cannot find the source of extern module `%s`: \"%s\"", m->name, m->extern_file);
+                diag_error(m->loc, "cannot find the source of extern module `%s`: \"%s\"",
+                           m->tern_name ? m->tern_name : m->name, m->extern_file);
                 diag_help("extern paths are relative to the project root (or to the declaring file)");
                 free(src);
                 errs++;
@@ -272,6 +273,10 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b)
     b->sv.constraints = b->target.constraints;
     if (o->no_line_markers)
         b->sv.line_markers = 0;
+    /* value generics -> SystemVerilog parameters where exact (spec 13.3) */
+    if (!o->monomorphize)
+        for (i = 0; i < b->ndesigns; i++)
+            bk_params_prepare(dr, b->designs[i], &b->sv);
     for (i = 0; i < b->ndesigns; i++) {
         SvOutput one;
         memset(&one, 0, sizeof one);
@@ -472,6 +477,9 @@ int bk_build_write(BkBuild *b, int summary)
 
 void bk_build_free(BkBuild *b)
 {
+    size_t i;
+    for (i = 0; i < b->ndesigns; i++)
+        sv_params_free(b->designs[i]);
     if (b->dr)
         driver_free(b->dr);
     sv_output_free(&b->out);
@@ -522,6 +530,8 @@ int cmd_build(int argc, char **argv)
             o.emit_assertions = 1;
         } else if (args_flag(&ap, "no-line-markers")) {
             o.no_line_markers = 1;
+        } else if (args_flag(&ap, "monomorphize")) {
+            o.monomorphize = 1;
         } else if (args_flag(&ap, "lint")) {
             lint = 1;
         } else if (args_flag(&ap, "quiet|q")) {

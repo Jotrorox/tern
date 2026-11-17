@@ -140,14 +140,17 @@ per module, plus constraint fragments:
 
 ```
 tern build: Blinky<50000000> -> build/default/ (target default, SystemVerilog)
-  modules      Blinky_50000000.sv
-  constraints  Blinky_50000000.xdc Blinky_50000000.sdc
-  3 files, 0 changed
+  modules      Blinky.sv
+  constraints  Blinky.xdc Blinky.sdc
+  file list    Blinky.f
+  4 files, 4 changed
 ```
 
-Tern monomorphizes generics into the module name (`Blinky_50000000`), and the
-emitted code is ordinary, readable SystemVerilog with `// tern: file:line`
-markers that point back to your source.
+The generic `Period` becomes a SystemVerilog parameter
+(`module Blinky #(parameter int unsigned Period = 50000000)`, with
+`logic [$clog2(Period)-1:0] count`), and the emitted code is ordinary,
+readable SystemVerilog with `// tern: file:line` markers that point back to
+your source.
 [The toolchain](09-toolchain.md) describes the output in detail.
 
 ## Poking at a design interactively

@@ -1,0 +1,21 @@
+// §13.3: a top with a value generic becomes a parameterized SystemVerilog
+// module (`module Blinky #(parameter int unsigned CLK_HZ = 50000000)`).
+#[top]
+module Blinky<CLK_HZ: uint = 50_000_000> {
+    in clk: clock
+    in rst: reset
+    out led: bool
+
+    reg count: uint<clog2(CLK_HZ)> = 0
+    reg lit: bool = false
+
+    led = lit
+    on clk {
+        if count == CLK_HZ - 1 {
+            count = 0
+            lit = !lit
+        } else {
+            count = count +% 1
+        }
+    }
+}

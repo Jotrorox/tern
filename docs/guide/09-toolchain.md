@@ -103,9 +103,13 @@ writes to `build/`.
 
 ## What `tern build` writes
 
-* One `.sv` file per module, with names preserved. Generic modules are
-  monomorphized (`Fifo<u8, 64>` becomes `Fifo_u8_64`). A `_types_pkg.sv`
-  holds the packed structs and enums.
+* One `.sv` file per module, with names preserved. Value generics become
+  SystemVerilog parameters where that is exact (`Acc<8>` and `Acc<16>` are
+  one `module Acc #(parameter int unsigned W = 8)`, instantiated with
+  `#(.W(16))`); type generics, and value generics that change the structure
+  (loop counts, array lengths), are monomorphized (`Fifo<u8, 64>` becomes
+  `Fifo_u8_64`). `--monomorphize` monomorphizes everything. A
+  `_types_pkg.sv` holds the packed structs and enums.
 * Idiomatic SystemVerilog: `always_ff`/`always_comb`, `logic`, packed
   structs and enums, `unique case`. No tool-specific constructs.
   `--std verilog2005` (or `std = "verilog2005"` in the target) writes plain

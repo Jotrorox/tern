@@ -114,6 +114,9 @@ const char *diag_path_display(const char *path);  /* path as printed: relative t
 
 int diag_error_count(void);
 int diag_warning_count(void);
+/* Restores the counts saved before speculative work whose diagnostics went
+ * to a sink (e.g. probe elaborations in `tern build`). */
+void diag_set_counts(int errors, int warnings);
 void diag_reset(void);                    /* drop pending diagnostic, counts and path */
 
 const char *diag_level_name(DiagLevel level);   /* "error", "warning", "note", "help" */

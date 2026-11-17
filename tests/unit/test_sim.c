@@ -23,6 +23,7 @@
 #include "../../src/sim/netlist.c"
 #include "../../src/sim/eval.c"
 #include "../../src/sim/vcd.c"
+#include "../../src/sim/remote.c"
 #include "../../src/os/os.h"
 
 /* ------------------------------------------------------------ framework */
@@ -2040,6 +2041,145 @@ static void test_falling_and_derived(void)
     sim_free(sm);
 }
 
+/* ------------------------------------------------- remote models (remote.c) */
+
+/* An in-memory harness: records the requests, answers from a script. */
+typedef struct TsFake {
+    StrBuf log;               /* every request line */
+    const char *peek;         /* answer to G / M */
+    int stop_on_step;         /* answer S with harness output + @stop */
+    int pending;              /* lines queued for read_line */
+    char queue[4][96];
+    int closed;
+} TsFake;
+
+static int ts_fake_write(void *user, const char *line)
+{
+    TsFake *f = (TsFake *)user;
+    sb_puts(&f->log, line);
+    f->pending = 0;
+    switch (line[0]) {
+    case 'C':
+    case 'R': break;
+    case 'G':
+    case 'M': snprintf(f->queue[f->pending++], 96, "@v %s", f->peek); break;
+    case 'S':
+        if (f->stop_on_step) {
+            snprintf(f->queue[f->pending++], 96, "[30000] %%Error: Top.sv:12: Assertion failed in TOP: boom");
+            snprintf(f->queue[f->pending++], 96, "%%Error: Top.sv:12: Verilog $stop");
+            snprintf(f->queue[f->pending++], 96, "@stop");
+            break;
+        }
+        snprintf(f->queue[f->pending++], 96, "@ok");
+        break;
+    case 'Q': snprintf(f->queue[f->pending++], 96, "@bye"); break;
+    case 'P':
+        if (strstr(line, "nosuch"))
+            snprintf(f->queue[f->pending++], 96, "@err no signal nosuch");
+        else
+            snprintf(f->queue[f->pending++], 96, "@ok");
+        break;
+    default: snprintf(f->queue[f->pending++], 96, "@ok"); break;
+    }
+    return 0;
+}
+
+static char *ts_fake_read(void *user)
+{
+    TsFake *f = (TsFake *)user;
+    char *r;
+    int i;
+    if (!f->pending)
+        return NULL;
+    r = xstrdup(f->queue[0]);
+    for (i = 1; i < f->pending; i++)
+        memcpy(f->queue[i - 1], f->queue[i], 96);
+    f->pending--;
+    return r;
+}
+
+static const char *ts_fake_path(void *user, const SimModel *m, int h)
+{
+    TERN_UNUSED(user);
+    return intern_cstr(sim_signal_path(m, h));
+}
+
+static void ts_fake_close(void *user)
+{
+    ((TsFake *)user)->closed = 1;
+}
+
+static void test_remote(void)
+{
+    TsFake fk;
+    TsFails fails;
+    SimRemoteIo io;
+    SimModel *sm;
+    IrBits b;
+    uint64_t w[2];
+    StrBuf sb = {0};
+    int en, cnt;
+    /* hex values */
+    b.width = 70;
+    b.w = w;
+    w[0] = UINT64_C(0x0123456789abcdef);
+    w[1] = 0x2a;
+    sim_remote_hex(&b, 70, &sb);
+    TS_CHECK(strcmp(sb_cstr(&sb), "2a0123456789abcdef") == 0);
+    w[0] = w[1] = 0;
+    TS_CHECK(sim_remote_unhex("2A0123456789ABCDEF", &b) && w[0] == UINT64_C(0x0123456789abcdef) && w[1] == 0x2a);
+    TS_CHECK(sim_remote_unhex(" ffxz", &b) && w[0] == 0xff00 && w[1] == 0); /* x/z read as 0 */
+    TS_CHECK(!sim_remote_unhex("12g4", &b));
+    sb_reset(&sb);
+    b.width = 1;
+    w[0] = 1;
+    sim_remote_hex(&b, 1, &sb);
+    TS_CHECK(strcmp(sb_cstr(&sb), "1") == 0);
+    sb_free(&sb);
+
+    /* a counter on the fake harness */
+    memset(&fk, 0, sizeof fk);
+    memset(&io, 0, sizeof io);
+    io.user = &fk;
+    io.write = ts_fake_write;
+    io.read_line = ts_fake_read;
+    io.path = ts_fake_path;
+    io.close = ts_fake_close;
+    ts_new_design();
+    ir_design_set_top(D, ts_counter("Counter", ir_type_reset(D, 0, 0), 8));
+    sm = sim_new_remote(D, D->top, 1, &io);
+    TS_CHECK(sm != NULL && sim_is_remote(sm));
+    if (!sm)
+        return;
+    TS_CHECK(strcmp(sb_cstr(&fk.log), "C 0 5000 0 clk\nR 0 rst\nI\n") == 0);
+    en = sim_find(sm, "en");
+    cnt = sim_find(sm, "count");
+    TS_EQ(sim_poke_u64(sm, cnt, 1), SIM_ERR_NOT_WRITABLE); /* metadata as built-in */
+    sb_reset(&fk.log);
+    TS_EQ(sim_poke_u64(sm, en, 1), SIM_OK);
+    sim_settle(sm);
+    sim_reset(sm);
+    sim_step(sm, 0, 5);
+    fk.peek = "05";
+    TS_EQ(sim_peek_u64(sm, cnt), 5);
+    sim_run_ns(sm, 25);
+    TS_CHECK(strcmp(sb_cstr(&fk.log), "P en 1\nE\nX 0\nS 0 5\nG count\nN 25\n") == 0);
+    TS_EQ(sim_cycle(sm, 0), 2 + 5 + 3); /* reset, steps, rising edges at +5, +15, +25 ns */
+    TS_EQ(sim_time_ps(sm), (uint64_t)(2 + 5) * 10000u + 25000u);
+    /* a stop (failed assertion) is one failure with the harness's message */
+    memset(&fails, 0, sizeof fails);
+    sim_set_fail_handler(sm, ts_on_fail, &fails);
+    fk.stop_on_step = 1;
+    sim_step(sm, 0, 1);
+    sim_step(sm, 0, 1);       /* no more requests after the stop */
+    TS_EQ(fails.n, 1);
+    TS_CHECK(strcmp(fails.what, "verilator: Top.sv:12: Assertion failed in TOP: boom") == 0);
+    sim_free(sm);
+    TS_CHECK(fk.closed);
+    TS_CHECK(strstr(sb_cstr(&fk.log), "Q\n") == NULL); /* not sent to a stopped model */
+    sb_free(&fk.log);
+}
+
 int main(void)
 {
     ts_setup_source();
@@ -2062,6 +2202,7 @@ int main(void)
     test_seeds();
     test_mem_mask_and_index();
     test_falling_and_derived();
+    test_remote();
     test_perf();
     arena_release(&ts_arena);
     src_free_all();

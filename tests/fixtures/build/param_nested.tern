@@ -1,0 +1,44 @@
+// §13.3: a parameterized module passes expressions of its own parameters
+// to a parameterized child (`Stage #(.W(W + 1))`).
+
+/// Registered stage with an enable.
+module Stage<W: uint> {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    in d: uint<W>
+    out q: uint<W>
+
+    reg r: uint<W> = 0
+    q = r
+    on clk {
+        if en { r = d }
+    }
+}
+
+/// Two stages; the second one is one bit wider and gets the sum.
+module Chain<W: uint> {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    in d: uint<W>
+    out q: uint<W + 1>
+
+    let s1 = Stage<W>(en, d)
+    let s2 = Stage<W + 1>(en, d: s1.q + d)
+    q = s2.q
+}
+
+#[top]
+module Chains {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    in a: u8
+    in b: uint<12>
+    out qa: uint<9>
+    out qb: uint<13>
+
+    qa = Chain<8>(en, d: a).q
+    qb = Chain<12>(en, d: b).q
+}

@@ -110,6 +110,7 @@ typedef struct BkBuildOptions {
     SvStd std;
     int emit_assertions;       /* --emit-assertions */
     int no_line_markers;       /* --no-line-markers */
+    int monomorphize;          /* --monomorphize: no SV parameters (every instance its own module) */
     const char *cmd;           /* "build" / "synth" (messages) */
 } BkBuildOptions;
 
@@ -139,10 +140,20 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b);
 int bk_build_write(BkBuild *b, int summary);
 void bk_build_free(BkBuild *b);
 
+/* Parameterized SystemVerilog (spec §13.3, params.c): collects candidate
+ * expressions and probe elaborations for the generic modules of d and
+ * attaches the emitter's plan (sv_params_plan).  Returns the number of
+ * modules emitted with parameters.  Release with sv_params_free(d). */
+int bk_params_prepare(struct Driver *dr, IrDesign *d, const SvOptions *o);
+
 /* Rewrites absolute source paths in emitted text (line markers, assertion
  * messages, the CDC report): `<from>/x` becomes `<to>x` for each pair, in
  * order.  from[i] must not end in '/'. */
 void bk_rewrite_paths(SvOutput *out, const char *const *from, const char *const *to, size_t n);
+
+/* The source file of an extern module's `path`: absolute, relative to the
+ * project root, or relative to the declaring file (loc).  Heap, or NULL. */
+char *bk_find_extern_source(const char *path, const char *root, Span loc);
 
 /* HDL files of an output in compile order (the package, extern module
  * sources, then the emitted modules children-first); names only. */
@@ -153,6 +164,17 @@ int bk_is_extern_file(const SvOutput *out, const char *name);
 const char *bk_build_top_name(BkBuild *b);
 
 /* ============================================================== verilator */
+
+/* `tern test --backend verilator` (vlsim.c): a SimModel of design d (its
+ * top) backed by a Verilator model built under <root>/build/verilator/<top>/
+ * and reused while the emitted sources are unchanged.  NULL after a
+ * diag_error (verilator missing, build failure). */
+struct SimModel;
+struct SimModel *vls_sim_new(const char *root, const IrDesign *d, uint64_t seed);
+/* TestRunOptions.remote: vls_sim_new under the project root (or the cwd) */
+struct SimModel *vls_test_model(void *user, struct Driver *dr, const IrDesign *d, uint64_t seed);
+int vls_available(void);                 /* verilator on PATH */
+const char *vls_harness_source(void);    /* tb_main.cpp, the generic harness */
 
 /* `verilator --lint-only` over the HDL files in dir.  Returns 0 clean,
  * 1 lint errors, -1 verilator not installed (a message was printed). */

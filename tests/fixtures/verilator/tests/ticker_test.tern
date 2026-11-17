@@ -1,0 +1,39 @@
+package vltest_test
+
+use vltest::{Ticker, Acc, up_counter}
+
+test "the extern counter counts enabled cycles" {
+    let dut = sim Ticker()
+    dut.en = false
+    dut.reset()
+    expect dut.count == 0
+    dut.en = true
+    dut.step(5)
+    expect dut.count == 5
+    expect !dut.quad
+    dut.step(3)
+    expect dut.count == 8 and dut.quad
+    expect dut.last == 7
+    expect dut.hist[3] == 7
+    dut.en = false
+    dut.step(4)
+    expect dut.count == 8
+}
+
+test "the extern module alone" {
+    let dut = sim up_counter<4>()
+    dut.en = true
+    dut.reset()
+    dut.step(18)
+    expect dut.count == 2
+}
+
+test "a Tern module with a wide sum" {
+    let dut = sim Acc<70>()
+    dut.add = 0x2_0000_0000_0000_0001
+    dut.reset()
+    dut.step(3)
+    expect dut.sum == 0x6_0000_0000_0000_0003
+    dut.run(ns: 40)
+    expect dut.cycle() == 9
+}

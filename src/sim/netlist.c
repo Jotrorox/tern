@@ -118,6 +118,8 @@ static void nl_flatten(SimModel *m, const IrModule *mod, uint32_t parent, const 
         vec_push(m->doms, d);
     }
     if (mod->is_extern) {
+        if (m->rops) /* simulated by the remote model */
+            return;
         diag_warning(parent == IR_NONE ? mod->loc : loc,
                      "extern module `%s` (instance `%s`) is a black box in simulation; its outputs "
                      "read as 0",
