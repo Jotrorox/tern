@@ -513,7 +513,7 @@ int cmd_test(int argc, char **argv)
         ap.errors++;
     }
     if (!ap.errors && engine == SIM_ENGINE_COMPILED && !sim_host_cc()) {
-        fprintf(stderr, "tern test: error: --sim compiled needs a host C compiler ($CC, cc, gcc, clang or cl)\n");
+        fprintf(stderr, "tern test: error: --sim compiled needs a host C compiler ($CC, cc, cl, gcc or clang)\n");
         ap.errors++;
     }
     if (ap.errors) {

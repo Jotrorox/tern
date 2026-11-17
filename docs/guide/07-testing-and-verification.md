@@ -227,6 +227,23 @@ tern test std                   # the standard library's own tests
 Tests run in parallel as separate worker processes, so a crashing test cannot
 take down the run.
 
+## Simulation speed
+
+The built-in simulator starts every design on its interpreter. Once a design
+has done a fair amount of work (roughly a quarter of a second of
+interpretation), Tern translates it to C, compiles it with the host C
+compiler (`$CC`, else `cc`, `cl`, `gcc` or `clang`) and switches to the
+compiled model; logic-heavy designs run an order of magnitude faster. Results
+are identical either way, and so are waveforms, coverage and failure
+reports. Compiled models are cached in `build/simcache/`, so later runs
+switch at once. Without a C compiler everything stays interpreted
+(`tern test -v` says so).
+
+```sh
+tern test --sim compiled        # compile every design up front
+tern test --sim interp          # never compile
+```
+
 ## Coverage
 
 `tern test --cover` reports line coverage (statements in blocks, plus

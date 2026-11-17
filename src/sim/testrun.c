@@ -85,11 +85,11 @@ int testrun_set_engine(Driver *dr, const char *cmd, const char *engine, int verb
         return -1;
     }
     if (e == SIM_ENGINE_COMPILED && !sim_host_cc()) {
-        fprintf(stderr, "tern %s: error: --sim compiled needs a host C compiler ($CC, cc, gcc, clang or cl)\n", cmd);
+        fprintf(stderr, "tern %s: error: --sim compiled needs a host C compiler ($CC, cc, cl, gcc or clang)\n", cmd);
         return -1;
     }
     if (verbose && e == SIM_ENGINE_AUTO && !sim_host_cc())
-        fprintf(stderr, "tern %s: note: no host C compiler found ($CC, cc, gcc, clang, cl); simulating with the "
+        fprintf(stderr, "tern %s: note: no host C compiler found ($CC, cc, cl, gcc, clang); simulating with the "
                         "interpreter\n", cmd);
     cache = testrun_simcache_dir(dr);
     sim_set_engine_defaults(e, cache);

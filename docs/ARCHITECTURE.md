@@ -50,7 +50,7 @@ spaces — the real syntax is ASCII).
 | `src/ir/` | `ir.h ir_build.c ir_json.c` | typed IR (contract below) and JSON form |
 | `src/check/` | `check.c drivers.c assign.c cdc.c unused.c poweron.c` | multiple/missing drivers, no-latch proof, clock-domain mixing |
 | `src/emit/` | `sv.c svparam.c constraints.c regmap.c` (+ private `svparam.h`) | SystemVerilog/Verilog-2005 (parameterized modules: `svparam.c`), .xdc/.sdc, regmap .h/.svd/.md |
-| `src/sim/` | `bitvec.c netlist.c eval.c vcd.c remote.c testrun.c cmd_test.c cmd_sim.c` (+ `sim.h`, `testrun.h`, private `sim_impl.h`) | cycle-based simulator, remote (Verilator) models, `test` interpreter |
+| `src/sim/` | `bitvec.c netlist.c eval.c vcd.c remote.c simc.c testrun.c cmd_test.c cmd_sim.c` (+ `sim.h`, `testrun.h`, private `sim_impl.h`) | cycle-based simulator, compiled simulator (C via the host compiler), remote (Verilator) models, `test` interpreter |
 | `src/backend/` | `target.c build.c params.c vlsim.c vlharness.c verilator.c vcdread.c formal.c prove.c synth.c cmd_synth.c` (+ `backend.h`) | `tern build`, `tern prove`, `tern synth`: targets, emitted-file output, SymbiYosys / Yosys / Vivado / Quartus scripts and result parsers |
 | `src/pkg/` | `toml.c manifest.c lock.c git.c cmd_pkg.c` (+ `pkg.h`) | tern.toml, tern.lock, semver, dependency resolution, git; `tern new/add/update/vendor/publish` (docs/packages.md, docs/registry.md) |
 | `src/lsp/` | `rpc.c lsp.c lsp_nav.c` (+ `lsp.h`, private `lsp_impl.h`) | JSON-RPC language server over stdio (`tern lsp`, docs/editors.md) |
@@ -58,7 +58,7 @@ spaces — the real syntax is ASCII).
 | `src/` | `main.c cmds.h cmd_parse.c cmd_check.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, `tern parse`, `tern check`, shared front-end driver, embedded std |
 | `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>/`) |
 | `tools/` | `embed.c` | embeds `std/**/*.tern` into `src/std_embed.c` (committed) |
-| `tests/` | `run.c`, `doc_snippets.c`, `unit/test_{base,sim,pkg,tools,fmt,emit,lsp}.c`, `fixtures/**`, `lsp/*.session`, `fuzz/fuzz_parser.c` | golden-file test runner, documentation snippet checker (`make test-docs`), unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
+| `tests/` | `run.c`, `doc_snippets.c`, `unit/test_{base,sim,simc,pkg,tools,fmt,emit,lsp,elab}.c`, `unit/simc_bench.tern`, `fixtures/**`, `lsp/*.session`, `fuzz/fuzz_parser.c` | golden-file test runner, documentation snippet checker (`make test-docs`), unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
 | `examples/` | `uart_loopback/ sensor_bridge/ smoother/` (tern.toml, src/, tests/, sim/tb_*.sv) | example projects; `make examples` (part of `make test`) runs check, test, build and fmt --check in each, and their iverilog benches against the emitted RTL when iverilog is installed |
 
 ## Pipeline
@@ -425,6 +425,69 @@ assignments and conditions read), so a block that drives `s.valid` from one
 input and its source's `ready` from `s.ready` is not a loop. Only a cycle
 that remains is reported.
 
+### Compiled simulator (`src/sim/simc.c`, spec §13.7)
+
+The interpreter runs the instruction list that `netlist.c` compiles the
+flattened design into (`SimInsn`, over one `uint64_t` value array). The
+compiled engine translates the same list into C, builds it with the host C
+compiler into a shared library and calls it instead of `sim_exec` for the
+three kinds of code region (`sim_exec_region`: region 0 = comb settle,
+`1 + d` = clocked code of flattened domain `d`, `1 + ndoms + g` = property
+leaves of edge group `g`). Everything else stays in `eval.c` — state
+layout, settle loop, clock edges, hold/commit, async resets, memories'
+pending writes, properties, VCD, `#[test_port]` forces — so the two engines
+are bit-identical by construction:
+
+* One C statement per instruction, same masks, same order; constants are
+  inlined; jumps are `goto`s, case tables C `switch`es. Expression
+  temporaries become C locals when no chunk reads them before writing them
+  (a liveness pass per chunk, forward jumps only); regions are split into
+  functions of ~2000 instructions at points that no jump and no
+  temporary's def-use range crosses. Chunks without calls declare `v` and
+  `cov` `restrict`. Wide copies, muxes, bitwise ops, add/sub, eq/ne,
+  constant slices/deposits and zero-extension are inlined limb by limb;
+  everything else (wide mul/div/shift/compare, memory writes, dynamic wide
+  indexing, active test_port forces) calls back into the interpreter for
+  that one instruction (`rt->insn(m, pc)`). Coverage counters are
+  incremented inline, so `--cover` works with either engine.
+* ABI (`SC_ABI`): the library exports `tern_abi()`, `tern_id()` (hash of
+  the source, checked on load) and `tern_exec(TernRt *, region)`; `TernRt`
+  carries `v`, `cov`, memory row pointers, `&nforced` and the two
+  callbacks. The generated file includes no headers.
+* Host compiler: `$CC` (split at spaces), else `cc`, `cl`, `gcc`, `clang`,
+  `tcc` from PATH; `-O1 -shared -fPIC` (cl: `/nologo /O1 /LD`). Loaded with
+  `os_dl_open/os_dl_sym` (dlopen / LoadLibrary). The Makefile links `-ldl`
+  only where a link probe needs it (`$(OBJ)/dl.flags`; glibc < 2.34); a
+  one-command `cc -o tern src/unity.c` on such old glibc needs `-ldl` too.
+* Cache: `<cache>/<hash>.so|.dylib|.dll`, the hash covering source,
+  compiler argv, flags and ABI. A compile writes `<hash>-<pid>-<n>.c` and
+  a temporary library and renames it into place, so parallel test workers
+  never load a partial file (if the rename fails because another worker's
+  copy is loaded on Windows, that copy is used). `tern test` / `tern sim`
+  use `<project>/build/simcache` (`$TERN_SIMCACHE` overrides; outside a
+  project `<temp>/tern-simcache`). `TERN_SIMC_KEEP=1` keeps the generated
+  `.c` next to the library for debugging.
+* Engines (`sim_set_engine_defaults`, `--sim auto|interp|compiled` of
+  `tern test` and `tern sim`): `interp` never compiles; `compiled` compiles
+  (or loads the cache) in `sim_new` and fails the model with a diagnostic
+  when that fails (the commands refuse `--sim compiled` without a
+  compiler); `auto` (default) interprets and counts executed region
+  lengths; after 2^26 (`SC_AUTO_WORK`, about a quarter second of
+  interpretation) it generates the C — a cache hit switches at once,
+  otherwise the compiler runs in the background (polled every 2^21) and the
+  model switches when it is done. No compiler or a failed compile: it stays
+  interpreted silently (`tern test -v` notes a missing compiler). Since
+  both engines give identical results, when the switch happens is
+  invisible; the decision itself only depends on the work done. Small
+  designs and short tests (all of `make test`'s std tests but one) never
+  reach the threshold, so `auto` costs them nothing.
+* Speed (Apple M-series, clang -O1, `build/test_simc`): a CRC-32 x8
+  pipeline (6.5k instructions/cycle) runs 11-15x faster compiled; the
+  examples' smoother 2.5x and a 32-bit counter 1.3x, where the per-cycle
+  harness (clock edges, settle loop, the property engine) dominates. On
+  macOS the first `dlopen` of each new library costs ~0.1 s (code
+  signature check); cached libraries load fast.
+
 ## Language server (`src/lsp/`, spec §13.2)
 
 `tern lsp` (docs/editors.md for clients and features) is three files:
@@ -588,6 +651,18 @@ them back with `ir_from_json` and drives them in the simulator: register-file
 bus transactions on AXI4-Lite, APB and Wishbone, out-of-range indices,
 indices into arrays of bundles, `return` in branches, and hover output for
 code that was never elaborated.
+
+`build/test_simc` (`tests/unit/test_simc.c`, skipped without a host C
+compiler, and on Windows when `cl` cannot build a model) checks the
+compiled simulator: it re-runs every check of `test_sim.c` with
+`SIM_ENGINE_COMPILED`, runs every module of `tests/fixtures/**` that
+`tern ir --json --top <M>` elaborates on the interpreter and on its
+compiled model side by side (random pokes, test_port releases, steps of
+random domains, `run_ns`, resets; every signal, memory word, failure
+count, pending obligation and coverage count compared after every step),
+checks the `auto` switch with a background compile, and prints a
+benchmark (`build/test_simc --bench` runs only that). `tern test --sim
+compiled std` must pass as well.
 
 So these commands must accept a single `.tern` file outside a project, and
 `build` must support `--stdout` (all emitted modules to stdout). Output and

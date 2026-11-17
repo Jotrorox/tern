@@ -20,7 +20,7 @@ its JSON form is documented in [ir-schema.md](../ir-schema.md).
 | `tern new <name> [--no-git]` | project skeleton with `tern.toml`, `src/`, `tests/` |
 | `tern check [files] [--unused] [--cdc-report]` | every compile-time check without writing files; CDC report; unused signals |
 | `tern build [--target t] [--top m] [-o dir \| --stdout]` | elaborate, check and write `build/<target>/`: `.sv` files, constraint fragments, memory init files, regmap headers |
-| `tern test [paths] [filter] [--waves] [--seed n] [--cover] [-j n] [--list]` | run `test` blocks on the built-in simulator |
+| `tern test [paths] [filter] [--waves] [--seed n] [--cover] [-j n] [--list] [--sim auto\|interp\|compiled]` | run `test` blocks on the built-in simulator (interpreted, or compiled to C with the host compiler) |
 | `tern sim <top> [--vcd f] [script]` | interactive stimulus REPL, or a stimulus script |
 | `tern prove <module> [--depth n] [--induct]` | formal verification via Yosys and SymbiYosys |
 | `tern synth [--target t] [--tool yosys\|vivado\|quartus]` | run synthesis with a generated script; utilization and timing summary |

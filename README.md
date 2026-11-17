@@ -239,8 +239,9 @@ and lints and synthesizes it with Verilator and Yosys.
 
 This is an early release. Known limitations:
 
-* **The simulator is an interpreter.** The spec's planned compile-to-C mode is
-  not implemented, so very long tests on large designs are slow.
+* **The compiled simulator needs a host C compiler.** Long tests switch from
+  the interpreter to a model compiled with `$CC`/`cc`/`cl` (`--sim auto`);
+  without a compiler they stay interpreted, which is slow on large designs.
 * **No Verilator test backend.** Tests that instantiate an `extern module`
   cannot run, because `tern test` only accepts `--backend builtin`.
 * **External tools for formal and synthesis.** `tern prove` and `tern synth`

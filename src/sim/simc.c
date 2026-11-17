@@ -22,8 +22,8 @@
  * 1 + i = clocked code of flattened domain i, 1 + ndoms + g = property
  * leaves of edge group g.
  *
- * Host compiler: $CC (split at spaces), else cc, gcc, clang, cl (MSVC,
- * Windows), whichever is found first on PATH.  Flags: -O1 -shared -fPIC
+ * Host compiler: $CC (split at spaces), else cc, cl (MSVC), gcc, clang or
+ * tcc, whichever is found first on PATH.  Flags: -O1 -shared -fPIC
  * (cl: /O1 /LD).  Models are cached as <cache>/<hash><ext>, the hash
  * covering the source, the compiler command and the flags; a compile
  * writes unique temporary names and renames the library into place, so
@@ -183,7 +183,7 @@ const char *sim_host_cc(void)
 {
     if (!sc_cc_probed) {
         char *env = os_getenv("CC");
-        static const char *const fallbacks[] = {"cc", "gcc", "clang", "cl", "tcc"};
+        static const char *const fallbacks[] = {"cc", "cl", "gcc", "clang", "tcc"};
         size_t i;
         sc_cc_probed = 1;
         if (env && *env && sc_try_cc(env)) {
@@ -968,9 +968,11 @@ static int sc_operands(const SimInsn *in, ScOpnd *o)
     return n;
 }
 
+/* instructions whose generated code addresses their operands as v[...]
+ * directly (wide ops, and the narrow slices of wide values) */
 static int sc_is_wide_op(const SimInsn *in)
 {
-    return in->op >= SOP_WCOPY && in->op <= SOP_WDEPOSIT_DYN;
+    return (in->op >= SOP_WCOPY && in->op <= SOP_WDEPOSIT_DYN) || in->op == SOP_XSLICE || in->op == SOP_XINDEX;
 }
 
 static int sc_is_temp(const SimModel *m, uint32_t x)
@@ -1429,6 +1431,17 @@ static int sc_load(SimModel *m, const char *path, const char *id, char **err)
     return 1;
 }
 
+/* cl reads '/' as an option prefix: give it Windows paths (after the first
+ * three characters, which hold the option itself) */
+static char *sc_backslashes(char *s)
+{
+    char *q;
+    for (q = s + (s[0] == '/' ? 3 : 0); *q; q++)
+        if (*q == '/')
+            *q = '\\';
+    return s;
+}
+
 static char *sc_hex64(uint64_t h)
 {
     char buf[17];
@@ -1450,7 +1463,7 @@ static int sc_begin(SimModel *m, char **err)
     VEC(char *) argv = {0};
     const char *ext = os_dl_ext();
     if (!sim_host_cc()) {
-        *err = xstrdup("no host C compiler found ($CC, cc, gcc, clang, cl)");
+        *err = xstrdup("no host C compiler found ($CC, cc, cl, gcc, clang)");
         return 0;
     }
     if (!sc_generate(m, &src)) {
@@ -1474,6 +1487,8 @@ static int sc_begin(SimModel *m, char **err)
     dir = sc_cache_dir();
     os_mkdir_p(dir);
     sb_printf(&p, "%s/%s%s", dir, hex, ext);
+    free(c->final_path);
+    free(c->id);
     c->final_path = sb_take(&p);
     c->id = idstr;
     if (os_is_file(c->final_path)) {
@@ -1512,12 +1527,12 @@ static int sc_begin(SimModel *m, char **err)
         vec_push(argv, xstrdup("/O1"));
         vec_push(argv, xstrdup("/LD"));
         sb_printf(&p, "/Fe%s", c->tmp_out);
-        vec_push(argv, sb_take(&p));
+        vec_push(argv, sc_backslashes(sb_take(&p)));
         sb_puts(&p, "/Fo");
         sb_append(&p, c->tmp_out, n);
         sb_puts(&p, ".obj");
-        vec_push(argv, sb_take(&p));
-        vec_push(argv, xstrdup(c->src_path));
+        vec_push(argv, sc_backslashes(sb_take(&p)));
+        vec_push(argv, sc_backslashes(xstrdup(c->src_path)));
     } else {
         vec_push(argv, xstrdup("-O1"));
         vec_push(argv, xstrdup("-shared"));

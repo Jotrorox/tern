@@ -197,8 +197,8 @@ void sim_vcd_close(SimModel *m);
 /* ---------------------------------------------------- compiled engine -- */
 
 /* The compiled simulator (simc.c, spec 13.7): the model's instruction list
- * is translated to C, built with the host C compiler ($CC, else cc, gcc,
- * clang, cl) into a shared library cached under the cache directory, and
+ * is translated to C, built with the host C compiler ($CC, else cc, cl,
+ * gcc, clang) into a shared library cached under the cache directory, and
  * run instead of the interpreter. Values, the test API, VCD, properties,
  * coverage and #[test_port] overrides behave identically.
  *   SIM_ENGINE_INTERP    always interpret

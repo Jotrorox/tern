@@ -610,7 +610,7 @@ int main(int argc, char **argv)
             tc_tern = argv[i];
     }
     if (!sim_host_cc()) {
-        printf("simc unit tests: no host C compiler ($CC, cc, gcc, clang, cl), skipped\n");
+        printf("simc unit tests: no host C compiler ($CC, cc, cl, gcc, clang), skipped\n");
         return 0;
     }
     /* cl needs a developer prompt; elsewhere a compiler that cannot build a
