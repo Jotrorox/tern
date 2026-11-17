@@ -104,7 +104,8 @@ static int bk_add_externs(BkBuild *b)
                 continue;
             src = bk_find_extern_source(m->extern_file, b->root, m->loc);
             if (!src || os_read_file(src, &text, &len) != 0) {
-                diag_error(m->loc, "cannot find the source of extern module `%s`: \"%s\"", m->name, m->extern_file);
+                diag_error(m->loc, "cannot find the source of extern module `%s`: \"%s\"",
+                           m->tern_name ? m->tern_name : m->name, m->extern_file);
                 diag_help("extern paths are relative to the project root (or to the declaring file)");
                 free(src);
                 errs++;
