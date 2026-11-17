@@ -135,6 +135,75 @@ void rmap_emit_header(const IrRegmap *r, StrBuf *out);
 void rmap_emit_svd(const IrRegmap *r, StrBuf *out);
 void rmap_emit_markdown(const IrRegmap *r, StrBuf *out);
 
+/* ------------------------------------------- parameterized modules -- */
+
+/* Spec §13.3: value generics become SystemVerilog parameters where that is
+ * exact, and stay monomorphized otherwise.  The front end hands the emitter,
+ * per generic module declaration, expressions over its generics found in
+ * the source (SvXExpr trees) and extra elaborations with other argument
+ * values ("probes"); sv_params_plan() then
+ *
+ *   1. groups the modules of the design by declaration (IrModule.origin;
+ *      only declarations whose generics are all uint (< 2^31) or bool, not
+ *      extern / CDC primitives / with initialized memories),
+ *   2. walks every elaboration (the design's instances plus the probes) in
+ *      lockstep: the IR must be identical except for numbers (signal
+ *      widths, memory depths, constants, reset values, slice positions,
+ *      child generic arguments), and each number that differs must equal
+ *      one candidate expression in every elaboration (candidates: the
+ *      source expressions, the generics, and simple derived forms such as
+ *      `e + 1`); every generic must take two values among the elaborations,
+ *   3. emits each elaboration with those numbers printed as the expressions
+ *      (SV-2012 and Verilog-2005, with and without assertions) and accepts
+ *      the group only if all texts are identical (types declared inside the
+ *      module are compared by position, not name).
+ *
+ * An accepted group is one SV module named after the declaration
+ * (`Blinky`, with `parameter int unsigned CLK_HZ = 50000000`), and its
+ * instances pass `#(.CLK_HZ(..))`; the plan is attached to the design
+ * (IrDesign.sv_params) and used by every later emission and by SvNames. */
+
+typedef enum SvXOp {
+    SVX_K,        /* constant k */
+    SVX_PARAM,    /* generic number `param` */
+    SVX_LOCAL,    /* a module const `name` = a (emitted as a localparam) */
+    SVX_ADD, SVX_SUB, SVX_MUL, SVX_DIV, SVX_MOD, SVX_SHL, SVX_SHR,
+    SVX_AND, SVX_OR, SVX_XOR,
+    SVX_EQ, SVX_NE, SVX_LT, SVX_LE, SVX_GT, SVX_GE, SVX_LAND, SVX_LOR,
+    SVX_CLOG2,    /* clog2(a) == $clog2(a) */
+    SVX_COND      /* a ? b : c */
+} SvXOp;
+
+typedef struct SvXExpr {
+    SvXOp op;
+    int64_t k;
+    uint32_t param;
+    const char *name;         /* SVX_LOCAL (interned) */
+    struct SvXExpr *a, *b, *c;
+} SvXExpr;
+
+typedef struct SvParamItem {
+    const void *item;         /* IrOrigin.item of the declaration */
+    uint32_t ncands;
+    SvXExpr **cands;          /* expressions over the generics, in source order */
+    uint32_t nprobes;
+    IrDesign **probes;        /* other elaborations: designs whose top is the module */
+} SvParamItem;
+
+typedef struct SvParamInput {
+    const SvParamItem *items;
+    size_t n;
+} SvParamInput;
+
+/* Decides which module groups of `d` are emitted parameterized and attaches
+ * the plan to d (replacing an earlier one).  Probe designs are not
+ * referenced afterwards.  Returns the number of accepted groups. */
+int sv_params_plan(IrDesign *d, const SvParamInput *in, const SvOptions *o);
+void sv_params_free(IrDesign *d);
+/* Evaluates x with the given generic values; 0 if it is undefined or
+ * leaves [0, 2^31) anywhere (SystemVerilog `int unsigned` arithmetic). */
+int sv_xexpr_eval(const SvXExpr *x, const int64_t *params, int64_t *out);
+
 /* -------------------------------------------------------------- names -- */
 
 /* The identifiers the emitter uses (keyword escaping and collision

@@ -1973,10 +1973,46 @@ static void elb_module_attrs(Elab *el, ModCtx *mc)
     }
 }
 
+/* IrModule.origin: the declaration and its generic arguments (for back ends
+ * that re-elaborate it, e.g. parameterized SystemVerilog) */
+static void elb_origin(Elab *el, ModCtx *mc)
+{
+    uint32_t i;
+    ValModule *vm = mc->vm;
+    Arena *a = el->design->arena;
+    IrOrigin *o = ANEW(a, IrOrigin);
+    GenericParams *gp = vm->item->kind == ITEM_MODULE ? &vm->item->u.module.generics
+                                                      : &vm->item->u.extern_mod.generics;
+    o->item = vm->item;
+    o->file = vm->file;
+    o->ngenerics = vm->args.n;
+    o->generics = ANEWN(a, IrGeneric, vm->args.n ? vm->args.n : 1);
+    for (i = 0; i < vm->args.n; i++) {
+        IrGeneric *g = &o->generics[i];
+        const Value *v = &vm->args.items[i].val;
+        g->name = vm->args.items[i].name;
+        g->kind = IRG_OTHER;
+        if (i < gp->n && gp->items[i].kind == GENERIC_TYPE)
+            continue;
+        if (v->kind == VAL_INT) {
+            int64_t x = 0;
+            g->fits = val_get_i64(v, &x);
+            g->value = x;
+            g->kind = (v->ty && v->ty->kind == TY_SINT) || (g->fits && x < 0) ? IRG_SINT : IRG_UINT;
+        } else if (v->kind == VAL_BOOL) {
+            g->kind = IRG_BOOL;
+            g->fits = 1;
+            g->value = v->u.i ? 1 : 0;
+        }
+    }
+    mc->ir->origin = o;
+}
+
 static void elb_params(Elab *el, ModCtx *mc)
 {
     uint32_t i;
     ValModule *vm = mc->vm;
+    elb_origin(el, mc);
     for (i = 0; i < vm->args.n; i++) {
         Value *v = &vm->args.items[i].val;
         if (v->kind == VAL_INT) {

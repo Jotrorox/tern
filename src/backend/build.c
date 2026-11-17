@@ -271,6 +271,10 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b)
     b->sv.constraints = b->target.constraints;
     if (o->no_line_markers)
         b->sv.line_markers = 0;
+    /* value generics -> SystemVerilog parameters where exact (spec 13.3) */
+    if (!o->monomorphize)
+        for (i = 0; i < b->ndesigns; i++)
+            bk_params_prepare(dr, b->designs[i], &b->sv);
     for (i = 0; i < b->ndesigns; i++) {
         SvOutput one;
         memset(&one, 0, sizeof one);
@@ -398,6 +402,9 @@ int bk_build_write(BkBuild *b, int summary)
 
 void bk_build_free(BkBuild *b)
 {
+    size_t i;
+    for (i = 0; i < b->ndesigns; i++)
+        sv_params_free(b->designs[i]);
     if (b->dr)
         driver_free(b->dr);
     sv_output_free(&b->out);
@@ -448,6 +455,8 @@ int cmd_build(int argc, char **argv)
             o.emit_assertions = 1;
         } else if (args_flag(&ap, "no-line-markers")) {
             o.no_line_markers = 1;
+        } else if (args_flag(&ap, "monomorphize")) {
+            o.monomorphize = 1;
         } else if (args_flag(&ap, "lint")) {
             lint = 1;
         } else if (args_flag(&ap, "quiet|q")) {

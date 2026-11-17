@@ -33,6 +33,8 @@ static const MainCmd main_cmds[] = {
      "  --emit-assertions   keep assertions and properties (assert/assume/cover property)\n"
      "  --features <list>   enable/disable features: a,b,-c (after the target's)\n"
      "  --no-line-markers   no `// tern: file:line` markers\n"
+     "  --monomorphize      one module per generic instantiation (Fifo_u8_64) even\n"
+     "                      where value generics can be SV parameters\n"
      "  --lint              run `verilator --lint-only` on the output\n"
      "  -q, --quiet         no summary\n"},
     {"check", cmd_check, "Project", "[<file.tern>...] [--top <m>] [--unused] [--cdc-report] [--strict]",

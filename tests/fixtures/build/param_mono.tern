@@ -1,0 +1,44 @@
+// §13.3: a generic that changes structure stays monomorphized: the loop
+// count of Delay<N> unrolls into N registers (Delay_2, Delay_3), while the
+// width generic of Tap is a parameter.
+
+/// N-stage delay line (unrolled: one register per stage).
+module Delay<N: uint> {
+    in clk: clock
+    in rst: reset
+    in d: u8
+    out q: u8
+
+    reg r: [u8; N] = all0
+    q = r[N - 1]
+    on clk {
+        r[0] = d
+        for i in 1..N { r[i] = r[i - 1] }
+    }
+}
+
+/// Registered input, width as a parameter.
+module Tap<W: uint> {
+    in clk: clock
+    in rst: reset
+    in d: uint<W>
+    out q: uint<W>
+
+    reg r: uint<W> = 0
+    q = r
+    on clk { r = d }
+}
+
+#[top]
+module Lines {
+    in clk: clock
+    in rst: reset
+    in d: u8
+    out q2: u8
+    out q3: u8
+    out t: uint<4>
+
+    q2 = Delay<2>(d).q
+    q3 = Delay<3>(d).q
+    t = Tap<4>(d: d[3:0]).q
+}

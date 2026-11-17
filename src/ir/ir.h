@@ -22,6 +22,9 @@
  *   - Arrays that the ir_add_* helpers append to grow by doubling inside the
  *     arena; an array a module was given by other means must not be appended
  *     to with them (ir_from_json() allocates compatible arrays).
+ *   - IrModule.origin (declaration + generic arguments) and IrDesign.sv_params
+ *     (the emitter's parameterization plan): side channels for `tern build`,
+ *     not part of the JSON form.
  */
 #ifndef TERN_IR_H
 #define TERN_IR_H
@@ -347,6 +350,31 @@ typedef struct IrParam {      /* resolved value generic, for readability */
     int is_signed;
 } IrParam;
 
+/* Where a module came from, for back ends that re-elaborate a declaration
+ * with other generic arguments (parameterized SystemVerilog, §13.3).  Set
+ * by the elaborator; not serialized (NULL for IR read from JSON or built
+ * with the builder API). */
+typedef enum IrGenericKind {
+    IRG_UINT,     /* unsigned integer value */
+    IRG_SINT,     /* signed integer value */
+    IRG_BOOL,     /* bool value (0 / 1) */
+    IRG_OTHER     /* any other value (enum, array, ...) or a type */
+} IrGenericKind;
+
+typedef struct IrGeneric {
+    const char *name;         /* generic parameter name (interned) */
+    IrGenericKind kind;
+    int fits;                 /* UINT/SINT/BOOL: value fits in int64 */
+    int64_t value;
+} IrGeneric;
+
+typedef struct IrOrigin {
+    const void *item;         /* the module declaration (an AST Item) */
+    const void *file;         /* its FileUnit */
+    uint32_t ngenerics;       /* every generic parameter, in declaration order */
+    IrGeneric *generics;
+} IrOrigin;
+
 typedef enum IrCdcKind {
     IRC_SYNC2, IRC_SYNC3, IRC_PULSE, IRC_HANDSHAKE, IRC_ASYNC_FIFO,
     IRC_RESET_SYNC, IRC_RESET_BRIDGE, IRC_GRAY, IRC_UNSAFE
@@ -381,6 +409,7 @@ struct IrModule {
     const char *extern_file;  /* path given in `extern module m("file.sv")` */
     int is_cdc;               /* a std::cdc primitive (#[cdc(...)]) */
     IrCdcKind cdc_kind;
+    IrOrigin *origin;         /* elaborator side channel (see IrOrigin), or NULL */
     Span loc;
 };
 
@@ -438,6 +467,8 @@ typedef struct IrDesign {
     uint32_t ncrossings;
     IrCrossing *crossings;
     struct IrBuildState *build; /* ir_build.c private (type interning); may be NULL */
+    struct SvParamPlan *sv_params; /* src/emit private: modules emitted as parameterized
+                                      SV modules (sv_params_plan); NULL: all monomorphized */
 } IrDesign;
 
 /* ------------------------------------------------- builder helpers ---- */

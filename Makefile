@@ -47,7 +47,7 @@ HDRS = \
 	src/os/os.h \
 	src/syntax/token.h src/syntax/lexer.h src/syntax/ast.h src/syntax/parser.h \
 	src/ir/ir.h \
-	src/emit/emit.h \
+	src/emit/emit.h src/emit/svparam.h \
 	src/sim/sim.h src/sim/sim_impl.h src/sim/testrun.h \
 	src/pkg/pkg.h \
 	src/lsp/lsp.h src/lsp/lsp_impl.h \
@@ -213,16 +213,20 @@ $(OBJ)/check_unused.o: src/check/unused.c $(HDRS) $(OBJ)/.dir
 # --- emit/
 EMIT_SRCS = \
 	src/emit/sv.c \
+	src/emit/svparam.c \
 	src/emit/constraints.c \
 	src/emit/regmap.c \
 	src/emit/cmd_emit.c
 EMIT_OBJS = \
 	$(OBJ)/emit_sv.o \
+	$(OBJ)/emit_svparam.o \
 	$(OBJ)/emit_constraints.o \
 	$(OBJ)/emit_regmap.o \
 	$(OBJ)/emit_cmd_emit.o
 $(OBJ)/emit_sv.o: src/emit/sv.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/emit/sv.c -o $@
+$(OBJ)/emit_svparam.o: src/emit/svparam.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/emit/svparam.c -o $@
 $(OBJ)/emit_constraints.o: src/emit/constraints.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/emit/constraints.c -o $@
 $(OBJ)/emit_regmap.o: src/emit/regmap.c $(HDRS) $(OBJ)/.dir
@@ -266,6 +270,7 @@ $(OBJ)/sim_cmd_sim.o: src/sim/cmd_sim.c $(HDRS) $(OBJ)/.dir
 BACKEND_SRCS = \
 	src/backend/target.c \
 	src/backend/build.c \
+	src/backend/params.c \
 	src/backend/verilator.c \
 	src/backend/vcdread.c \
 	src/backend/formal.c \
@@ -275,6 +280,7 @@ BACKEND_SRCS = \
 BACKEND_OBJS = \
 	$(OBJ)/backend_target.o \
 	$(OBJ)/backend_build.o \
+	$(OBJ)/backend_params.o \
 	$(OBJ)/backend_verilator.o \
 	$(OBJ)/backend_vcdread.o \
 	$(OBJ)/backend_formal.o \
@@ -285,6 +291,8 @@ $(OBJ)/backend_target.o: src/backend/target.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/target.c -o $@
 $(OBJ)/backend_build.o: src/backend/build.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/build.c -o $@
+$(OBJ)/backend_params.o: src/backend/params.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/params.c -o $@
 $(OBJ)/backend_verilator.o: src/backend/verilator.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/verilator.c -o $@
 $(OBJ)/backend_vcdread.o: src/backend/vcdread.c $(HDRS) $(OBJ)/.dir

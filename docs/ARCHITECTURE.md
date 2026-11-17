@@ -49,9 +49,9 @@ spaces — the real syntax is ASCII).
 | `src/elab/` | `value.[ch] consteval.c elab.c mono.c regfile.c` (+ `elab.h`) | const interpreter, generics, unrolling, AST→IR, generated RegisterFile bodies |
 | `src/ir/` | `ir.h ir_build.c ir_json.c` | typed IR (contract below) and JSON form |
 | `src/check/` | `check.c` | multiple/missing drivers, no-latch proof, clock-domain mixing |
-| `src/emit/` | `sv.c constraints.c regmap.c` | SystemVerilog/Verilog-2005, .xdc/.sdc, regmap .h/.svd/.md |
+| `src/emit/` | `sv.c svparam.c constraints.c regmap.c` (+ private `svparam.h`) | SystemVerilog/Verilog-2005 (parameterized modules: `svparam.c`), .xdc/.sdc, regmap .h/.svd/.md |
 | `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
-| `src/backend/` | `target.c build.c verilator.c vcdread.c formal.c prove.c synth.c cmd_synth.c` (+ `backend.h`) | `tern build`, `tern prove`, `tern synth`: targets, emitted-file output, SymbiYosys / Yosys / Vivado / Quartus scripts and result parsers |
+| `src/backend/` | `target.c build.c params.c verilator.c vcdread.c formal.c prove.c synth.c cmd_synth.c` (+ `backend.h`) | `tern build`, `tern prove`, `tern synth`: targets, emitted-file output, SymbiYosys / Yosys / Vivado / Quartus scripts and result parsers |
 | `src/pkg/` | `toml.c manifest.c lock.c git.c cmd_pkg.c` (+ `pkg.h`) | tern.toml, tern.lock, semver, dependency resolution, git; `tern new/add/update/vendor/publish` (docs/packages.md, docs/registry.md) |
 | `src/lsp/` | `rpc.c lsp.c lsp_nav.c` (+ `lsp.h`, private `lsp_impl.h`) | JSON-RPC language server over stdio (`tern lsp`, docs/editors.md) |
 | `src/tools/` | `fmt.c doc.c import.c remap.c` | formatter, HTML docs, `tern import` (SV → extern), `tern remap` (docs/migration.md) |
@@ -229,7 +229,13 @@ comments. Key points:
 * Value generics are resolved; every distinct instantiation is its own
   `IrModule` (monomorphized, mangled name `Fifo_u8_64`; modules without
   generics keep their name). Value generics are recorded as `params` so the
-  emitter can print them as `localparam`s.
+  emitter can print them as `localparam`s. `IrModule.origin` (not
+  serialized) names the declaration and every generic argument; `tern
+  build` uses it to emit the instances of one declaration as a single
+  parameterized SV module where that is exact (`bk_params_prepare` in
+  `src/backend/params.c` collects candidate expressions and probe
+  elaborations, `sv_params_plan` in `src/emit/` decides and attaches the plan
+  to `IrDesign.sv_params`; docs/emitted-sv.md, "Generic parameters").
 * Unrolled-loop names get the iteration appended (`r_0`, `r_1`).
 * Processes are `comb` or clocked (by domain). Reset is not in the statements:
   the registers a clocked process drives are listed in `regs`, and each reg's
@@ -545,8 +551,10 @@ synthesis tool.
 **`tern build`** (`build.c`). `bk_build_run`: driver -> the tops (`--top`,
 else the target's `top`, else every `#[top]` of the user files, else the
 first module without required generics), each elaborated into its own
-design -> `check_design` (errors fail the build) -> `emit_design` with the
-target's options -> one merged `SvOutput`. Absolute source paths in line
+design -> `check_design` (errors fail the build) -> `bk_params_prepare`
+(generic modules that become parameterized SV modules; `--monomorphize`
+skips it) -> `emit_design` with the target's options -> one merged
+`SvOutput`. Absolute source paths in line
 markers are rewritten to project-relative ones (`bk_rewrite_paths`; the
 development `std/` directory becomes `std/...`), so builds are
 reproducible across checkouts. Extern module sources are found relative to

@@ -110,6 +110,7 @@ typedef struct BkBuildOptions {
     SvStd std;
     int emit_assertions;       /* --emit-assertions */
     int no_line_markers;       /* --no-line-markers */
+    int monomorphize;          /* --monomorphize: no SV parameters (every instance its own module) */
     const char *cmd;           /* "build" / "synth" (messages) */
 } BkBuildOptions;
 
@@ -138,6 +139,12 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b);
  * summary, prints what was written.  Returns 0 or -1 (reported). */
 int bk_build_write(BkBuild *b, int summary);
 void bk_build_free(BkBuild *b);
+
+/* Parameterized SystemVerilog (spec §13.3, params.c): collects candidate
+ * expressions and probe elaborations for the generic modules of d and
+ * attaches the emitter's plan (sv_params_plan).  Returns the number of
+ * modules emitted with parameters.  Release with sv_params_free(d). */
+int bk_params_prepare(struct Driver *dr, IrDesign *d, const SvOptions *o);
 
 /* Rewrites absolute source paths in emitted text (line markers, assertion
  * messages, the CDC report): `<from>/x` becomes `<to>x` for each pair, in

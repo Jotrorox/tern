@@ -31,6 +31,7 @@
 #include "../../src/sim/eval.c"
 #include "../../src/sim/vcd.c"
 #include "../../src/emit/sv.c"
+#include "../../src/emit/svparam.c"
 #include "../../src/emit/constraints.c"
 #include "../../src/emit/regmap.c"
 #include "../../src/emit/cmd_emit.c"

@@ -24,6 +24,7 @@
 #include "../../src/ir/ir_build.c"
 #include "../../src/ir/ir_json.c"
 #include "../../src/emit/sv.c"
+#include "../../src/emit/svparam.c"
 #include "../../src/emit/constraints.c"
 #include "../../src/emit/regmap.c"
 #include "../../src/pkg/toml.c"
@@ -37,7 +38,7 @@
 /* ------------------------------------------------------------ framework */
 
 static int tb_checks, tb_fails, tb_skips;
-static char *tb_iverilog;
+static char *tb_iverilog, *tb_vvp;
 
 static void tb_check(int ok, const char *expr, const char *file, int line)
 {
@@ -802,9 +803,306 @@ static void tb_compile_goldens(void)
     os_dir_list_free(&list);
 }
 
+/* ------------------- parameterized vs monomorphized SV: same behaviour */
+
+/* Splits a `tern build --stdout` concatenation into dir; returns the HDL
+ * file names in order (heap) and the name of the last module file (the top). */
+typedef VEC(char *) TbStrVec;
+
+static void tb_split(const char *text, const char *dir, TbStrVec *files)
+{
+    const char *p;
+    os_mkdir_p(dir);
+    for (p = text; (p = strstr(p, "// ---- file: ")) != NULL;) {
+        const char *nb = p + 14, *ne = strstr(nb, " ----\n"), *body, *next;
+        char *fname, *fp;
+        if (!ne)
+            break;
+        fname = xstrndup(nb, (size_t)(ne - nb));
+        body = ne + 6;
+        next = strstr(body, "// ---- file: ");
+        fp = os_path_join(dir, fname);
+        os_write_file(fp, body, next ? (size_t)(next - body) : strlen(body));
+        free(fp);
+        if (strcmp(os_path_ext(fname), ".sv") == 0 || strcmp(os_path_ext(fname), ".v") == 0)
+            vec_push(*files, fname);
+        else
+            free(fname);
+        p = next ? next : body + strlen(body);
+    }
+}
+
+typedef struct TbPort {
+    char name[64];
+    int out;
+    unsigned width;
+} TbPort;
+
+/* module name and ports of an emitted module with numeric port widths */
+static int tb_ports(const char *text, char *mod, size_t modsz, TbPort *ports, int max)
+{
+    const char *p = strstr(text, "\nmodule ");
+    int n = 0;
+    size_t k = 0;
+    if (!p)
+        return -1;
+    p += 8;
+    while (*p && (tern_is_ident((unsigned char)*p)) && k + 1 < modsz)
+        mod[k++] = *p++;
+    mod[k] = 0;
+    while ((p = strchr(p, '\n')) != NULL) {
+        const char *line = ++p, *end = strchr(line, '\n'), *q, *name;
+        TbPort *tp;
+        size_t nl;
+        if (!end)
+            break;
+        if (strncmp(line, ");", 2) == 0)
+            break;
+        if (strncmp(line, "    input ", 10) != 0 && strncmp(line, "    output ", 11) != 0)
+            continue;
+        if (n >= max)
+            return -1;
+        tp = &ports[n++];
+        tp->out = line[4] == 'o';
+        tp->width = 1;
+        q = strchr(line, '[');
+        if (q && q < end)
+            tp->width = (unsigned)strtoul(q + 1, NULL, 10) + 1;
+        /* the name: the identifier before ',' or the marker */
+        q = line;
+        while (q < end && !(q[0] == ' ' && q[1] == '/' && q[2] == '/'))
+            q++;
+        while (q > line && (q[-1] == ' ' || q[-1] == ','))
+            q--;
+        name = q;
+        while (name > line && tern_is_ident((unsigned char)name[-1]))
+            name--;
+        nl = (size_t)(q - name);
+        if (nl >= sizeof tp->name)
+            nl = sizeof tp->name - 1;
+        memcpy(tp->name, name, nl);
+        tp->name[nl] = 0;
+    }
+    return n;
+}
+
+static char *tb_build_text(const char *tern, const char *file, int v2005, int mono)
+{
+    VEC(char *) argv = {0};
+    char *out = NULL;
+    int rc;
+    vec_push(argv, (char *)tern);
+    vec_push(argv, (char *)"build");
+    vec_push(argv, (char *)"--stdout");
+    if (v2005) {
+        vec_push(argv, (char *)"--std");
+        vec_push(argv, (char *)"verilog2005");
+    }
+    if (mono)
+        vec_push(argv, (char *)"--monomorphize");
+    vec_push(argv, (char *)file);
+    vec_push(argv, NULL);
+    rc = tb_run(argv.data, "tests/fixtures/build", &out);
+    vec_free(argv);
+    if (rc != 0) {
+        fprintf(stderr, "tern build %s failed:\n%s\n", file, out ? out : "");
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+/* simulates the top of `text` with random inputs; returns the printed outputs */
+static char *tb_equiv_run(const char *text, const char *dir, const TbPort *ports, int np)
+{
+    TbStrVec files = {0};
+    VEC(char *) argv = {0};
+    StrBuf tb = {0};
+    char mod[128];
+    TbPort dummy[64];
+    char *log = NULL, *fp, *res = NULL;
+    const char *top = NULL;
+    size_t k;
+    int i, rc;
+    tb_split(text, dir, &files);
+    for (k = 0; k < files.len; k++)
+        if (!strstr(files.data[k], "_types_pkg"))
+            top = files.data[k];
+    if (!top)
+        goto done;
+    fp = os_path_join(dir, top);
+    {
+        char *t = tb_read(fp);
+        if (!t || tb_ports(t, mod, sizeof mod, dummy, 64) < 0) {
+            free(t);
+            free(fp);
+            goto done;
+        }
+        free(t);
+    }
+    free(fp);
+    sb_puts(&tb, "`timescale 1ns/1ps\nmodule tb;\n    integer i, seed;\n");
+    for (i = 0; i < np; i++)
+        sb_printf(&tb, "    %s [%u:0] %s;\n", ports[i].out ? "wire" : "reg ", ports[i].width - 1, ports[i].name);
+    sb_printf(&tb, "    %s dut (", mod);
+    for (i = 0; i < np; i++)
+        sb_printf(&tb, "%s.%s(%s)", i ? ", " : "", ports[i].name, ports[i].name);
+    sb_puts(&tb, ");\n    initial begin\n        seed = 7;\n");
+    for (i = 0; i < np; i++)
+        if (strcmp(ports[i].name, "clk") == 0)
+            sb_puts(&tb, "        clk = 1'b0;\n");
+    sb_puts(&tb, "        for (i = 0; i < 300; i = i + 1) begin\n");
+    for (i = 0; i < np; i++) {
+        unsigned w;
+        if (ports[i].out || strcmp(ports[i].name, "clk") == 0)
+            continue;
+        if (strcmp(ports[i].name, "rst") == 0) {
+            sb_puts(&tb, "            rst = i < 2;\n");
+            continue;
+        }
+        sb_printf(&tb, "            %s = {", ports[i].name);
+        for (w = 0; w < ports[i].width; w += 32)
+            sb_printf(&tb, "%s$random(seed)", w ? ", " : "");
+        sb_puts(&tb, "};\n");
+    }
+    sb_puts(&tb, "            #1;\n            $display(\"%0d");
+    for (i = 0; i < np; i++)
+        if (ports[i].out)
+            sb_puts(&tb, " %h");
+    sb_puts(&tb, "\", i");
+    for (i = 0; i < np; i++)
+        if (ports[i].out)
+            sb_printf(&tb, ", %s", ports[i].name);
+    sb_puts(&tb, ");\n");
+    for (i = 0; i < np; i++)
+        if (strcmp(ports[i].name, "clk") == 0)
+            sb_puts(&tb, "            clk = 1'b1;\n            #1;\n            clk = 1'b0;\n");
+    sb_puts(&tb, "        end\n        $finish;\n    end\nendmodule\n");
+    fp = os_path_join(dir, "tb.v");
+    os_write_file(fp, tb.data, tb.len);
+    free(fp);
+    vec_push(argv, tb_iverilog);
+    vec_push(argv, (char *)"-g2012");
+    vec_push(argv, (char *)"-DTERN_NO_SVA");
+    vec_push(argv, (char *)"-o");
+    vec_push(argv, (char *)"eq.vvp");
+    for (k = 0; k < files.len; k++)
+        if (strstr(files.data[k], "_types_pkg"))
+            vec_push(argv, files.data[k]);
+    for (k = 0; k < files.len; k++)
+        if (!strstr(files.data[k], "_types_pkg"))
+            vec_push(argv, files.data[k]);
+    vec_push(argv, (char *)"tb.v");
+    vec_push(argv, NULL);
+    rc = tb_run(argv.data, dir, &log);
+    if (rc != 0) {
+        fprintf(stderr, "iverilog in %s:\n%s\n", dir, log);
+        goto done;
+    }
+    free(log);
+    log = NULL;
+    {
+        char *vargv[4];
+        vargv[0] = tb_vvp;
+        vargv[1] = (char *)"-n";
+        vargv[2] = (char *)"eq.vvp";
+        vargv[3] = NULL;
+        if (tb_run(vargv, dir, &res) != 0) {
+            fprintf(stderr, "vvp in %s:\n%s\n", dir, res);
+            free(res);
+            res = NULL;
+        }
+    }
+done:
+    for (k = 0; k < files.len; k++)
+        free(files.data[k]);
+    vec_free(files);
+    vec_free(argv);
+    sb_free(&tb);
+    free(log);
+    return res;
+}
+
+static void tb_param_equiv(void)
+{
+    OsDirList list;
+    size_t i;
+    char *cwd, *tern;
+    if (!tb_iverilog || !tb_vvp) {
+        tb_skips++;
+        return;
+    }
+    cwd = os_getcwd();
+    tern = os_path_join(cwd, "tern");
+    if (!os_is_file(tern)) {
+        free(tern);
+        tern = os_path_join(cwd, "tern.exe");
+    }
+    if (!os_is_file(tern) || os_list_dir("tests/fixtures/build", &list) != 0) {
+        tb_skips++;
+        free(tern);
+        free(cwd);
+        return;
+    }
+    for (i = 0; i < list.len; i++) {
+        const char *name = list.items[i].name;
+        int v2005;
+        if (strncmp(name, "param_", 6) != 0 || strcmp(os_path_ext(name), ".tern") != 0)
+            continue;
+        for (v2005 = 0; v2005 < 2; v2005++) {
+            char *tp = tb_build_text(tern, name, v2005, 0), *tm = tb_build_text(tern, name, v2005, 1);
+            TbPort ports[64];
+            char mod[128], *dirp, *dirm, *rp = NULL, *rm = NULL;
+            const char *lastm;
+            int np = -1;
+            TB_CHECK(tp && tm);
+            if (!tp || !tm) {
+                free(tp);
+                free(tm);
+                continue;
+            }
+            /* ports from the monomorphized top (numeric widths) */
+            lastm = strstr(tm, "// ---- file: ");
+            {
+                const char *q = lastm, *top = NULL;
+                while (q) {
+                    const char *ext = strstr(q, " ----\n");
+                    if (ext && (strncmp(ext - 3, ".sv", 3) == 0 || strncmp(ext - 2, ".v", 2) == 0) &&
+                        !strstr(q, "_types_pkg"))
+                        top = q;
+                    q = strstr(q + 1, "// ---- file: ");
+                }
+                if (top)
+                    np = tb_ports(top, mod, sizeof mod, ports, 64);
+            }
+            TB_CHECK(np > 0);
+            dirp = arena_printf(&tb_arena, "build/backend_work/equiv/%s_%s_p", name, v2005 ? "v" : "sv");
+            dirm = arena_printf(&tb_arena, "build/backend_work/equiv/%s_%s_m", name, v2005 ? "v" : "sv");
+            if (np > 0) {
+                rp = tb_equiv_run(tp, dirp, ports, np);
+                rm = tb_equiv_run(tm, dirm, ports, np);
+            }
+            TB_CHECK(rp && rm);
+            if (rp && rm && strcmp(rp, rm) != 0) {
+                fprintf(stderr, "test_backend: %s (%s): parameterized and monomorphized outputs differ (%s, %s)\n",
+                        name, v2005 ? "verilog2005" : "sv", dirp, dirm);
+                TB_CHECK(0);
+            }
+            free(rp);
+            free(rm);
+            free(tp);
+            free(tm);
+        }
+    }
+    os_dir_list_free(&list);
+    free(tern);
+    free(cwd);
+}
+
 int main(void)
 {
     tb_iverilog = os_find_program("iverilog");
+    tb_vvp = os_find_program("vvp");
     diag_set_format(DIAG_FMT_SHORT);
     tb_targets();
     tb_rewrite();
@@ -815,9 +1113,11 @@ int main(void)
     tb_synth_scripts();
     tb_synth_reports();
     tb_compile_goldens();
+    tb_param_equiv();
     arena_release(&tb_arena);
     printf("test_backend: %d checks, %d failed, %d skipped%s\n", tb_checks, tb_fails, tb_skips,
            tb_iverilog ? "" : " (no iverilog)");
     free(tb_iverilog);
+    free(tb_vvp);
     return tb_fails ? 1 : 0;
 }

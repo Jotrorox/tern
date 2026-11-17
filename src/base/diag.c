@@ -389,6 +389,11 @@ const char *diag_path_display(const char *path)
 }
 int diag_error_count(void) { return diag_st.errors; }
 int diag_warning_count(void) { return diag_st.warnings; }
+void diag_set_counts(int errors, int warnings)
+{
+    diag_st.errors = errors;
+    diag_st.warnings = warnings;
+}
 
 int diag_parse_format(const char *name, DiagFormat *out)
 {

@@ -1,0 +1,47 @@
+// §13.3: one generic module instantiated with two widths is one
+// parameterized SystemVerilog module (`Acc #(.W(8))`, `Acc #(.W(16))`).
+
+/// Accumulates `in` while `en`; `wrapped` pulses when the sum wraps.
+module Acc<W: uint, Init: uint = 0> {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    in in: uint<W>
+    out sum: uint<W>
+    out wrapped: bool
+    out top_bit: bool
+
+    reg acc: uint<W> = Init
+    reg wrap_q: bool = false
+    let next = acc + in
+    sum = acc
+    wrapped = wrap_q
+    top_bit = acc[W - 1]
+    on clk {
+        wrap_q = false
+        if en {
+            acc = next as uint<W>
+            wrap_q = next > (1 << W) - 1
+        }
+    }
+}
+
+#[top]
+module Pair {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    in a: u8
+    in b: u16
+    out sa: u8
+    out sb: u16
+    out wraps: uint<2>
+    out tops: uint<2>
+
+    let x = Acc<8>(en, in: a)
+    let y = Acc<16, Init: 100>(en, in: b)
+    sa = x.sum
+    sb = y.sum
+    wraps = (x.wrapped ++ y.wrapped) as uint<2>
+    tops = (x.top_bit ++ y.top_bit) as uint<2>
+}
