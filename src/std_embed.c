@@ -3223,6 +3223,12 @@ static const char *const tern_std_chunks_6[] = {
     "/// deasserts on the `Stages`-th rising edge of `clk` after `rst_in` is\n"
     "/// released, so every flop in the domain leaves reset in the same cycle.\n"
     "/// Feed it a raw external reset (button, PLL not locked, power-on).\n"
+    "///\n"
+    "/// Because its release is synchronous to `clk`, `rst_out` is a plain\n"
+    "/// (synchronous, active-high) `reset`: it is the reset of the `clk` domain,\n"
+    "/// `domain sys = (clk, rs.rst_out)`, and connects to every std module\n"
+    "/// (`Fifo`, `AsyncFifo`, `PulseSync`, ...) without a cast. It is held for at\n",
+    "/// least `Stages` cycles, so flops that sample it synchronously all see it.\n"
     "#[cdc(reset_sync)]\n"
     "pub module ResetSync<Stages: uint = 2>\n"
     "where Stages >= 2\n"
@@ -3231,8 +3237,8 @@ static const char *const tern_std_chunks_6[] = {
     "    in clk: clock\n"
     "    /// Raw asynchronous reset, active high.\n"
     "    in rst_in: reset<async>\n"
-    "    /// Reset for the `clk` domain, active high.\n"
-    "    out rst_out: reset<async>\n",
+    "    /// Reset for the `clk` domain, active high, released synchronously.\n"
+    "    out rst_out: reset\n"
     "    /// `rst_out` as a plain status bit (for LEDs and status registers;\n"
     "    /// never use it as a reset).\n"
     "    out active: bool\n"
@@ -3249,7 +3255,7 @@ static const char *const tern_std_chunks_6[] = {
     "    }\n"
     "\n"
     "    active = chain[Stages - 1]\n"
-    "    rst_out = chain[Stages - 1] as reset<async>\n"
+    "    rst_out = chain[Stages - 1] as reset\n"
     "\n"
     "    /// The output reset is asserted whenever the input reset is.\n"
     "    property asserted_with_input {\n"
@@ -3285,7 +3291,8 @@ static const char *const tern_std_chunks_6[] = {
     "/// even a one-cycle source reset is never missed by a slower destination\n"
     "/// clock) and the destination reset is released synchronously to `dst`\n"
     "/// after `Stages` cycles. Use it to reset both sides of an `AsyncFifo`\n"
-    "/// from one source.\n"
+    "/// from one source. Like `ResetSync`, its output is a plain `reset` of the\n"
+    "/// destination domain.\n"
     "#[cdc(reset_bridge)]\n"
     "pub module ResetBridge<Stages: uint = 2>\n"
     "where Stages >= 2\n"
@@ -3297,7 +3304,7 @@ static const char *const tern_std_chunks_6[] = {
     "    /// Destination clock.\n"
     "    in dst: clock\n"
     "    /// Reset for the destination domain, active high.\n"
-    "    out dst_rst: reset<async> @ dst\n"
+    "    out dst_rst: reset @ dst\n"
     "    /// `dst_rst` as a plain status bit (never use it as a reset).\n"
     "    out active: bool @ dst\n"
     "\n"
@@ -3316,7 +3323,7 @@ static const char *const tern_std_chunks_6[] = {
     "    }\n"
     "\n"
     "    active = chain[Stages - 1]\n"
-    "    dst_rst = chain[Stages - 1] as reset<async>\n"
+    "    dst_rst = chain[Stages - 1] as reset\n"
     "\n"
     "    /// The destination reset is asserted whenever the source reset is.\n"
     "    property asserted_with_source {\n"
@@ -3344,7 +3351,7 @@ static const char *const tern_std_chunks_6[] = {
     "/// another domain through `Sync2<bit<W>>`: consecutive values differ in\n"
     "/// exactly one bit, so a synchronized sample is always a valid count\n"
     "/// (either the old or the new one). `bin` is the same count in binary for\n"
-    "/// local use. Wraps at 2^W.\n"
+    "/// local use. Wraps at 2^W.\n",
     "#[cdc(gray)]\n"
     "pub module GrayCounter<W: uint = 4>\n"
     "where W >= 1\n"
@@ -3365,7 +3372,7 @@ static const char *const tern_std_chunks_6[] = {
     "\n"
     "    reg b: uint<W> = 0\n"
     "    reg g: bit<W> = all0\n"
-    "\n",
+    "\n"
     "    on clk {\n"
     "        if en {\n"
     "            let n = b +% 1\n"
@@ -20451,7 +20458,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/bus/interconnect.tern", tern_std_chunks_3, 6, 20125},
     {"std/bus/lite.tern", tern_std_chunks_4, 4, 12539},
     {"std/bus/regfile.tern", tern_std_chunks_5, 4, 14464},
-    {"std/cdc/cdc.tern", tern_std_chunks_6, 5, 16846},
+    {"std/cdc/cdc.tern", tern_std_chunks_6, 5, 17298},
     {"std/clk/clk.tern", tern_std_chunks_7, 2, 7369},
     {"std/crc/crc.tern", tern_std_chunks_8, 4, 14734},
     {"std/debug/debug.tern", tern_std_chunks_9, 3, 9994},

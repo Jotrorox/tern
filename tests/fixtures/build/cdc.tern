@@ -22,8 +22,9 @@ module Top {
     reg en_q: bool = false @ sys
     on sys { en_q = enable }
 
-    let xfifo = AsyncFifo<u16, 16>(push: data, src: sys.clock, src_rst: sys_rs.rst_out as reset,
-                                   dst: pix.clock, dst_rst: pix_rs.rst_out as reset)
+    // ResetSync outputs are plain resets: the domains' resets connect as they are
+    let xfifo = AsyncFifo<u16, 16>(push: data, src: sys.clock, src_rst: sys.reset,
+                                   dst: pix.clock, dst_rst: pix.reset)
     pixels = xfifo.pop
     let en_sync = Sync2(src: sys.clock, dst: pix.clock, d: en_q)
     enabled = en_sync.q

@@ -1,19 +1,17 @@
 // args: --diag-format=human
 // clear messages for reset and type-alias mistakes
-use std::cdc::ResetSync
 use std::fifo::Fifo
 
 #[top]
 module Top {
     in clk: clock
     in ext_rst: reset<async>
-    let rs = ResetSync(clk: clk, rst_in: ext_rst)
-    domain d = (clk, rs.rst_out)
+    domain d = (clk, ext_rst)
     // inherited reset<async> on a sync-reset port: one error, Tern names
     let f = Fifo<u8, 4>(push: Stream { valid: true, data: 0 }) @ d
     f.pop.ready = true
     // a domain whose reset is converted: std modules inherit it
-    domain s = (clk, rs.rst_out as reset)
+    domain s = (clk, ext_rst as reset)
     let g = Fifo<u8, 4>(push: Stream { valid: true, data: 0 }) @ s
     g.pop.ready = true
     in x: u12

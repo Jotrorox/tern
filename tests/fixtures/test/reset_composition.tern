@@ -1,0 +1,42 @@
+// std::cdc::ResetSync outputs a plain `reset` (released synchronously), so
+// the domains built from it feed the resets of AsyncFifo and PulseSync
+// without casts (spec §12.3, std/cdc).
+use std::cdc::{ResetSync, AsyncFifo, PulseSync}
+
+#[top]
+module ResetSyncComposition {
+    in a_clk: clock
+    in b_clk: clock
+    in ext_rst: reset<async>
+    in push: Stream<u8> @ a
+    in kick: bool @ a
+    out pop: Stream<u8> @ b
+    out kick_b: bool @ b
+
+    let ra = ResetSync(clk: a_clk, rst_in: ext_rst)
+    let rb = ResetSync(clk: b_clk, rst_in: ext_rst)
+    domain a = (a_clk, ra.rst_out)
+    domain b = (b_clk, rb.rst_out)
+
+    let fifo = AsyncFifo<u8, 4>(src: a.clock, src_rst: a.reset, dst: b.clock, dst_rst: b.reset, push)
+    pop = fifo.pop
+    let p = PulseSync(src: a.clock, src_rst: a.reset, dst: b.clock, dst_rst: b.reset, d: kick)
+    kick_b = p.q
+}
+
+test "reset sync: its outputs reset domains that feed AsyncFifo and PulseSync" {
+    let dut = sim ResetSyncComposition()
+    dut.reset()
+    dut.push.valid = false
+    dut.kick = false
+    dut.pop.ready = false
+    dut.run(ns: 100)
+    expect !dut.ra.active and !dut.rb.active
+    dut.push = Stream { valid: true, data: 7 }
+    dut.kick = true
+    dut.a.step()
+    dut.push.valid = false
+    dut.kick = false
+    dut.run(ns: 100)
+    expect dut.pop.valid and dut.pop.data == 7
+}

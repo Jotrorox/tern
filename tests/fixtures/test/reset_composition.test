@@ -1,0 +1,4 @@
+running 1 test
+test reset sync: its outputs reset domains that feed AsyncFifo and PulseSync ... ok
+
+ok: 1 passed, 0 failed

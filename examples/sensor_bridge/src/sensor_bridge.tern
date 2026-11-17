@@ -39,8 +39,8 @@ where Window.is_pow2(), Depth.is_pow2()
 
     let sys_rs = ResetSync(clk: sys_clk, rst_in: ext_rst)
     let adc_rs = ResetSync(clk: adc_clk, rst_in: ext_rst)
-    domain sys = (sys_clk, sys_rs.rst_out as reset)
-    domain adc = (adc_clk, adc_rs.rst_out as reset)
+    domain sys = (sys_clk, sys_rs.rst_out)
+    domain adc = (adc_clk, adc_rs.rst_out)
 
     /// Enable sampling (system side, changes rarely).
     in capture: bool @ sys

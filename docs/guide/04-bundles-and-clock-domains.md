@@ -292,8 +292,10 @@ module Bridge {
 ```
 
 A raw asynchronous reset is brought into each domain with `ResetSync`
-(asynchronous assertion, synchronous release). Its output can then be the
-reset of a domain:
+(asynchronous assertion, synchronous release). Because its release is
+synchronous, its output is a plain `reset`: it can be the reset of a domain,
+and that domain's reset connects to `AsyncFifo`, `PulseSync` and the other
+std modules without a cast:
 
 ```tern
 package resetsync
