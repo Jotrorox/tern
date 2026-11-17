@@ -23,7 +23,7 @@ module CdcTop (  // tern: src/demo.tern:560
 
     // registers
     reg       flag;  // tern: src/demo.tern:569
-    reg [3:0] cfg_q;  // tern: src/demo.tern:570
+    reg [3:0] cfg_q = 4'd9;  // tern: src/demo.tern:570
     reg [3:0] pix_cnt;  // tern: src/demo.tern:589
 
     // continuous assignments
@@ -69,9 +69,6 @@ module CdcTop (  // tern: src/demo.tern:560
 
     always @(posedge pix_clk) begin  // tern: src/demo.tern:579
         cfg_q <= cfg_cross;  // tern: src/demo.tern:580
-    end
-    initial begin  // power-on values (the domain has no reset)
-        cfg_q = 4'd9;
     end
 
     always @(posedge pix_clk or posedge u_rsync_rst_out) begin  // tern: src/demo.tern:593

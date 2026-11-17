@@ -5,8 +5,8 @@ module PowerOn (  // tern: src/demo.tern:70
 );
 
     // registers
-    reg [3:0] p;  // tern: src/demo.tern:73
-    reg       seen;  // tern: src/demo.tern:74
+    reg [3:0] p = 4'd5;  // tern: src/demo.tern:73
+    reg       seen = 1'b0;  // tern: src/demo.tern:74
 
     // continuous assignments
     assign q = p;  // tern: src/demo.tern:75
@@ -14,10 +14,6 @@ module PowerOn (  // tern: src/demo.tern:70
     always @(posedge clk) begin  // tern: src/demo.tern:76
         p <= p + 4'd3;
         seen <= 1'b1;  // tern: src/demo.tern:77
-    end
-    initial begin  // power-on values (the domain has no reset)
-        p = 4'd5;
-        seen = 1'b0;
     end
 
 endmodule

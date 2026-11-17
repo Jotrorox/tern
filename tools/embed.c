@@ -7,8 +7,11 @@
  * and writes a C file holding each file's contents as an array of string
  * literal chunks. Each chunk holds at most EMBED_CHUNK bytes, which keeps
  * every literal far below both C99's 4095-character minimum limit and
- * MSVC's 16 KB limit (non-ASCII bytes are escaped as 4-character octal
- * escapes, so even the source form stays under 16 KB). '\r' before '\n'
+ * MSVC's 16 KB limit (non-ASCII bytes are escaped as 4-character hex
+ * escapes, so even the source form stays under 16 KB). A hex escape
+ * followed by a hex digit closes the literal and opens the next one
+ * (`"\xe2" "a"`): hex escapes are greedy, and MSVC warns about octal
+ * escapes followed by a digit (C4125). '\r' before '\n'
  * is dropped so the output does not depend on the checkout's line endings.
  * The output is only rewritten when its contents change.
  */
@@ -96,10 +99,13 @@ static int embed_cmp(const void *a, const void *b)
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
-/* Append byte c to the current literal. */
-static void embed_byte(EmbedBuf *o, unsigned char c)
+/* Append byte c to the current literal; *after_hex says the previous
+ * byte was written as a hex escape (and is updated). */
+static void embed_byte(EmbedBuf *o, unsigned char c, int *after_hex)
 {
     char esc[8];
+    int hex = *after_hex;
+    *after_hex = 0;
     switch (c) {
     case '"': embed_puts(o, "\\\""); return;
     case '\\': embed_puts(o, "\\\\"); return;
@@ -109,11 +115,14 @@ static void embed_byte(EmbedBuf *o, unsigned char c)
     default: break;
     }
     if (c >= 0x20 && c < 0x7F) {
+        if (hex && tern_is_xdigit(c))
+            embed_puts(o, "\" \"");
         esc[0] = (char)c;
         embed_put(o, esc, 1);
     } else {
-        snprintf(esc, sizeof esc, "\\%03o", (unsigned)c);
+        snprintf(esc, sizeof esc, "\\x%02x", (unsigned)c);
         embed_puts(o, esc);
+        *after_hex = 1;
     }
 }
 
@@ -130,6 +139,7 @@ static size_t embed_file(EmbedBuf *o, size_t idx, const char *text, size_t len)
         /* a chunk: whole lines while they fit, splitting only overlong lines */
         size_t end = pos, limit = pos + EMBED_CHUNK < len ? pos + EMBED_CHUNK : len;
         size_t i;
+        int after_hex = 0;
         while (end < limit) {
             const char *nl = (const char *)memchr(text + end, '\n', len - end);
             size_t line_end = nl ? (size_t)(nl - text) + 1 : len;
@@ -143,7 +153,7 @@ static size_t embed_file(EmbedBuf *o, size_t idx, const char *text, size_t len)
         embed_puts(o, nchunks ? ",\n" : "");
         embed_puts(o, "    \"");
         for (i = pos; i < end; i++) {
-            embed_byte(o, (unsigned char)text[i]);
+            embed_byte(o, (unsigned char)text[i], &after_hex);
             if (text[i] == '\n' && i + 1 < end)
                 embed_puts(o, "\"\n    \"");
         }

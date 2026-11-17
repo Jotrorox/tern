@@ -1,0 +1,15 @@
+
+module M<N: uint> {
+    in a: u8
+    out y: u8
+    let m = M<N + 1>(a)
+    y = m.y
+}
+
+#[top]
+module T {
+    in a: u8
+    out y: u8
+    let m = M<0>(a)
+    y = m.y
+}

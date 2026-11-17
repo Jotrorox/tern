@@ -327,6 +327,10 @@ int cmd_sim(int argc, char **argv)
             goto done;
         }
     }
+    if (!scope && !driver_spec_exists(c.dr, top)) {
+        rc = TERN_EXIT_FAIL;
+        goto done;
+    }
     if (!scope)
         scope = driver_module_scope(c.dr, top); /* its generic arguments resolve there */
     to.seed = testrun_test_seed(seed, "tern sim");

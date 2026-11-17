@@ -718,6 +718,7 @@ OsProc *os_spawn(char *const argv[], const OsSpawnOpts *opts, char **err_out)
     BOOL ok;
     OsProc *p;
     int i;
+    memset(&pi, 0, sizeof pi); /* also on the early `goto cleanup_fail` */
     if (err_out)
         *err_out = NULL;
     if (!opts) {
@@ -828,7 +829,6 @@ OsProc *os_spawn(char *const argv[], const OsSpawnOpts *opts, char **err_out)
     si.hStdInput = hin;
     si.hStdOutput = hout;
     si.hStdError = herr;
-    memset(&pi, 0, sizeof pi);
     wcmd = osw_wide(cmd.data ? cmd.data : "");
     if (opts->cwd)
         wcwd = osw_path(opts->cwd);

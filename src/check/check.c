@@ -830,6 +830,32 @@ void chk_summary(ChkMod *cm)
 
 /* ============================================================== entry */
 
+/* Pushes the elaboration path of m (`Top > rx_fifo: Fifo<u8, 64>`) for its
+ * diagnostics: through the first instance of it found in the design (a
+ * module is checked once however often it is instantiated). */
+static void chk_push_module_path(const IrDesign *d, const IrModule *m, int depth)
+{
+    uint32_t i, k;
+    const char *disp = m->display ? m->display : m->name;
+    if (depth < 32)
+        for (i = 0; i < d->nmodules; i++) {
+            const IrModule *p = d->modules[i];
+            for (k = 0; p && p != m && k < p->ninsts; k++)
+                if (p->insts[k].module == m) {
+                    char *frame;
+                    size_t n;
+                    chk_push_module_path(d, p, depth + 1);
+                    n = strlen(p->insts[k].name ? p->insts[k].name : "?") + strlen(disp) + 3;
+                    frame = (char *)xmalloc(n);
+                    snprintf(frame, n, "%s: %s", p->insts[k].name ? p->insts[k].name : "?", disp);
+                    diag_push_path(frame);
+                    free(frame);
+                    return;
+                }
+        }
+    diag_push_path(disp);
+}
+
 int check_design(IrDesign *d, const CheckOptions *opt)
 {
     ChkCtx cx;
@@ -846,10 +872,33 @@ int check_design(IrDesign *d, const CheckOptions *opt)
         for (k = 0; d->modules[i] && k < d->modules[i]->ninsts; k++)
             map_put(&cx.instantiated, MAP_PTR(d->modules[i]->insts[k].module), 1);
     }
+    {
+        /* Modules whose elaboration failed have incomplete IR, and so do
+         * the summaries of everything above them: skip those, check the
+         * rest (spec 13.7: never stop at the first error). */
+        int changed = 1;
+        while (changed) {
+            changed = 0;
+            for (i = 0; i < d->nmodules; i++) {
+                IrModule *m = d->modules[i];
+                uint32_t k;
+                if (!m || map_has(&cx.skip, MAP_PTR(m)))
+                    continue;
+                for (k = 0; !m->elab_failed && k < m->ninsts; k++)
+                    if (m->insts[k].module && map_has(&cx.skip, MAP_PTR(m->insts[k].module)))
+                        break;
+                if (m->elab_failed || k < m->ninsts) {
+                    map_put(&cx.skip, MAP_PTR(m), 1);
+                    changed = 1;
+                }
+            }
+        }
+    }
     for (i = 0; i < d->nmodules; i++) {
         IrModule *m = d->modules[i];
         ChkMod cm;
-        if (!m)
+        size_t pdepth;
+        if (!m || map_has(&cx.skip, MAP_PTR(m)))
             continue;
         memset(&cm, 0, sizeof cm);
         cm.cx = &cx;
@@ -862,7 +911,8 @@ int check_design(IrDesign *d, const CheckOptions *opt)
             map_put(&cx.summaries, MAP_PTR(m), MAP_PTR(sum));
             continue;
         }
-        diag_push_path(m->display ? m->display : m->name);
+        pdepth = diag_path_depth();
+        chk_push_module_path(d, m, 0);
         chk_mod_build(&cm);
         chk_drivers(&cm);
         chk_assign(&cm);
@@ -872,7 +922,7 @@ int check_design(IrDesign *d, const CheckOptions *opt)
         chk_poweron(&cm);
         if (cx.opt->unused)
             chk_unused(&cm);
-        diag_pop_path();
+        diag_path_truncate(pdepth);
         vec_free(cm.nodes);
         vec_free(cm.reads);
         vec_free(cm.ranges);
@@ -884,6 +934,7 @@ int check_design(IrDesign *d, const CheckOptions *opt)
     map_free(&cx.seen);
     map_free(&cx.cdc_mods);
     map_free(&cx.instantiated);
+    map_free(&cx.skip);
     map_free(&cx.unused_idx);
     vec_free(cx.unused);
     arena_release(&cx.arena);

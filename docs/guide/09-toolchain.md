@@ -89,7 +89,7 @@ A `[target.<name>]` section describes one build:
 | `top` | the top module (default: every `#[top]`) |
 | `device` | the part; its prefix picks the family (`xc...` Xilinx, `up5k`/`ice40...` iCE40, `lfe5...` ECP5, `gw...` Gowin, `5c...`/`10m...` Intel, `sky130`/`gf180` ASIC) |
 | `vendor` | the family explicitly: `xilinx`, `intel`, `lattice`, `ice40`, `ecp5`, `gowin`, `asic`, `generic` |
-| `kind` | `fpga` or `asic` (power-on values are `initial` blocks on FPGAs and a warning on ASICs) |
+| `kind` | `fpga` or `asic` (power-on values are declaration initializers on FPGAs and a warning on ASICs) |
 | `backend` | synthesis tool for `tern synth`: `yosys`, `vivado`, `quartus` |
 | `std` | `sv` (SystemVerilog 2012, default) or `verilog2005` |
 | `constraints` | `xdc`, `sdc` or `none` (default by family) |

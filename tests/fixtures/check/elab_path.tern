@@ -1,0 +1,45 @@
+// args: --diag-format=human
+// Spec 13.7: an error inside a generic module instance carries the
+// elaboration path `Top > rx_fifo: Fifo<u8, 64>` (and a one-line fix).
+module Fifo<T: type, Depth: uint> {
+    in clk: clock
+    in rst: reset
+    in push: T
+    out pop: T
+    out count: uint<clog2(Depth + 1)>
+
+    reg r: T = 0
+    reg n: uint<clog2(Depth + 1)> = 0
+    on clk {
+        r = push
+        n = n + 1
+    }
+    pop = r
+    count = n
+}
+
+// an IR check (missing driver) in another generic instance: same path form
+module Pipe<W: uint> {
+    in d: uint<W>
+    out q: uint<W>
+    out busy: bool
+    q = d
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in x: u8
+    out y: u8
+    out c: uint<7>
+    out z: u8
+    out b: bool
+
+    let rx_fifo = Fifo<u8, 64>(push: x)
+    y = rx_fifo.pop
+    c = rx_fifo.count
+    let tx_pipe = Pipe<8>(d: x)
+    z = tx_pipe.q
+    b = tx_pipe.busy
+}

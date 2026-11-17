@@ -58,7 +58,7 @@ spaces — the real syntax is ASCII).
 | `src/` | `main.c cmds.h cmd_parse.c cmd_check.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, `tern parse`, `tern check`, shared front-end driver, embedded std |
 | `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>/`) |
 | `tools/` | `embed.c` | embeds `std/**/*.tern` into `src/std_embed.c` (committed) |
-| `tests/` | `run.c`, `doc_snippets.c`, `unit/test_{base,sim,pkg,tools,fmt,emit,lsp}.c`, `fixtures/**`, `lsp/*.session`, `fuzz/fuzz_parser.c` | golden-file test runner, documentation snippet checker (`make test-docs`), unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
+| `tests/` | `run.c`, `doc_snippets.c`, `unit/test_{base,sim,pkg,tools,fmt,emit,lsp}.c`, `fixtures/**`, `lsp/*.session`, `fuzz/fuzz_{parser,check,toml,json}.c`, `fuzz/corpus/**` | golden-file test runner, documentation snippet checker (`make test-docs`), unit tests, fixtures, libFuzzer harnesses (`make fuzz`; CI fuzzes them) and their regression corpus (replayed by `make test` without libFuzzer, `tests/fuzz/fuzz_main.h`) |
 | `examples/` | `uart_loopback/ sensor_bridge/ smoother/` (tern.toml, src/, tests/, sim/tb_*.sv) | example projects; `make examples` (part of `make test`) runs check, test, build and fmt --check in each, and their iverilog benches against the emitted RTL when iverilog is installed |
 
 ## Pipeline

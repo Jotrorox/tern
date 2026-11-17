@@ -316,20 +316,20 @@ int cmd_synth(int argc, char **argv)
                 if (csyn_nextpnr_args(&b.target, &prog, &devflag, &pkg) && (pnr = os_find_program(prog)) != NULL) {
                     char *av2[12];
                     StrBuf json = {0}, freq = {0};
-                    size_t k = 0;
+                    size_t na = 0;
                     sb_printf(&json, "%s.json", top);
                     sb_printf(&freq, "%.3f", target_mhz > 0 ? target_mhz : 12.0);
-                    av2[k++] = pnr;
-                    av2[k++] = (char *)devflag;
-                    av2[k++] = (char *)"--package";
-                    av2[k++] = (char *)pkg;
-                    av2[k++] = (char *)"--json";
-                    av2[k++] = json.data;
-                    av2[k++] = (char *)"--freq";
-                    av2[k++] = freq.data;
-                    av2[k++] = (char *)(b.target.family == BK_FAM_ICE40 ? "--pcf-allow-unconstrained"
+                    av2[na++] = pnr;
+                    av2[na++] = (char *)devflag;
+                    av2[na++] = (char *)"--package";
+                    av2[na++] = (char *)pkg;
+                    av2[na++] = (char *)"--json";
+                    av2[na++] = json.data;
+                    av2[na++] = (char *)"--freq";
+                    av2[na++] = freq.data;
+                    av2[na++] = (char *)(b.target.family == BK_FAM_ICE40 ? "--pcf-allow-unconstrained"
                                                                         : "--lpf-allow-unconstrained");
-                    av2[k++] = NULL;
+                    av2[na++] = NULL;
                     printf("  running %s ...\n", prog);
                     fflush(stdout);
                     csyn_run(av2, sdir, "nextpnr.log", 1);

@@ -1,0 +1,38 @@
+five_errors.tern:13:11: error: width mismatch: `a + b` is uint<9>, `sum` is uint<8>
+   |
+13 |     sum = a + b
+   |           ^^^^^
+   = help: use `+%` for a wrapping add, or truncate with `as uint<8>`
+  in: Top > alu: Alu
+
+five_errors.tern:14:16: error: cannot find `bb` in this scope
+   |
+14 |     diff = a - bb
+   |                ^^
+   = help: did you mean `b`?
+  in: Top > alu: Alu
+
+five_errors.tern:23:18: error: width mismatch: `c + 1` is uint<5>, `c` is uint<4>
+   |
+23 |     on clk { c = c + 1 }
+   |                  ^^^^^
+   = help: use `+%` for a wrapping add, or truncate with `as uint<4>`
+  in: Top > cnt: Counter
+
+five_errors.tern:35:5: error: multiple drivers for `y`: driven by two continuous assignments
+   |
+35 |     y = if sel { b } else { a }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: a signal has exactly one driver block: move all its assignments into one block
+  in: Top > pick: Pick
+five_errors.tern:34:5: note: `y` is also driven here
+   |
+34 |     y = a
+   |     ^^^^^
+
+five_errors.tern:32:9: error: output `valid` is never driven
+   |
+32 |     out valid: bool
+   |         ^^^^^
+   = help: assign it at module level (`valid = ...`) or in a `comb` block
+  in: Top > pick: Pick

@@ -125,8 +125,8 @@ module Sync2_bool (  // tern: std/cdc/cdc.tern:36
 );
 
     // registers
-    (* ASYNC_REG = "TRUE" *) logic s1;  // tern: std/cdc/cdc.tern:51
-    (* ASYNC_REG = "TRUE" *) logic s2;  // tern: std/cdc/cdc.tern:53
+    (* ASYNC_REG = "TRUE" *) logic s1 = 1'b0;  // tern: std/cdc/cdc.tern:51
+    (* ASYNC_REG = "TRUE" *) logic s2 = 1'b0;  // tern: std/cdc/cdc.tern:53
 
     // continuous assignments
     assign q = s2;  // tern: std/cdc/cdc.tern:59
@@ -134,10 +134,6 @@ module Sync2_bool (  // tern: std/cdc/cdc.tern:36
     always_ff @(posedge dst) begin  // tern: std/cdc/cdc.tern:55
         s1 <= d;  // tern: std/cdc/cdc.tern:56
         s2 <= s1;  // tern: std/cdc/cdc.tern:57
-    end
-    initial begin  // power-on values (the domain has no reset)
-        s1 = 1'b0;
-        s2 = 1'b0;
     end
 
 endmodule

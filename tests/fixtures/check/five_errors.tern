@@ -1,0 +1,55 @@
+// args: --diag-format=human
+// Spec 13.7: the checker never stops at the first error. Five independent
+// mistakes in one file, from name resolution and width checking during
+// elaboration to the driver checks on the IR of the modules that did
+// elaborate: all five are reported, each with a span, its elaboration
+// path and, where one exists, a one-line fix.
+module Alu {
+    in a: u8
+    in b: u8
+    out sum: u8
+    out diff: u8
+
+    sum = a + b
+    diff = a - bb
+}
+
+module Counter {
+    in clk: clock
+    in rst: reset
+    out q: uint<4>
+
+    reg c: uint<4> = 0
+    on clk { c = c + 1 }
+    q = c
+}
+
+module Pick {
+    in sel: bool
+    in a: u8
+    in b: u8
+    out y: u8
+    out valid: bool
+
+    y = a
+    y = if sel { b } else { a }
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in x: u8
+    out y: u8
+    out z: u8
+    out w: uint<4>
+    out v: bool
+
+    let alu = Alu(a: x, b: x)
+    let cnt = Counter()
+    let pick = Pick(sel: true, a: x, b: alu.sum)
+    y = pick.y
+    z = alu.diff
+    w = cnt.q
+    v = pick.valid
+}

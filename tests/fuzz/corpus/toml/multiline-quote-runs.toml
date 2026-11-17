@@ -1,0 +1,9 @@
+a = """x"""""
+b = """
+"""
+c = '''y'''''
+[package]
+name = "x"
+version = "1.0.0"
+[dependencies]
+d = { git = "u", tag = "v1" }

@@ -116,6 +116,7 @@ struct ChkCtx {
     Map seen;                 /* reported diagnostics (hash of message + span) */
     Map cdc_mods;             /* IrModule* -> ChkCdcMod* (cdc.c: local crossings) */
     Map instantiated;         /* IrModule* -> 1 when some module instantiates it */
+    Map skip;                 /* IrModule* -> 1: elaboration failed in it or below it */
     Map unused_idx;           /* unused.c: candidate key -> index + 1 into unused */
     VEC(struct ChkUnused) unused;
     int errors;

@@ -205,8 +205,9 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
             d = driver_elaborate_all(dr, top, &ira);
             co.is_user_file = cmd_check_is_user_file;
             co.user = dr;
-            if (diag_error_count() == 0)
-                check_design(d, &co);
+            /* also after elaboration errors: the modules that elaborated
+             * cleanly are checked (check_design skips the others) */
+            check_design(d, &co);
             if (verbose)
                 cmd_check_report(dr, d);
         }
