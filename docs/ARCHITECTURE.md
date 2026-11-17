@@ -291,6 +291,28 @@ Beyond the parts described in `elab.h`, `sema.h` and `check.h`:
 * **Generic inference for modules**: a module instantiated without `<..>`
   gets type and width generics from the types of its connected inputs
   (`Crc32(in: words)`, §12.3); the rest keep their defaults.
+* **`clock_hz(clk)`** (§7.5, docs/grammar.md §4.8): `Elab.inst_call` is
+  the call whose callee is being evaluated in a module body (set by
+  `ce_call`, `elb_is_instance_init`, `el_instance`), `Elab.bind_item` the
+  module whose generics `el_bind_generics` is binding; while a generic
+  default of that module is evaluated, `gdef_item/gdef_call/gdef_env` let
+  `clock_hz(port)` find the connection of `port` (named, `@ dom` or the
+  parent's default domain) and the frequency the parent knows for it.
+  `mono_make_module` records every generic declared `= clock_hz(port)` in
+  `ValModule.hz_ports/hz_vals`; `elb_clock_hz` (domains) and `elb_sig_hz`
+  read them after the port's own `#[clock(hz)]`. Because the frequency is
+  a generic, the module cache and the mangled names stay exact.
+* **Enum payloads as generic values**: a payload variant written
+  `.Weighted<[3, 1, 2]>` is built by `ce_angle_payload`; an enum whose
+  payload has no bit representation is `hw = 0` (compile-time only).
+  `val_equal`, `val_mangle` (`Weighted_3_1_2`) and `mono_key` already
+  cover payloads, so comparison, `match` and monomorphization work as for
+  plain variants.
+* **`#[probe]`**: `elb_probe_body` appends generated Tern text (`type
+  Probes = struct { s: typeof(s), .. }`, `let probes = Probes { .. }`,
+  source `<#[probe] signals of M>`) to the module body; such a module
+  declares its clock/reset ports before the others so `Probes` may appear
+  in port types.
 * **std::bus::RegisterFile** (`src/elab/regfile.c`, §10.3): elaborating
   `RegisterFile<Map, Bus>` appends a generated body to the declared one: the
   generated Tern source (registered as `<RegisterFile<..>>`) instantiates
