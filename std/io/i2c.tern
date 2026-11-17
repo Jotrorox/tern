@@ -50,7 +50,9 @@ pub struct I2cResult {
 ///   none. `busy` is high while an operation runs; `in` is accepted only when
 ///   idle.
 /// * Single master: arbitration loss is not detected.
-pub module I2cMaster<ClkHz: uint, SclHz: uint = 100_000>
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module I2cMaster<ClkHz: uint = clock_hz(clk), SclHz: uint = 100_000>
 where SclHz > 0
 {
     /// Clock cycles per quarter SCL period.

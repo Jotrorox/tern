@@ -38,7 +38,9 @@ pub struct OneWireResult {
 /// * Bytes go LSB first. Reset, ReadBit and ReadByte produce one `out` result;
 ///   writes produce none. `in` is accepted only when idle (`busy` low).
 /// * Overdrive speed and strong pull-up (parasite power) are not supported.
-pub module OneWire<ClkHz: uint> {
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module OneWire<ClkHz: uint = clock_hz(clk)> {
     /// Clock cycles per microsecond.
     pub const US: uint = ClkHz / 1_000_000
     static_assert(US >= 1, "OneWire needs a clock of at least 1 MHz")
