@@ -2380,8 +2380,16 @@ int fmt_verify(const AstFile *f, const char *text, size_t len, StrBuf *why)
     }
     for (i = 0; ok && i < f->ncomments; i++) {
         const Comment *x = &f->comments[i], *y = &g->comments[i];
-        if (x->span.len != y->span.len || !sf ||
-            memcmp(sf->text + x->span.off, text + y->span.off, x->span.len) != 0) {
+        uint32_t xl = x->span.len, yl = y->span.len;
+        /* trailing whitespace is not part of a comment's text (a line
+         * comment at the end of the file keeps it in its span) */
+        while (sf && xl && (sf->text[x->span.off + xl - 1] == ' ' || sf->text[x->span.off + xl - 1] == '\t' ||
+                            sf->text[x->span.off + xl - 1] == '\r'))
+            xl--;
+        while (yl && (text[y->span.off + yl - 1] == ' ' || text[y->span.off + yl - 1] == '\t' ||
+                      text[y->span.off + yl - 1] == '\r'))
+            yl--;
+        if (xl != yl || !sf || memcmp(sf->text + x->span.off, text + y->span.off, xl) != 0) {
             if (why)
                 sb_printf(why, "comment at line %u changed", (unsigned)x->span.line);
             ok = 0;

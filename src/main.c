@@ -106,7 +106,8 @@ static const MainCmd main_cmds[] = {
      "add a dependency (index short name or git URL); writes tern.lock",
      "  <pkg>[@<ver>]       registry package; <ver> is a requirement (1.2, =1.2.3, ~1.2,\n"
      "                      \">=1, <2\"); default: the newest release\n"
-     "  <git-url>           git dependency; default: its newest vX.Y.Z tag\n"
+     "  <git-url>           git dependency (also a local checkout: ../ip); default: its\n"
+     "                      newest vX.Y.Z tag\n"
      "  --tag/--rev/--branch <r>  pin a git dependency\n"
      "  --path <dir>        local path dependency\n"
      "  --name <n>          dependency name for a git URL or --path (default: its\n"

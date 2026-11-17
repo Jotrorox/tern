@@ -118,7 +118,7 @@ static void test_print_ready(TestCmd *t)
         if (j->report && *j->report)
             fputs(j->report, stdout);
         if (!j->passed && j->waves && os_is_file(j->waves))
-            printf("    waveform: %s\n", j->waves);
+            printf("    waveform: %s\n", diag_path_display(j->waves));
     }
     fflush(stdout);
 }

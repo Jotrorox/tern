@@ -223,8 +223,13 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b)
         driver_tops(dr, &tops);
         if (!tops.len) {
             driver_default_roots(dr, &tops);
-            if (tops.len > 1)
+            if (tops.len > 1) {
                 tops.len = 1; /* the first module that needs no generic arguments */
+                fprintf(stderr,
+                        "tern build: note: no #[top] module; building `%s`, the first module without required "
+                        "generics\n  (mark the top with #[top] or name it with --top)\n",
+                        tops.data[0].item->name.name);
+            }
         }
     }
     if (!tops.len) {

@@ -1,0 +1,7 @@
+module M {
+    in a: bool
+    out y: bool
+    y = a
+}
+
+// a file that ends inside a comment with trailing spaces

@@ -5923,7 +5923,10 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
         if (c.kind == VAL_ERROR)
             return;
         if (!c.ty || c.ty->kind != TY_BOOL) {
-            el_error(el, s->u.assert_stmt.cond->span, "assertion condition must be bool");
+            el_error(el, s->u.assert_stmt.cond->span, "assertion condition must be bool, found %s",
+                     c.ty ? ty_str(c.ty) : val_kind_name((ValKind)c.kind));
+            if (c.ty && ce_int_family(c.ty))
+                el_help(el, "compare it: `%s != 0`", el_text(s->u.assert_stmt.cond));
             return;
         }
         if (el->hooks.check && !el->blk && el->hooks.check(el, s, c.kind == VAL_BOOL ? (int)c.u.i : -1, env))

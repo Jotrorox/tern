@@ -153,6 +153,7 @@ tern add axi                       # newest release, written as axi = "1.2.3" (c
 tern add axi@1.2 dma@~0.4          # explicit requirements, several at once
 tern add https://github.com/acme/tern-uart              # newest vX.Y.Z tag
 tern add https://github.com/acme/tern-uart --tag v2.0.1 # or --rev <commit> / --branch <b>
+tern add ../tern-uart              # a local git checkout (file:// URL), newest vX.Y.Z tag
 tern add --path ../vendor-ip       # local package
 tern add                           # fetch everything tern.lock says (after a clone)
 ```
