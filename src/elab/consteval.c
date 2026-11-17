@@ -1109,6 +1109,18 @@ static Value ce_module_const(Elab *el, ValModule *vm, const char *name, Span at)
     for (i = 0; i < n; i++)
         if (body[i]->kind == STMT_ITEM && body[i]->u.item->name.name == name)
             decl = body[i];
+    if (!decl && el_regfile_is(it, vm->file)) {
+        /* RegisterFile<Map, Bus>: consts of the generated body (LATENCY) */
+        Stmt **gen = NULL;
+        uint32_t ngen = 0;
+        if (el_regfile_body(el, vm, &gen, &ngen)) {
+            for (i = 0; i < ngen; i++)
+                if (gen[i]->kind == STMT_ITEM && gen[i]->u.item->name.name == name)
+                    decl = gen[i];
+            body = gen;
+            n = ngen;
+        }
+    }
     if (!decl) {
         el_error(el, at, "module `%s` has no const `%s`", vm->display, name);
         return val_error();

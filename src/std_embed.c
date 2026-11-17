@@ -2699,8 +2699,9 @@ static const char *const tern_std_chunks_5[] = {
     "    in bus: Bus\n"
     "\n"
     "    // Compiler-generated from `Map` and `Bus` (see the doc comment above):\n"
-    "    // the front-end instance on `bus`, one port per `Map` entry, and the\n"
-    "    // register storage and decode on the front-end's RegBus.\n"
+    "    // the front-end instance on `bus`, one port per `Map` entry, the\n"
+    "    // register storage and decode on the front-end's RegBus, and\n"
+    "    // `pub const LATENCY` (the front-end's: Axi4LiteRegPort::LATENCY, ...).\n"
     "}\n"
     "\n"
     "/// Example register map used by the RegisterFile tests: a control register\n"
@@ -2738,9 +2739,14 @@ static const char *const tern_std_chunks_5[] = {
     "    expect dut.bus.r.data.data == 0xDEAD_BEEF and dut.bus.r.data.resp == RESP_OKAY\n"
     "}\n"
     "\n"
+    "test \"RegisterFile: LATENCY is the bus front-end's\" {\n",
+    "    expect RegisterFile<DemoRegs>::LATENCY == Axi4LiteRegPort<32, 32>::LATENCY\n"
+    "    expect RegisterFile<DemoRegs, Apb<32, 32>>::LATENCY == ApbRegPort<32, 32>::LATENCY\n"
+    "}\n"
+    "\n"
     "test \"RegisterFile: byte strobes and register fields\" {\n"
     "    let dut = sim RegisterFile<DemoRegs>()\n"
-    "    dut.reset()\n",
+    "    dut.reset()\n"
     "    dut.status = DemoRegs::Status { busy: false, err: false }\n"
     "    dut.txq.ready = true\n"
     "    dut.bus.b.ready = true\n"
@@ -10765,6 +10771,12 @@ static const char *const tern_std_chunks_30[] = {
     "    /// Digit select lines; digit `i` is lit while `an[i]` is active.\n"
     "    out an: bit<Digits>\n"
     "\n"
+    "    /// Cycles from a change of `digits`, `dp` or `enable` to the segment\n"
+    "    /// lines of the lit digit (combinational).\n"
+    "    pub const LATENCY: uint = 0\n"
+    "    /// Cycles one digit stays lit before the scan moves on.\n"
+    "    pub const SCAN_PERIOD: uint = ScanCycles\n"
+    "\n"
     "    reg sel: uint<SW> = 0\n"
     "    reg tick: uint<clog2(ScanCycles)> = 0\n"
     "\n"
@@ -10813,13 +10825,13 @@ static const char *const tern_std_chunks_30[] = {
     "        expect hex_to_segments(v) == want[v]\n"
     "    }\n"
     "}\n"
-    "\n"
+    "\n",
     "test \"SevenSegment scans the digits in order\" {\n"
     "    let dut = sim SevenSegment<Digits: 4, ScanCycles: 3, SegActiveLow: false, AnActiveLow: false>()\n"
     "    dut.reset()\n"
     "    dut.digits = [0x1, 0x2, 0xA, 0xF]\n"
     "    dut.dp = 0b0100\n"
-    "    dut.enable = 0b1111\n",
+    "    dut.enable = 0b1111\n"
     "    for _ in 0..2 {\n"
     "        for i in 0..4 {\n"
     "            for _ in 0..3 {\n"
@@ -11885,6 +11897,12 @@ static const char *const tern_std_chunks_32[] = {
     "    /// One-cycle pulse: a received byte was lost (receive FIFO full).\n"
     "    out overrun: bool\n"
     "\n"
+    "    /// Cycles from an `in` handshake (with the transmitter idle and its\n"
+    "    /// FIFO empty) to the start bit on `txd`.\n"
+    "    pub const LATENCY: uint = Fifo<u8, Depth>::LATENCY + UartTxCore<DivW>::LATENCY\n"
+    "    /// Cycles from a received byte leaving the receiver core to `out.valid`.\n"
+    "    pub const RX_LATENCY: uint = Fifo<u8, Depth>::LATENCY\n"
+    "\n"
     "    let tx_fifo = Fifo<u8, Depth>(push: in)\n"
     "    let tx = UartTxCore<DivW>(divisor: divisor, in: tx_fifo.pop)\n"
     "    let rx = UartRxCore<DivW>(divisor: divisor, rxd: rxd)\n"
@@ -11903,14 +11921,14 @@ static const char *const tern_std_chunks_32[] = {
     "}\n"
     "\n"
     "// ---------------------------------------------------------------------------\n"
-    "// Tests\n"
+    "// Tests\n",
     "// ---------------------------------------------------------------------------\n"
     "\n"
     "test \"UartTx sends 0x55 LSB first with start and stop bits\" {\n"
     "    let dut = sim UartTx<ClkHz: 16, Baud: 1>()          // 16 cycles per bit\n"
     "    dut.reset()\n"
     "    expect dut.txd and dut.in.ready\n"
-    "    dut.in = Stream { valid: true, data: 0x55 }\n",
+    "    dut.in = Stream { valid: true, data: 0x55 }\n"
     "    dut.step()                                         // byte accepted\n"
     "    dut.in.valid = false\n"
     "    expect !dut.in.ready and dut.busy\n"
@@ -12033,7 +12051,7 @@ static const char *const tern_std_chunks_32[] = {
     "\n"
     "test \"UartRx reports overrun and keeps the first byte\" {\n"
     "    let dut = sim UartRx<ClkHz: 16, Baud: 1>()\n"
-    "    dut.rxd = true\n"
+    "    dut.rxd = true\n",
     "    dut.reset()\n"
     "    dut.out.ready = false\n"
     "    var seen_overrun = false\n"
@@ -12042,7 +12060,7 @@ static const char *const tern_std_chunks_32[] = {
     "        for b in [false, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], true] {\n"
     "            dut.rxd = b\n"
     "            for _ in 0..16 {\n"
-    "                dut.step()\n",
+    "                dut.step()\n"
     "                if dut.overrun { seen_overrun = true }\n"
     "            }\n"
     "        }\n"
@@ -21162,7 +21180,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/bus/dma.tern", tern_std_chunks_2, 4, 12437},
     {"std/bus/interconnect.tern", tern_std_chunks_3, 6, 20125},
     {"std/bus/lite.tern", tern_std_chunks_4, 4, 12539},
-    {"std/bus/regfile.tern", tern_std_chunks_5, 4, 14464},
+    {"std/bus/regfile.tern", tern_std_chunks_5, 4, 14764},
     {"std/cdc/cdc.tern", tern_std_chunks_6, 5, 17298},
     {"std/clk/clk.tern", tern_std_chunks_7, 3, 10349},
     {"std/crc/crc.tern", tern_std_chunks_8, 4, 15539},
@@ -21187,9 +21205,9 @@ const StdEmbedFile tern_std_files[] = {
     {"std/io/pwm.tern", tern_std_chunks_27, 1, 3592},
     {"std/io/quadrature.tern", tern_std_chunks_28, 2, 4736},
     {"std/io/sdio.tern", tern_std_chunks_29, 7, 24736},
-    {"std/io/sevenseg.tern", tern_std_chunks_30, 2, 5270},
+    {"std/io/sevenseg.tern", tern_std_chunks_30, 2, 5531},
     {"std/io/spi.tern", tern_std_chunks_31, 7, 25503},
-    {"std/io/uart.tern", tern_std_chunks_32, 5, 18073},
+    {"std/io/uart.tern", tern_std_chunks_32, 5, 18413},
     {"std/io/ws2812.tern", tern_std_chunks_33, 2, 5646},
     {"std/math/arith.tern", tern_std_chunks_34, 5, 16268},
     {"std/math/cordic.tern", tern_std_chunks_35, 3, 9867},

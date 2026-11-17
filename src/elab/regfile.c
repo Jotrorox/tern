@@ -326,6 +326,8 @@ static void rf_gen(RfReg *regs, uint32_t n, uint32_t aw, uint32_t dw, const char
     }
     /* the bus side */
     sb_printf(sb, "let rf__port = %s<%u, %u>(s: bus)\n", front, (unsigned)aw, (unsigned)dw);
+    /* the latency of a register access is the front-end's (spec 12.1 rule 3) */
+    sb_printf(sb, "pub const LATENCY: uint = %s<%u, %u>::LATENCY\n", front, (unsigned)aw, (unsigned)dw);
     sb_puts(sb, "let rf__req = rf__port.regs.req.data\n");
     sb_puts(sb, "let rf__valid = rf__port.regs.req.valid\n");
     sb_puts(sb, "let rf__wr = rf__valid and rf__req.write\n");

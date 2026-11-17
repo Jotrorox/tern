@@ -299,6 +299,12 @@ where DivW >= 3, Depth.is_pow2()
     /// One-cycle pulse: a received byte was lost (receive FIFO full).
     out overrun: bool
 
+    /// Cycles from an `in` handshake (with the transmitter idle and its
+    /// FIFO empty) to the start bit on `txd`.
+    pub const LATENCY: uint = Fifo<u8, Depth>::LATENCY + UartTxCore<DivW>::LATENCY
+    /// Cycles from a received byte leaving the receiver core to `out.valid`.
+    pub const RX_LATENCY: uint = Fifo<u8, Depth>::LATENCY
+
     let tx_fifo = Fifo<u8, Depth>(push: in)
     let tx = UartTxCore<DivW>(divisor: divisor, in: tx_fifo.pop)
     let rx = UartRxCore<DivW>(divisor: divisor, rxd: rxd)
