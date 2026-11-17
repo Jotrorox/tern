@@ -392,7 +392,7 @@ module I2cPair {
     in hold_scl: bool
     /// Master busy.
     out busy: bool
-    /// Last master result.
+    /// Last master result (including the one being delivered this cycle).
     out res_last: I2cResult
     /// Last byte the slave received.
     out rx_last: u8
@@ -432,7 +432,8 @@ module I2cPair {
         if s.out.valid { rx_q = s.out.data; rx_n = rx_n +% 1 }
     }
     busy = m.busy
-    res_last = res_q
+    // the result is visible in the cycle `busy` drops
+    res_last = if m.out.valid { m.out.data } else { res_q }
     rx_last = rx_q
     rx_count = rx_n
     starts = starts_q

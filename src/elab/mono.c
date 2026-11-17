@@ -677,7 +677,9 @@ Ty *el_regmap_type(Elab *el, Item *rm, FileUnit *file, const char *name, Span at
         sb_printf(&key, "regmap|%p|Regs", (void *)rm);
         sb_printf(&nm, "%s::Regs", rm->name.name);
         sb_printf(&emit, "%s_Regs", rm->name.name);
-        r = ok ? ty_bundle(S, sb_cstr(&key), sb_cstr(&nm), sb_cstr(&emit), NULL, n, tf, rm->name.span) : S->t_error;
+        r = ok ? ty_bundle(S, sb_cstr(&key), sb_cstr(&nm), sb_cstr(&emit), rm, n, tf, rm->name.span) : S->t_error;
+        if (r->kind != TY_ERROR && !r->file)
+            r->file = file ? file : sema_file_of_item(S, rm);
         free(tf);
         sb_free(&key);
         sb_free(&nm);

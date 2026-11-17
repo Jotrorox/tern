@@ -37,6 +37,7 @@
 #include "../../src/elab/value.c"
 #include "../../src/elab/consteval.c"
 #include "../../src/elab/mono.c"
+#include "../../src/elab/regfile.c"
 #include "../../src/elab/elab.c"
 #include "../../src/check/check.c"
 #include "../../src/check/drivers.c"

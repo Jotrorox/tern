@@ -55,7 +55,7 @@ spaces — the real syntax is ASCII).
 | `src/pkg/` | `toml.c manifest.c lock.c git.c cmd_pkg.c` (+ `pkg.h`) | tern.toml, tern.lock, semver, dependency resolution, git; `tern new/add/update/vendor/publish` (docs/packages.md, docs/registry.md) |
 | `src/lsp/` | `rpc.c lsp.c lsp_nav.c` (+ `lsp.h`, private `lsp_impl.h`) | JSON-RPC language server over stdio (`tern lsp`, docs/editors.md) |
 | `src/tools/` | `fmt.c doc.c import.c remap.c` | formatter, HTML docs, `tern import` (SV → extern), `tern remap` (docs/migration.md) |
-| `src/` | `main.c cmds.h cmd_stubs.c cmd_parse.c cmd_check.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, stubs for unimplemented commands, `tern parse` and the interim parse-only `tern check`, shared front-end driver, embedded std |
+| `src/` | `main.c cmds.h cmd_parse.c cmd_check.c driver.c unity.c std_embed.[ch]` | CLI entry + help, command prototypes, `tern parse`, `tern check`, shared front-end driver, embedded std |
 | `std/` | `*.tern` | standard library, written in Tern (package `std::<pkg>` lives in `std/<pkg>/`) |
 | `tools/` | `embed.c` | embeds `std/**/*.tern` into `src/std_embed.c` (committed) |
 | `tests/` | `run.c`, `unit/test_{base,sim,pkg,tools,fmt,emit,lsp}.c`, `fixtures/**`, `lsp/*.session`, `fuzz/fuzz_parser.c` | golden-file test runner, unit tests, fixtures, libFuzzer parser harness (`make fuzz`) |
@@ -351,6 +351,49 @@ and `lsp_nav.c` (definition, hover, references, symbols, completion,
   unknown documents get empty answers, and nothing but protocol messages is
   written to stdout (`--log FILE` for tracing).
 
+## Test interpreter, `tern test`, `tern sim` (`src/sim/testrun.[ch] cmd_test.c cmd_sim.c`)
+
+* `testrun_run(dr, test, opts, cov, report)` runs one `test` body in the
+  const evaluator with `ElabHooks`: `sim M<..>(inputs)` re-binds the module in
+  a fresh `Elab` + `IrDesign` (kept alive with the handle for its `Ty`→`IrType`
+  cache, inverted to read struct/enum signals back as typed values) and
+  returns a `VAL_OPAQUE` handle (`TrNode`: root, bundle/instance path, clock
+  domain, memory). Reads settle combinational logic first; writes go through
+  `sim_poke` (top inputs and `#[test_port]` only — internal signals, outputs
+  and the harness-owned clocks/resets are errors with a fix). A bundle can be
+  assigned a literal or another handle's bundle (`dec.in = enc.out`); bundle
+  methods (`dut.out.fire()`) run on the bundle value read from the handle.
+  Methods: `reset()`, `step(n)`, `step_until(cond, max: n)` (the condition is
+  re-evaluated each cycle through `Elab.opq_call`), `settle()`,
+  `run(ns: n)`, `dump(file)`, `cycle()`, `time_ns()`; `dut.<domain or clock
+  port>.step(n)` steps one domain.
+* `expect`/`assert` failures print `file:line:col: expect failed at cycle N:
+  <expr>` plus `operand = value` lines (operands are re-evaluated quietly;
+  impure calls are skipped). `assert`, a failing design assertion or assert
+  property, and a `step_until` timeout stop the test (`el->limit_hit`);
+  `expect`, assumption violations and still-pending `eventually` obligations
+  (at the end) are recorded and the test continues. Elaboration/evaluation
+  errors are captured with a diag sink into the test's report.
+* `rand<T>()`: per-test splitmix64 seeded from `--seed` (default 1) and the
+  test name; integers are half uniform, half biased (random bit length, edge
+  values) so `where` rejection sampling converges. `.Variant` without a known
+  enum type is a deferred value (`VAL_F_VARIANT`) typed by `elab_convert`.
+* `tern test` runs tests in worker processes (`tern test --worker i,j,..`,
+  chunks of the test list, results printed in source order, crashed workers
+  reported and the rest of their chunk retried); fewer than 4 tests run in
+  process. `--cover` merges `sim_coverage` over designs, tests and workers
+  (`testcov_*`). The report format is fixed by the goldens in
+  `tests/fixtures/test/` (a fixture's first line `// args: --cover` adds
+  arguments). Timing is printed only on a terminal.
+* `tern sim` is a session (`testrun_session_*`) with the design bound to
+  `dut`; command lines are rewritten to Tern statements and parsed as a test
+  body.
+* `std::bus::RegisterFile<Map, Bus>` is generated in `src/elab/regfile.c`:
+  Tern statements (ports per regmap entry, front-end instance, decode) are
+  appended to the std module's body before it is elaborated. A regmap used
+  as a type is its `Map::Regs` bundle (`Ty.def` = the regmap item), and
+  `Map::<Name>` works on it.
+
 ## Testing the compiler
 
 `make test` builds and runs `build/test_base` (unit tests for `src/base` and
@@ -395,8 +438,9 @@ Usage: `tests/run [-v] [-j N] [--tern path] [--no-std] [<filter>...]`.
 
 `make test` also checks that std is canonically formatted
 (`tern fmt --check std`, docs/style.md) and runs `tern test --diag-format=short std` from the repository
-root and requires exit status 0; while `tern test` is still the stub ("not
-implemented yet", exit 2) that case is reported as skipped.
+root and requires exit status 0 (`make test-std` runs only that). A fixture
+whose first line is `// args: <a> <b>` gets those arguments before its file
+name (`// args: --cover`).
 
 ## Back ends (`src/backend/`, `backend.h`)
 
@@ -496,8 +540,6 @@ test needs Yosys, SymbiYosys, Vivado or Quartus.
 * Keep `src/unity.c`, `Makefile` and `build.bat` in sync when adding files
   (`build.bat` only builds `src/unity.c`; the Makefile needs the file in
   `SRCS`/`OBJS`, any new header in `HDRS`, and an object rule).
-* To implement a command, delete its stub from `src/cmd_stubs.c` and add the
-  real `cmd_<name>` in its own file.
 * `src/std_embed.c` is generated from `std/` by `tools/embed` (run by every
   `make`; it rewrites the file only when something changed) and committed.
 * Every command-line command is implemented as `int cmd_<name>(int argc, char **argv)`

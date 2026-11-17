@@ -1,0 +1,48 @@
+// args: --cover
+// Line, branch (if and match arm) and cover property coverage (§11.6).
+
+enum Mode { Idle, Count, Hold }
+
+module Ticker {
+    in clk: clock
+    in rst: reset
+    in mode: Mode
+    in limit: u8
+    out value: u8
+    out wrapped: bool
+
+    reg n: u8 = 0
+    reg w: bool = false
+    on clk {
+        w = false
+        match mode {
+            .Idle => n = 0,
+            .Count => {
+                if n == limit {
+                    n = 0
+                    w = true
+                } else {
+                    n = n +% 1
+                }
+            },
+            .Hold => {},
+        }
+    }
+    value = n
+    wrapped = w
+
+    cover property wraps { wrapped }
+    cover property counts_to_three { value == 3 }
+}
+
+test "count and wrap" {
+    let dut = sim Ticker()
+    dut.reset()
+    dut.mode = .Count
+    dut.limit = 2
+    dut.step(3)
+    expect dut.wrapped
+    dut.mode = .Idle
+    dut.step()
+    expect dut.value == 0
+}

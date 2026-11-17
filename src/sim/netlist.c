@@ -1449,7 +1449,9 @@ static void nl_compile(SimModel *m, NlBuild *b, NlComp *c)
             if (mon->group != g)
                 continue;
             c->inst = mon->inst;
+            mon->misc_lo = c->misc_n;
             mon->root = nl_seq(c, mon->prop->seq);
+            mon->misc_hi = c->misc_n;
             vec_push(gr->mons, i);
             if (mon->prop->kind == IRA_COVER) {
                 SimCovRaw r;

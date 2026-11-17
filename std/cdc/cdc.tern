@@ -332,13 +332,14 @@ test "handshake sync: values cross intact and in order" {
         dut.settle()
         if dut.in.valid and dut.in.ready { sent = sent + 1 }
         dut.src.step()
-        dut.settle()
-        if dut.out.valid and dut.out.ready {
-            expect dut.out.data == values[got]
-            got = got + 1
+        for _ in 0..2 {            // destination runs twice as fast
+            dut.settle()
+            if dut.out.valid and dut.out.ready {
+                expect dut.out.data == values[got]
+                got = got + 1
+            }
+            dut.dst.step()
         }
-        dut.dst.step()
-        dut.dst.step()             // destination runs twice as fast
     }
     expect sent == 4 and got == 4
 }

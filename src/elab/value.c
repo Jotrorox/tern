@@ -289,7 +289,16 @@ void val_print(const Value *v, StrBuf *out)
             sb_printf(out, "%lld", (long long)v->u.i);
         break;
     case VAL_BOOL: sb_puts(out, v->u.i ? "true" : "false"); break;
-    case VAL_STRING: sb_putc(out, '"'); sb_append(out, v->u.s, v->aux); sb_putc(out, '"'); break;
+    case VAL_STRING:
+        if (v->flags & VAL_F_VARIANT) {
+            sb_putc(out, '.');
+            sb_append(out, v->u.s, v->aux);
+            break;
+        }
+        sb_putc(out, '"');
+        sb_append(out, v->u.s, v->aux);
+        sb_putc(out, '"');
+        break;
     case VAL_ENUM:
         sb_printf(out, ".%s", v->ty && v->ty->kind == TY_ENUM ? v->ty->variants[v->aux].name : "?");
         if (v->u.list) {

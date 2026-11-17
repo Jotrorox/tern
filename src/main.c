@@ -59,17 +59,30 @@ static const MainCmd main_cmds[] = {
      "                      path is given without -o)\n"
      "  --text              print a terminal rendering (the offline reference)\n"
      "  --open              open the generated index.html in a browser\n"},
-    {"test", cmd_test, "Verification", "[<filter>] [--waves] [--seed <n>] [--cover]",
+    {"test", cmd_test, "Verification", "[<paths>] [<filter>...] [--waves] [--seed <n>] [--cover] [-j <n>] [--list]",
      "run test blocks on the built-in simulator",
+     "  <paths>             files or directories (default: the project's src/ and tests/)\n"
      "  <filter>            run only tests whose name contains <filter>\n"
-     "  --waves             write a VCD waveform per test\n"
-     "  --seed <n>          seed for randomized stimulus\n"
-     "  --cover             report coverage counters\n"
-     "  --backend <b>       builtin (default) or verilator\n"
-     "  -j <n>              number of parallel workers\n"},
-    {"sim", cmd_sim, "Verification", "<top> [--vcd <file>] [<script>]",
-     "interactive stimulus REPL or a stimulus script against a top", NULL},
-    {"prove", cmd_prove, "Verification", "<module> [--depth <n>] [--induct] [<file.tern>...]",
+     "  --waves             keep a VCD of each failing test in build/waves/\n"
+     "  --seed <n>          base seed of rand<T>() (default 1; each test derives its own)\n"
+     "  --cover             report line, branch (if / match arm) and cover property coverage\n"
+     "  -j <n>              number of parallel worker processes (default: CPU count)\n"
+     "  --list              list the tests instead of running them\n"
+     "  --const-eval-limit <n>  interpreter step limit per test (default 5*10^7)\n"},
+    {"sim", cmd_sim, "Verification", "<top> [--vcd <file>] [<script>] [<paths>]",
+     "interactive stimulus REPL or a stimulus script against a top",
+     "  <top>               module to simulate, e.g. Top or 'Fifo<u8, 4>' (default: the #[top])\n"
+     "  <script>            run the lines of this file instead of reading stdin; stops\n"
+     "                      at the first failing line (exit status 1)\n"
+     "  --vcd <file>        record a VCD waveform\n"
+     "  --seed <n>          seed of rand<T>() and of power-on register values\n"
+     "commands (the design is `dut`; paths are relative to it):\n"
+     "  poke <path> <expr>  drive an input (also: <path> = <expr>)\n"
+     "  peek <path>...      print signals (also: <path>)\n"
+     "  step [n] | run <ns> | reset | settle | dump <file.vcd> | signals | help | quit\n"
+     "  other lines run as Tern statements of a test body, e.g.\n"
+     "  `expect dut.count == 3`, `log(\"{}\", dut.y)`, `dut.step_until(dut.done, max: 100)`\n"},
+    {"prove", cmd_prove, "Verification", "<module> [--depth <n>] [--induct]",
      "formal verification via Yosys and SymbiYosys",
      "  <module>            module to prove (its default generics, else the\n"
      "                      instantiation in the design's top)\n"

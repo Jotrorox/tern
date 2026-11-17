@@ -688,6 +688,9 @@ static void ev_props_tick(SimModel *m, uint32_t gi)
         if (m->doms.data[mon->fd].in_reset) {
             mon->att.len = 0;
             mon->started = 0;
+            /* past() history restarts when the domain comes out of reset */
+            if (mon->misc_hi > mon->misc_lo)
+                memset(m->v + m->misc_base + mon->misc_lo, 0, sizeof(uint64_t) * (mon->misc_hi - mon->misc_lo));
             continue;
         }
         if (!mon->started || cover) {
@@ -708,8 +711,12 @@ static void ev_props_tick(SimModel *m, uint32_t gi)
             } else if (r == SPK_VAC) {
                 /* vacuous success */
             } else if (r == SPK_FALSE) {
+                /* a static `always`/`never` fails through the instance it
+                 * spawned this cycle: that attempt started now */
+                int now = !(ref & SIM_PDYN) && (m->pstatic.data[ref].kind == SPK_ALWAYS ||
+                                               m->pstatic.data[ref].kind == SPK_NEVER);
                 if (!cover)
-                    ev_mon_fail(m, mon, st, 0);
+                    ev_mon_fail(m, mon, now ? cyc : st, 0);
             } else {
                 /* obligations spawned by a static `always`/`never` start now */
                 int spawn = !(ref & SIM_PDYN) && (m->pstatic.data[ref].kind == SPK_ALWAYS ||
@@ -1058,7 +1065,7 @@ int sim_find_prefix(SimModel *m, const char *prefix, int *out, int max)
     int cnt = 0;
     for (i = 0; i < m->sigs.len; i++) {
         const char *p = m->sigs.data[i].path;
-        if (strncmp(p, prefix, n) == 0 && p[n] == '.') {
+        if (strncmp(p, prefix, n) == 0 && (p[n] == '.' || p[n] == '[')) {
             if (cnt < max && out)
                 out[cnt] = (int)i;
             cnt++;

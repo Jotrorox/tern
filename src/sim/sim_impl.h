@@ -163,6 +163,8 @@ typedef struct SimMon {
     uint32_t fd;
     uint32_t group;
     uint32_t root;           /* static node */
+    uint32_t misc_lo, misc_hi; /* misc limbs of its leaves and past() histories
+                                  (relative to misc_base): cleared in reset */
     int started;
     uint64_t hits;
     SimAttemptVec att;

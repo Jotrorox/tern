@@ -51,6 +51,10 @@ typedef enum ValKind {
 } ValKind;
 
 #define VAL_F_BIG 1u
+/* VAL_STRING holding the name of an enum variant `.Name` whose enum type was
+ * not known where it was written (test interpreter only: `[(.Add, 1)]`);
+ * elab_convert to an enum type resolves it. */
+#define VAL_F_VARIANT 2u
 
 typedef struct Value Value;
 typedef struct ValList ValList;

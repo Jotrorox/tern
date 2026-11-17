@@ -1,0 +1,11 @@
+running 1 test
+test count and wrap ... ok
+
+coverage:
+  coverage.tern: lines 7/7 (100%), branches 4/5 (80%)
+    branches not taken: 18:9 arm 3
+  cover:
+    property wraps (coverage.tern:34:5): 1 hit
+    property counts_to_three (coverage.tern:35:5): 0 hits  <- never hit
+
+ok: 1 passed, 0 failed
