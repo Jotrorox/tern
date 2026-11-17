@@ -493,6 +493,15 @@ int cmd_test(int argc, char **argv)
         return TERN_EXIT_FAIL;
     }
     driver_sema(dr)->record_info = 0;   /* no hover/definition info needed */
+    if (!t.worker) {
+        driver_check_items(dr); /* file-level consts and static_asserts */
+        if (diag_error_count()) {
+            driver_free(dr);
+            vec_free(t.paths);
+            vec_free(t.filters);
+            return TERN_EXIT_FAIL;
+        }
+    }
     driver_tests(dr, &all);
     if (t.worker) {
         rc = test_worker(&t, dr, &all);

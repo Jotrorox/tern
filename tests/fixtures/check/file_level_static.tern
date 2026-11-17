@@ -1,0 +1,14 @@
+// File-level consts and static_asserts are evaluated by `tern check` even
+// when nothing references them (spec §9.3).
+const Bad: u8 = 300
+const Div: u32 = 10
+const Unused: u32 = 20
+static_assert(Div >= 16, "clock too slow for this baud rate")
+static_assert(Div < 16)
+static_assert(Unused == 21)
+
+module Top {
+    in a: u8
+    out b: u8
+    b = a
+}

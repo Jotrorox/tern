@@ -101,6 +101,9 @@ size_t driver_targets(Driver *dr, const TernTarget **out);
  * (unknown feature, or no tern.toml). */
 int driver_apply_features(Driver *dr, const char *list);
 
+/* Evaluates every top-level `const` and file-level static_assert of the
+ * user files (driver_elaborate_all does this too; build and test call it). */
+void driver_check_items(Driver *dr);
 /* A configured elaborator writing into `design` (NULL: interpreter only). */
 Elab *driver_elab_new(Driver *dr, IrDesign *design);
 /* Elaborates `item` with generic arguments `args` (NULL: defaults) into a

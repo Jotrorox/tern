@@ -293,6 +293,10 @@ Value elab_value_from_bits(Elab *el, const IrBits *b, Ty *t);
 /* Debug check of the IR invariants of a whole design; reports violations
  * through tern_fatal-free diag_error and returns their count. */
 int elab_ir_verify(const IrDesign *d);
+/* Evaluates the file-level items that nothing may reference: every
+ * top-level `const` (with its type's range check) and every file-level
+ * static_assert (`tern check`, build and test run it on the user files). */
+void elab_check_file_items(Elab *el, FileUnit *file);
 /* Regmaps of a file are added to the design (IrRegmap). */
 void elab_add_regmap(Elab *el, Item *regmap, FileUnit *file);
 

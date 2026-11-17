@@ -1,0 +1,3 @@
+file_level_static.tern:3:17: error: literal 300 does not fit in uint<8> (0..=255)
+file_level_static.tern:6:1: error: static assertion failed: clock too slow for this baud rate
+file_level_static.tern:8:1: error: static assertion failed: `Unused == 21`

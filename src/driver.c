@@ -491,6 +491,23 @@ static void drv_add_regmaps(Driver *dr, Elab *el)
     }
 }
 
+static void drv_check_items(Driver *dr, Elab *el)
+{
+    size_t i;
+    for (i = 0; i < dr->S->files.len; i++) {
+        FileUnit *f = dr->S->files.data[i];
+        if (f->is_user)
+            elab_check_file_items(el, f);
+    }
+}
+
+void driver_check_items(Driver *dr)
+{
+    Elab *el = driver_elab_new(dr, NULL);
+    drv_check_items(dr, el);
+    elab_free(el);
+}
+
 static ModInfo *drv_elab_root(Elab *el, Item *item, FileUnit *file, const ElabArgs *args)
 {
     ValModule *vm;
@@ -660,6 +677,7 @@ IrDesign *driver_elaborate_all(Driver *dr, const char *top, Arena *ir_arena)
             vec_free(sims);
         }
     }
+    drv_check_items(dr, el);
     drv_add_regmaps(dr, el);
     if (diag_error_count() == 0)
         elab_ir_verify(d);

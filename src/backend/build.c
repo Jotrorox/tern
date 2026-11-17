@@ -248,6 +248,7 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b)
             b->designs[b->ndesigns++] = d;
     }
     vec_free(tops);
+    driver_check_items(dr); /* file-level consts and static_asserts */
     if (diag_error_count()) {
         free(cwd);
         return -1;
