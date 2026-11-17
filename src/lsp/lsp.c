@@ -56,9 +56,11 @@ char *lsp_uri_to_path(const char *uri)
             sb_putc(&sb, *p);
         }
     }
-    /* /C:/x -> C:/x */
+    /* /c:/x -> C:/x (drive letters as the OS spells them) */
     if (sb.len >= 3 && sb.data[0] == '/' && tern_is_alpha((unsigned char)sb.data[1]) && sb.data[2] == ':')
         memmove(sb.data, sb.data + 1, sb.len--);
+    if (sb.len >= 2 && tern_is_alpha((unsigned char)sb.data[0]) && sb.data[1] == ':')
+        sb.data[0] = (char)tern_to_upper((unsigned char)sb.data[0]);
     norm = os_path_normalize(sb_cstr(&sb));
     sb_free(&sb);
     return norm;

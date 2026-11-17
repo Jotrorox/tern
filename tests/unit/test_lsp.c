@@ -274,7 +274,7 @@ static void test_uri(void)
     TL_CHECK(p && strcmp(p, "/home/u/a b/x.tern") == 0);
     free(p);
     p = lsp_uri_to_path("file:///c%3A/Users/x.tern");
-    TL_CHECK(p && strcmp(p, "c:/Users/x.tern") == 0);
+    TL_CHECK(p && strcmp(p, "C:/Users/x.tern") == 0);
     free(p);
     p = lsp_uri_to_path("file://server/share/x.tern");
     TL_CHECK(tl_has_str(p, "server/share/x.tern"));
