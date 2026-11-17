@@ -407,7 +407,7 @@ static void syn_stmt(SynWalk *w, Stmt *s, int module_level)
         break;
     case STMT_WHILE: syn_expr(w, s->u.while_stmt.cond); syn_block(w, s->u.while_stmt.body, 0); break;
     case STMT_ASSERT: syn_expr(w, s->u.assert_stmt.cond); syn_expr(w, s->u.assert_stmt.msg); break;
-    case STMT_STATIC_ASSERT: syn_expr(w, s->u.static_assert.cond); syn_expr(w, s->u.static_assert.msg); break;
+    case STMT_STATIC_ASSERT: syn_expr(w, s->u.sassert.cond); syn_expr(w, s->u.sassert.msg); break;
     case STMT_RETURN: syn_expr(w, s->u.ret); break;
     case STMT_ERROR: break;
     }
@@ -533,7 +533,7 @@ static void syn_item(SynWalk *w, Item *it)
     case ITEM_TEST: syn_block(w, it->u.test.body, 0); break;
     case ITEM_PROPERTY: syn_expr(w, it->u.property.body); break;
     case ITEM_SEQUENCE: syn_expr(w, it->u.sequence.body); break;
-    case ITEM_STATIC_ASSERT: syn_expr(w, it->u.static_assert.cond); syn_expr(w, it->u.static_assert.msg); break;
+    case ITEM_STATIC_ASSERT: syn_expr(w, it->u.sassert.cond); syn_expr(w, it->u.sassert.msg); break;
     case ITEM_ERROR: break;
     }
     w->scope.len = mark;

@@ -726,7 +726,15 @@ OsProc *os_spawn(char *const argv[], const OsSpawnOpts *opts, char **err_out)
 
     /* command line: resolved program path, then the arguments */
     resolved = os_find_program(argv[0]);
-    osw_quote_arg(&cmd, resolved ? resolved : argv[0]);
+    if (!resolved)
+        resolved = xstrdup(argv[0]);
+    /* Native separators: cmd.exe scans its whole command line, including
+     * its own path, for `/x` switches, so `C:/Windows/system32/cmd.exe /c`
+     * does not run the command. */
+    for (i = 0; resolved[i]; i++)
+        if (resolved[i] == '/')
+            resolved[i] = '\\';
+    osw_quote_arg(&cmd, resolved);
     free(resolved);
     for (i = 1; argv[i]; i++) {
         osw_buf_append(&cmd, " ", 1);

@@ -2410,9 +2410,9 @@ static Stmt *ps_stmt(Parser *p)
             p->ctx.nl_ignore++;
             p->ctx.no_struct = 0;
             p->ctx.generic = 0;
-            s->u.static_assert.cond = ps_expr(p);
+            s->u.sassert.cond = ps_expr(p);
             if (!p->panic && ps_accept(p, TK_COMMA) && ps_kind(p) != TK_RPAREN) {
-                s->u.static_assert.msg = ps_expr(p);
+                s->u.sassert.msg = ps_expr(p);
                 ps_accept(p, TK_COMMA);
             }
             if (!p->panic)
@@ -3277,8 +3277,8 @@ static void ps_file(Parser *p, AstFile *f)
                    ps_peek(p, 1) == TK_LPAREN) {
             Stmt *s = ps_stmt(p);
             Item *it = ps_new_item(p, ITEM_STATIC_ASSERT, s->doc, s->attrs, 0);
-            it->u.static_assert.cond = s->u.static_assert.cond;
-            it->u.static_assert.msg = s->u.static_assert.msg;
+            it->u.sassert.cond = s->u.sassert.cond;
+            it->u.sassert.msg = s->u.sassert.msg;
             it->span = s->span;
             vec_push(items, it);
         } else if (ps_top_level_sv(p)) {

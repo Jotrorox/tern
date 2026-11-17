@@ -526,7 +526,10 @@ static void nl_report_loop(SimModel *m, NlBuild *b, const uint32_t *cyc_nodes, c
 {
     StrBuf sb = {0};
     uint32_t i;
-    const NlNode *first = &b->nodes.data[cyc_nodes[0]];
+    const NlNode *first;
+    if (n == 0)
+        return;
+    first = &b->nodes.data[cyc_nodes[0]];
     for (i = 0; i < n; i++) {
         sb_puts(&sb, m->sigs.data[cyc_sigs[i]].path);
         sb_puts(&sb, " -> ");
@@ -1501,7 +1504,8 @@ static void nl_random(SimModel *m, const char *path, uint64_t *dst, uint32_t wid
 static void nl_init_values(SimModel *m, NlComp *c)
 {
     uint32_t i, k;
-    memcpy(m->v + m->const_base, c->consts.data, sizeof(uint64_t) * c->consts.len);
+    if (c->consts.len)
+        memcpy(m->v + m->const_base, c->consts.data, sizeof(uint64_t) * c->consts.len);
     for (i = 0; i < m->sigs.len; i++) {
         SimSig *s = &m->sigs.data[i];
         const IrSignal *ir = s->ir;
