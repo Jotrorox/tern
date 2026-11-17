@@ -168,6 +168,7 @@ static int cmd_check_common(int argc, char **argv, int ir_mode)
     o.npaths = paths.len;
     o.const_eval_limit = limit;
     o.cmd = ir_mode ? "ir" : "check";
+    o.include_tests = !ir_mode; /* the tests are checked too (spec §13.1) */
     dr = driver_open(&o);
     vec_free(paths);
     if (!dr)

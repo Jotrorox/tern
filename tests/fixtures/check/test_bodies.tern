@@ -1,0 +1,56 @@
+// `tern check` resolves and checks test bodies without running them
+// (spec §13.1): names, sim targets and the signal paths of the handles.
+use std::fifo::Fifo
+
+const Depth: uint = 4
+
+struct Pair { a: u8, b: u8 }
+
+module Counter {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out count: u8
+    reg c: u8 = 0
+    on clk { if en { c = c +% 1 } }
+    count = c
+}
+
+fn twice(x: u8) -> u8 { x +% x }
+
+test "correct tests check clean" {
+    let dut = sim Counter()
+    let f = sim Fifo<u8, Depth>()
+    dut.reset()
+    dut.en = true
+    dut.step(3)
+    for i in 0..3 {
+        let p = Pair { a: i, b: twice(i) }
+        expect p.a <= p.b
+    }
+    let n = rand<u8>() where n > 2
+    expect n > 2
+    f.push = Stream { valid: true, data: 1 }
+    f.pop.ready = true
+    f.step()
+    expect f.pop.valid or f.count == 1
+    match dut.count {
+        3 => log("three {}", dut.count),
+        x => log("other {}", x),
+    }
+    let d2 = dut
+    expect d2.count == dut.c
+    dut.clk.step()
+}
+
+test "mistakes are found without running the test" {
+    let dut = sim Counter()
+    dut.reset()
+    dut.enable = true
+    expect dut.cout == 3
+    dut.stepp(2)
+    expect twise(1) == 2
+    expect undefined_name
+    let f = sim Fifo<u8, 3>()
+    let g = sim Nope()
+}

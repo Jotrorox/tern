@@ -77,6 +77,18 @@ directory next to the binary when present, for development), parse, resolve,
 and expose `driver_elaborate(...)`. Every command uses it, so the emitter, the
 simulator and the LSP cannot disagree.
 
+`tern check` also checks the tests (project mode compiles tests/ too)
+without running them (`drv_check_tests` in driver.c, part of
+`driver_elaborate_all`, so the LSP gets it as well): every `sim` target
+is elaborated with the test's generic arguments (failures are reported
+unless the arguments use the test's own locals), names resolve through the
+test's lexical scopes, the file scope and the builtins, and every path on
+a handle bound by `let h = sim M()` (`h.push.valid`, `h.rx_fifo.count`,
+`h.sys.step()`, root methods) exists in `M`'s hierarchy (Tern and SV
+names, bundle and instance prefixes, domains). Types and widths of what
+a test reads and writes depend on simulated values and stay with `tern
+test`.
+
 Test blocks are **not** in the IR. `tern test` interprets their AST with the
 same const-evaluator (`src/elab/consteval.c`) extended with simulation-handle
 values (`src/sim/testrun.c`); `sim M<..>()` elaborates `M` into an `IrDesign`

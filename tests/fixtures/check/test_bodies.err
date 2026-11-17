@@ -1,0 +1,7 @@
+test_bodies.tern:49:9: error: `Counter` has no signal `enable`
+test_bodies.tern:50:16: error: `Counter` has no signal `cout`
+test_bodies.tern:51:9: error: `Counter` has no method `stepp`
+test_bodies.tern:52:12: error: cannot find `twise` in this scope
+test_bodies.tern:53:12: error: cannot find `undefined_name` in this scope
+test_bodies.tern:54:17: error: `where` constraint `Depth.is_pow2()` of `Fifo<uint<8>, 3, 2>` is not satisfied
+test_bodies.tern:55:17: error: cannot find `Nope` in this scope
