@@ -1,14 +1,13 @@
-reset_inherit.tern:19:11: error: cannot find `u12` in this scope
+reset_inherit.tern:17:11: error: cannot find `u12` in this scope
    |
-19 |     in x: u12
+17 |     in x: u12
    |           ^^^
    = help: write `uint<12>`; the prelude only has u8, u16, u32, u64 and s8 .. s64
   in: Top
 
-reset_inherit.tern:13:5: error: instance `f`: reset port `rst` is reset, but the inherited reset `rs.rst_out` is reset<async>
+reset_inherit.tern:11:5: error: instance `f`: reset port `rst` is reset, but the inherited reset `ext_rst` is reset<async>
    |
-13 |     let f = Fifo<u8, 4>(push: Stream { valid: true, data: 0 }) @ d
+11 |     let f = Fifo<u8, 4>(push: Stream { valid: true, data: 0 }) @ d
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: connect it explicitly: `rst: rs.rst_out as reset`
+   = help: connect it explicitly: `rst: ext_rst as reset`
   in: Top
-

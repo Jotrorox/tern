@@ -1,0 +1,12 @@
+// args: Acc script_errors.stim
+// An error on the first line of a tern sim script is reported at its
+// script line and column (no hidden wrapper in the excerpt).
+module Acc {
+    in clk: clock
+    in rst: reset
+    in d: u8
+    out sum: u8
+    reg acc: u8 = 0
+    on clk { acc = acc +% d }
+    sum = acc
+}

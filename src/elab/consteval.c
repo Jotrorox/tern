@@ -1007,6 +1007,38 @@ Value elab_symbol_value(Elab *el, const Symbol *sym, Span at)
     return val_error();
 }
 
+/* static_assert(cond[, msg]) in a block or at file level */
+static void ce_static_assert(Elab *el, Expr *cond, Expr *msg, Span at, Env *env)
+{
+    Value c = elab_eval_const(el, cond, env, el->S->t_bool, "a static_assert condition");
+    if (c.kind == VAL_BOOL && !c.u.i) {
+        Value m = msg ? elab_eval_const(el, msg, env, NULL, "a message") : val_error();
+        if (m.kind == VAL_STRING)
+            el_error(el, at, "static assertion failed: %.*s", (int)m.aux, m.u.s);
+        else
+            el_error(el, at, "static assertion failed: `%s`", el_text(cond));
+    } else if (c.kind != VAL_BOOL && c.kind != VAL_ERROR) {
+        el_error(el, cond->span, "static_assert needs a bool condition");
+    }
+}
+
+void elab_check_file_items(Elab *el, FileUnit *file)
+{
+    uint32_t k;
+    for (k = 0; file->ast && k < file->ast->nitems; k++) {
+        Item *it = file->ast->items[k];
+        if (it->kind == ITEM_CONST && it->name.name) {
+            el_item_value(el, it, file, NULL, it->name.span);
+        } else if (it->kind == ITEM_STATIC_ASSERT && it->u.sassert.cond) {
+            Env *env = elab_env_new(el, NULL, file);
+            ce_static_assert(el, it->u.sassert.cond, it->u.sassert.msg, it->span, env);
+            elab_env_free(env);
+        }
+        el->limit_hit = 0;
+        el->steps = 0;
+    }
+}
+
 Value el_item_value(Elab *el, Item *it, FileUnit *file, Env *ctx, Span at)
 {
     Sema *S = el->S;
@@ -1333,7 +1365,8 @@ static Value ce_eval_path(Elab *el, Path *p, Env *env, Ty *expect, int type_ctx)
         if (!sema_feature(el->S, f, &on)) {
             el_error(el, p->segs[1].name.span, "unknown feature `cfg::%s`", f);
             el_help(el, "%s", el->S->has_manifest ? "declare it under [features] in tern.toml"
-                                                  : "features come from [features] in tern.toml");
+                                                  : "features come from [features] in tern.toml, or "
+                                                    "`--features name` for files outside a project");
             return val_error();
         }
         return el_mk_bool(el, on);
@@ -5972,20 +6005,9 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
         }
         return;
     }
-    case STMT_STATIC_ASSERT: {
-        Value c = elab_eval_const(el, s->u.sassert.cond, env, S->t_bool, "a static_assert condition");
-        if (c.kind == VAL_BOOL && !c.u.i) {
-            Value m = s->u.sassert.msg ? elab_eval_const(el, s->u.sassert.msg, env, NULL, "a message")
-                                             : val_error();
-            if (m.kind == VAL_STRING)
-                el_error(el, s->span, "static assertion failed: %.*s", (int)m.aux, m.u.s);
-            else
-                el_error(el, s->span, "static assertion failed: `%s`", el_text(s->u.sassert.cond));
-        } else if (c.kind != VAL_BOOL && c.kind != VAL_ERROR) {
-            el_error(el, s->u.sassert.cond->span, "static_assert needs a bool condition");
-        }
+    case STMT_STATIC_ASSERT:
+        ce_static_assert(el, s->u.sassert.cond, s->u.sassert.msg, s->span, env);
         return;
-    }
     case STMT_RETURN: {
         Value v;
         if (el->blk && !el->in_fn) {

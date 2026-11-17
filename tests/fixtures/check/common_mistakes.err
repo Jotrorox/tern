@@ -68,13 +68,6 @@ common_mistakes.tern:82:17: error: the reset value of `r` must be a compile-time
    = help: a reset value is a constant; to load a signal, assign it in the `on` block
   in: ResetNotConstant
 
-common_mistakes.tern:91:12: error: register `r` cannot hold a bundle (Valid<uint<8>>)
-   |
-91 |     reg r: Valid<u8>
-   |            ^^^^^^^^^
-   = help: declare one register per field (`reg r_valid: bool`), or use a struct type
-  in: RegBundle
-
 common_mistakes.tern:110:9: error: instance `clocked_0` of `Clocked` has unconnected input `clk`
     |
 110 |     y = Clocked(a: a).y
@@ -101,4 +94,3 @@ common_mistakes.tern:136:17: error: width mismatch: `a + b` is uint<9>, expected
     |                 ^^^^^
     = help: use `+%` for a wrapping add, or truncate with `as uint<8>`
   in: MatchArmWidth
-

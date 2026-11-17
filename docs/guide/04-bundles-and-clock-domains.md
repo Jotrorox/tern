@@ -62,6 +62,12 @@ A bundle value can be assigned three ways:
 * with a literal, `Stream { valid: true, data: x }`. A literal lists only the
   fields that flow in the bundle's direction, so `ready` is not in it.
 
+A `reg` (or `var`) may hold a bundle whose fields all flow one way, such as
+`Valid<T>`: it is one register per field (`q.valid`, `q.data`), and a
+literal gives the reset values, `reg q: Valid<u8> = Valid { valid: false,
+data: 0 }`. A bundle with a `flip` field, such as `Stream<T>`, cannot be
+registered: register its forward fields instead.
+
 `fn` items inside a bundle body see the bundle as `self` (no parameter is
 declared for it):
 
@@ -286,8 +292,10 @@ module Bridge {
 ```
 
 A raw asynchronous reset is brought into each domain with `ResetSync`
-(asynchronous assertion, synchronous release). Its output can then be the
-reset of a domain:
+(asynchronous assertion, synchronous release). Because its release is
+synchronous, its output is a plain `reset`: it can be the reset of a domain,
+and that domain's reset connects to `AsyncFifo`, `PulseSync` and the other
+std modules without a cast:
 
 ```tern
 package resetsync

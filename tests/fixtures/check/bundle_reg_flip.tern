@@ -1,0 +1,9 @@
+// A bundle with a `flip` field cannot be a register.
+module M {
+    in clk: clock
+    in s: Stream<u8>
+    reg r: Stream<u8>
+    reg ok: [Valid<u8>; 2] = [Valid { valid: false, data: 0 }, Valid { valid: true, data: 1 }]
+    on clk { ok[0] = Valid { valid: s.valid, data: s.data } }
+    s.ready = ok[1].valid
+}

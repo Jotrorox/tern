@@ -24,7 +24,11 @@
  *              an error; resets taken from another domain warn; the CDC
  *              report lists every primitive instance and unsafe_cross;
  *   unused.c   (--unused) unread inputs, wires, vars, registers, memories
- *              and instance outputs.
+ *              and instance outputs;
+ *   poweron.c  reset-less registers read before any write (§6.5): a
+ *              register without a reset value and without a load (an
+ *              assignment independent of itself) whose next value is
+ *              computed from itself, or that steers a condition/address.
  *
  * What the elaborator guarantees about the IR (src/elab/elab.c):
  *   - IrSignal.domain is set for registers, ports (their `@ dom` or the

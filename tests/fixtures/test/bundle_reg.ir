@@ -1,0 +1,23 @@
+module Pipe top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in a_valid (a.valid): bool @0
+  3: in a_data (a.data): uint<8> @0
+  4: out y_valid (y.valid): bool @0
+  5: out y_data (y.data): uint<8> @0
+  6: reg q_valid (q.valid): bool @0 = 1'h0
+  7: reg q_data (q.data): uint<8> @0 = 8'h0
+  8: reg r_valid (r.valid): bool @0
+  9: reg r_data (r.data): uint<8> @0
+  assign y_valid = r_valid
+  assign y_data = r_data
+  on 0 regs(q_valid, q_data, r_valid, r_data) {
+    q_valid = a_valid
+    q_data = a_data
+    r_valid = q_valid
+    if q_valid {
+      r_data = (q_data + 8'h1)
+    }
+  }
+end

@@ -1,0 +1,3 @@
+script_errors.stim:1:19: error: cannot find `nosuch` in this scope
+---- stderr ----
+tern sim: script_errors.stim:1: stopped at this line

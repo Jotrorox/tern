@@ -490,7 +490,10 @@ int cmd_add(int argc, char **argv)
         TernManifest dm;
         StrBuf val = {0}, out = {0};
         char *err = NULL;
+        PkgVersion node_version;
+        int node_version_ok = 0;
         memset(&node, 0, sizeof node);
+        memset(&node_version, 0, sizeof node_version);
         node.name = tmpname;
         node.kind = PKG_SRC_GIT;
         node.url = git;
@@ -516,6 +519,8 @@ int cmd_add(int argc, char **argv)
             if (best) {
                 node.tag = best->tag;
                 node.commit = best->commit;
+                node_version = best->version;
+                node_version_ok = 1;
             }
             vec_free(tags.items);
         }
@@ -565,7 +570,14 @@ int cmd_add(int argc, char **argv)
         }
         sb_puts(&val, "{ git = ");
         toml_put_string(&val, git);
-        if (node.tag) {
+        if (node.tag && !tag && node_version_ok) {
+            /* the newest release: a caret requirement, so `tern update`
+             * moves to newer compatible tags (docs/packages.md) */
+            char vb[PKG_VERSION_STRLEN];
+            char *req = arena_printf(&a, "^%s", pkg_version_str(&node_version, vb));
+            sb_puts(&val, ", version = ");
+            toml_put_string(&val, req);
+        } else if (node.tag) {
             sb_puts(&val, ", tag = ");
             toml_put_string(&val, node.tag);
         } else if (rev) {

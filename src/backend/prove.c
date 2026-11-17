@@ -138,32 +138,16 @@ static const IrModule *pv_find_module(Driver *dr, const char *name, Arena *ira, 
     int defaults = 1;
     IrDesign *d;
     if (strchr(name, '<')) {
-        /* `Fifo<u8, 4>`: a specialization the design instantiates, by its
-         * display name (spaces ignored) */
-        int errs = diag_error_count();
-        d = driver_elaborate_top(dr, NULL, ira);
+        /* `Fifo<u8, 4>`: elaborated with those generic arguments, exactly
+         * as `tern sim 'Fifo<u8, 4>'` does */
+        d = driver_elaborate_spec(dr, name, ira);
         *dout = d;
-        if (d && diag_error_count() == errs)
-            for (i = 0; i < d->nmodules; i++) {
-                const char *a = d->modules[i]->display, *b = name;
-                while (a && *a && *b) {
-                    if (*a == ' ')
-                        a++;
-                    else if (*b == ' ')
-                        b++;
-                    else if (*a == *b)
-                        a++, b++;
-                    else
-                        break;
-                }
-                if (a && !*a && !*b && !d->modules[i]->is_extern)
-                    return d->modules[i];
-            }
-        if (diag_error_count() == errs) {
-            diag_error(span_none(), "the design does not instantiate `%s`", name);
-            diag_help("prove a module by name to use its default generics, or one that instantiates `%s`", name);
+        if (d && d->top && d->top->is_extern) {
+            diag_error(span_none(), "cannot find module `%s` (extern modules are black boxes and cannot be proven)",
+                       name);
+            return NULL;
         }
-        return NULL;
+        return d ? d->top : NULL;
     }
     if (!it) {
         /* not a user item: a module the design instantiates (std::fifo::Fifo

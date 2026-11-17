@@ -1184,9 +1184,18 @@ static void test_end_to_end(void)
     /* tern add <git url> (newest tag, name from its tern.toml) */
     uart_url = tp_url("remote/uart.git");
     TP_CHECK(tp_run(cmd_add, "add", uart_url, NULL, NULL) == 0);
-    sb_printf(&sb, "uart = { git = \"%s\", tag = \"v1.0.0\" }", uart_url);
+    /* a caret requirement on the newest tag, so tern update can move it */
+    sb_printf(&sb, "uart = { git = \"%s\", version = \"^1.0.0\" }", uart_url);
     TP_CHECK(tp_contains("proj/tern.toml", sb_cstr(&sb)));
     TP_CHECK(tp_contains("proj/tern.lock", "name = \"uart\"\nversion = \"1.0.0\""));
+    /* tern update moves to the newest compatible tag, never to a new major */
+    tp_make_release("uart", "1.0.5", "");
+    tp_make_release("uart", "2.0.0", "");
+    TP_CHECK(tp_run(cmd_add, "add", NULL, NULL, NULL) == 0);       /* the lock stays */
+    TP_CHECK(tp_contains("proj/tern.lock", "name = \"uart\"\nversion = \"1.0.0\""));
+    TP_CHECK(tp_run(cmd_update, "update", "uart", NULL, NULL) == 0);
+    TP_CHECK(tp_contains("proj/tern.lock", "name = \"uart\"\nversion = \"1.0.5\""));
+    TP_CHECK(tp_contains("proj/tern.lock", "tag = \"v1.0.5\""));
     /* ... and with an explicit tag */
     TP_CHECK(tp_run(cmd_add, "add", uart_url, "--tag", "v0.9.0") == 0);
     TP_CHECK(tp_contains("proj/tern.lock", "name = \"uart\"\nversion = \"0.9.0\""));

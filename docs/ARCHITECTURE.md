@@ -48,7 +48,7 @@ spaces — the real syntax is ASCII).
 | `src/sema/` | `resolve.c types.c info.c syninfo.c` (+ `sema.h`) | name binding, type/width rules, semantic info for tooling |
 | `src/elab/` | `value.[ch] consteval.c elab.c mono.c regfile.c` (+ `elab.h`) | const interpreter, generics, unrolling, AST→IR, generated RegisterFile bodies |
 | `src/ir/` | `ir.h ir_build.c ir_json.c` | typed IR (contract below) and JSON form |
-| `src/check/` | `check.c` | multiple/missing drivers, no-latch proof, clock-domain mixing |
+| `src/check/` | `check.c drivers.c assign.c cdc.c unused.c poweron.c` | multiple/missing drivers, no-latch proof, clock-domain mixing |
 | `src/emit/` | `sv.c constraints.c regmap.c` | SystemVerilog/Verilog-2005, .xdc/.sdc, regmap .h/.svd/.md |
 | `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
 | `src/backend/` | `target.c build.c verilator.c vcdread.c formal.c prove.c synth.c cmd_synth.c` (+ `backend.h`) | `tern build`, `tern prove`, `tern synth`: targets, emitted-file output, SymbiYosys / Yosys / Vivado / Quartus scripts and result parsers |
@@ -76,6 +76,18 @@ files ─lex/parse─▶ AST (per-file arena)
 directory next to the binary when present, for development), parse, resolve,
 and expose `driver_elaborate(...)`. Every command uses it, so the emitter, the
 simulator and the LSP cannot disagree.
+
+`tern check` also checks the tests (project mode compiles tests/ too)
+without running them (`drv_check_tests` in driver.c, part of
+`driver_elaborate_all`, so the LSP gets it as well): every `sim` target
+is elaborated with the test's generic arguments (failures are reported
+unless the arguments use the test's own locals), names resolve through the
+test's lexical scopes, the file scope and the builtins, and every path on
+a handle bound by `let h = sim M()` (`h.push.valid`, `h.rx_fifo.count`,
+`h.sys.step()`, root methods) exists in `M`'s hierarchy (Tern and SV
+names, bundle and instance prefixes, domains). Types and widths of what
+a test reads and writes depend on simulated values and stay with `tern
+test`.
 
 Test blocks are **not** in the IR. `tern test` interprets their AST with the
 same const-evaluator (`src/elab/consteval.c`) extended with simulation-handle
@@ -356,6 +368,19 @@ constraint files' CDC report comment) and returns the error count.
   #[test_port], #[keep] and non-user files (`CheckOptions.is_user_file`) are
   exempt.
 
+* `poweron.c` (§6.5, "a reset-less reg read before any write"): works on
+  the IR directly, bit-accurately through wires and comb variables. A
+  register without a reset value is fine when it has a *load* (an
+  assignment whose value and enclosing conditions do not depend on the
+  register itself: data registers under a valid bit, datapaths loaded on
+  `start`). Without one it warns when (a) its next value is computed from
+  its current value (`acc = acc +% d`, counters, LFSRs; routing its own bits
+  as in a shift register does not count) or (b) it steers an `if`/`match`
+  condition, an if-expression select, a memory address or a dynamic index
+  (a reset-less FSM state) unless it is assigned unconditionally every
+  edge. Sync-memory-read registers, #[test_port] and non-user files are
+  exempt. std and the examples check clean.
+
 Diagnostics go through `chk_error`/`chk_warning`, which drop duplicates (the
 same message at the same span from monomorphized copies of a module).
 
@@ -442,6 +467,22 @@ and `lsp_nav.c` (definition, hover, references, symbols, completion,
   re-evaluated each cycle through `Elab.opq_call`), `settle()`,
   `run(ns: n)`, `dump(file)`, `cycle()`, `time_ns()`; `dut.<domain or clock
   port>.step(n)` steps one domain.
+* **`#[test_port]`** (spec §11.1, "a signal a test must drive is exposed
+  with #[test_port]"; the spec has no `force`). Semantics: a test_port may
+  be driven by a test; once the test assigns it, the test's value wins
+  over the design's own driver (a `var` default or comb assignment, a
+  register update or reset, the parent's connection of a child's input)
+  for the rest of the test. The design may leave it undriven (the drivers
+  check exempts it) or drive a default. Implementation: the elaborator
+  sets `IrSignal.test_port` (ports, vars, wires, regs); the simulator
+  gives every test_port below the top inputs a `SimForce` slot, compiles
+  an `SOP_FORCE` after each store to it (so even a block that writes the
+  signal and reads it back sees the test's value) and re-applies active
+  forces after register commits and async resets; `sim_poke` activates
+  the override and `sim_release` ends it. A child's test_port input owns
+  the path `inst.port` (the parent's connection wire of the same path is
+  shadowed). The emitters print a test_port as an ordinary signal; nothing
+  test-related is synthesized.
 * `expect`/`assert` failures print `file:line:col: expect failed at cycle N:
   <expr>` plus `operand = value` lines (operands are re-evaluated quietly;
   impure calls are skipped). `assert`, a failing design assertion or assert
@@ -461,8 +502,9 @@ and `lsp_nav.c` (definition, hover, references, symbols, completion,
   `tests/fixtures/test/` (a fixture's first line `// args: --cover` adds
   arguments). Timing is printed only on a terminal.
 * `tern sim` is a session (`testrun_session_*`) with the design bound to
-  `dut`; command lines are rewritten to Tern statements and parsed as a test
-  body.
+  `dut`; command lines are rewritten to Tern statements and parsed as a
+  block body (`parse_block_string`, preceded by newlines so that a script
+  line keeps its line and column in diagnostics).
 * `std::bus::RegisterFile<Map, Bus>` is generated in `src/elab/regfile.c`:
   Tern statements (ports per regmap entry, front-end instance, decode) are
   appended to the std module's body before it is elaborated. A regmap used
@@ -552,13 +594,18 @@ development `std/` directory becomes `std/...`), so builds are
 reproducible across checkouts. Extern module sources are found relative to
 the project root (or the declaring file) and copied into the output.
 `bk_build_write` writes `build/<target>/` (or `build/` without a project;
-`-o` overrides) with `os_write_file_if_changed` and prints a summary;
+`-o` overrides) with `os_write_file_if_changed` and prints a summary; the
+manifest `.tern-build` in the output directory lists what it wrote, and the
+next build removes the files of that list it no longer generates (never
+anything else: other files in the directory stay);
 `--stdout` prints the `// ---- file: X ----` concatenation (the `.sv`
 golden fixtures in `tests/fixtures/build/` use it); `--lint` runs
 `verilator --lint-only` (`verilator.c`, the waivers of
 `tests/lint_emitted.sh`).
 
-**`tern prove`** (`formal.c`, `prove.c`). `fv_generate` restricts the
+**`tern prove`** (`formal.c`, `prove.c`). A module with generic arguments
+(`tern prove 'Fifo<u8, 4>'`) is elaborated by `driver_elaborate_spec`, the
+lookup `tern sim` uses too (`driver_module_scope`). `fv_generate` restricts the
 design to the module and its descendants and emits it as Verilog-2005
 (what open-source Yosys reads reliably), then appends a checker block under
 `` `ifdef FORMAL `` before each module's `endmodule`; the checks refer to

@@ -46,6 +46,7 @@
 #include "check/assign.c"
 #include "check/cdc.c"
 #include "check/unused.c"
+#include "check/poweron.c"
 
 #include "sim/bitvec.c"
 #include "sim/netlist.c"

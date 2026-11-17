@@ -1,0 +1,12 @@
+// args: --features fast,-wide
+// `--features` defines cfg::name for files outside a project.
+module Top {
+    in a: u8
+    out y: u8
+    out w: bool
+    y = if cfg::fast { a } else { 0 }
+    w = cfg::wide
+    static_assert(cfg::fast, "fast is on")
+    static_assert(!cfg::wide, "wide is off")
+    let z = cfg::missing
+}

@@ -91,23 +91,23 @@ static int simc_exec(SimCmd *c, const char *code, const char *label)
     StrBuf src = {0};
     StrBuf out = {0};
     uint32_t id, i;
-    AstFile *f;
-    int ok;
-    /* The statements are wrapped in a test body; the wrapper's newlines put
-     * them on their line of the script, so diagnostics read `stim.txt:7:1`. */
-    sb_puts(&src, c->lineno > 1 ? "test \"\" {" : "test \"\" { ");
+    Block *body;
+    int ok, nerr = 0;
+    /* The statements are parsed as a block body; leading newlines put them
+     * on their line of the script, so diagnostics read `stim.txt:7:1` and
+     * the excerpt shows the script line. */
     for (i = 1; i < c->lineno; i++)
         sb_putc(&src, '\n');
-    sb_printf(&src, "%s\n}\n", code);
+    sb_printf(&src, "%s\n", code);
     id = src_add(c->lineno ? c->srcname : "<command line>", src.data, src.len);
     sb_free(&src);
-    f = parse_file(&c->ast, id);
+    body = parse_block_string(&c->ast, id, &nerr);
     diag_flush();
-    if (f->nerrors || f->nitems != 1 || f->items[0]->kind != ITEM_TEST) {
+    if (nerr) {
         simc_flush_report(c);
         return 0;
     }
-    ok = testrun_session_exec(c->ts, f->items[0]->u.test.body, &out);
+    ok = testrun_session_exec(c->ts, body, &out);
     simc_flush_report(c);
     if (out.len) {
         if (label)
@@ -311,23 +311,8 @@ int cmd_sim(int argc, char **argv)
             goto done;
         }
     }
-    if (!scope) {
-        /* the file declaring the module (its generic arguments resolve there) */
-        size_t n = 0;
-        char *base;
-        while (top[n] && top[n] != '<' && top[n] != ' ')
-            n++;
-        base = xstrndup(top, n);
-        driver_find_item(c.dr, base, &scope);
-        free(base);
-        if (!scope) {
-            Sema *S = driver_sema(c.dr);
-            size_t i;
-            for (i = 0; i < S->files.len && !scope; i++)
-                if (S->files.data[i]->is_user)
-                    scope = S->files.data[i];
-        }
-    }
+    if (!scope)
+        scope = driver_module_scope(c.dr, top); /* its generic arguments resolve there */
     to.seed = testrun_test_seed(seed, "tern sim");
     c.ts = testrun_session_new(c.dr, scope, &to, &c.report);
     c.interactive = !script_text && os_isatty(0);

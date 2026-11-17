@@ -77,14 +77,26 @@ static void nl_flatten(SimModel *m, const IrModule *mod, uint32_t parent, const 
             s.mem = (uint32_t)m->mems.len;
             vec_push(m->mems, mm);
         }
+        s.force = IR_NONE;
         if (is->test_port && is->kind != IRS_MEM)
             s.writable = 1;
         if (parent == IR_NONE && is->kind == IRS_IN && is->type->kind != IRT_CLOCK &&
             is->type->kind != IRT_RESET)
             s.writable = 1;
+        else if (s.writable) {
+            /* driven by the design too: the test's value overrides it */
+            SimForce f;
+            f.sig = h;
+            f.active = 0;
+            f.val = (uint64_t *)xcalloc(s.limbs + 1, sizeof(uint64_t));
+            s.force = (uint32_t)m->forces.len;
+            vec_push(m->forces, f);
+        }
         vec_push(m->sigs, s);
         slot = map_ref(&m->by_path, hash_bytes(s.path, strlen(s.path)), &inserted);
-        if (inserted)
+        /* a child's #[test_port] input shares its path with the parent's
+         * connection wire ("i.inject"): the port is what a test drives */
+        if (inserted || (is->test_port && is->kind == IRS_IN))
             *slot = h + 1;
         slot = map_ref(&m->by_path, hash_bytes(s.svpath, strlen(s.svpath)), &inserted);
         if (inserted)
@@ -127,6 +139,7 @@ typedef struct NlNode {
     const IrExpr *rhs;
     const IrProcess *proc;
     uint32_t split;           /* proc split per target (false loops): flat target + 1, else 0 */
+    const IrAssign *asg;      /* a continuous assignment of the module (line coverage), or NULL */
     Span loc;
 } NlNode;
 
@@ -171,6 +184,7 @@ static void nl_collect_nodes(SimModel *m, NlBuild *b)
             n.lhs = mod->assigns[i].lhs;
             n.rhs = mod->assigns[i].rhs;
             n.loc = mod->assigns[i].loc;
+            n.asg = &mod->assigns[i];
             nl_add_node(b, &n);
         }
         for (i = 0; i < mod->nprocs; i++) {
@@ -1198,6 +1212,26 @@ static uint32_t nl_cov_block(NlComp *c, const IrBlock *b, int kind, Span loc, ui
     return ctr;
 }
 
+/* coverage counter of a continuous assignment (shared by all instances) */
+static uint32_t nl_cov_assign(NlComp *c, const IrAssign *a)
+{
+    SimModel *m = c->m;
+    uint64_t got;
+    uint32_t ctr;
+    SimCovRaw r;
+    if (map_get(&c->cov_map, MAP_PTR(a), &got))
+        return (uint32_t)got - 1;
+    ctr = m->ncov++;
+    map_put(&c->cov_map, MAP_PTR(a), (uint64_t)ctr + 1);
+    memset(&r, 0, sizeof r);
+    r.counter = ctr;
+    r.mon = IR_NONE;
+    r.kind = SIM_COV_STMT;
+    r.loc = a->loc;
+    vec_push(m->covraw, r);
+    return ctr;
+}
+
 static void nl_stmt(NlComp *c, const IrStmt *s);
 
 static void nl_block(NlComp *c, const IrBlock *b, int kind, Span loc, uint32_t arm)
@@ -1251,6 +1285,11 @@ static void nl_assign(NlComp *c, uint32_t lhs_inst, const IrLvalue *lv, uint32_t
         in->mask = nl_mask(lv->width);
         /* elements of the indexed array: an index past the last one writes nothing */
         in->c = lv->len ? lv->len : (lv->lo < sw ? (sw - lv->lo) / lv->width : 0);
+    }
+    if (s->force != IR_NONE) {
+        in = nl_emit(c, SOP_FORCE, sw);
+        in->d = base;
+        in->p = s->force;
     }
     c->tmp = saved;
     c->inst = saved_inst;
@@ -1568,6 +1607,12 @@ static void nl_compile(SimModel *m, NlBuild *b, NlComp *c)
             nl_block(c, &n->proc->body, -1, n->loc, 0);
         } else {
             c->inst = n->rhs_inst;
+            if (n->asg && n->asg->loc.file) {
+                /* a continuous assignment (`let`, `x = e`) is a line that
+                 * runs whenever its module is simulated */
+                SimInsn *ci = nl_emit(c, SOP_COV, 0);
+                ci->p = nl_cov_assign(c, n->asg);
+            }
             nl_assign(c, n->lhs_inst, &n->lhs, n->rhs_inst, n->rhs);
         }
     }

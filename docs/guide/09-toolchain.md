@@ -120,6 +120,9 @@ writes to `build/`.
 * Extern modules' SystemVerilog files, copied next to the output.
 
 Only changed files are rewritten, so downstream tools see stable timestamps.
+`.tern-build` in the output directory records what the build wrote; the
+next build deletes the files from that list it no longer generates (a
+renamed module's old `.sv`), and leaves every other file alone.
 `tern build --lint` runs `verilator --lint-only` on the result when Verilator
 is installed. [emitted-sv.md](../emitted-sv.md) describes the output in
 detail.
@@ -172,7 +175,8 @@ code.
 ```sh
 tern add axi                  # newest release, recorded as axi = "1.2.3"
 tern add axi@1.2 dma@~0.4     # explicit requirements
-tern add https://github.com/acme/tern-uart --tag v2.0.1
+tern add https://github.com/acme/tern-uart           # newest tag, recorded as version = "^X.Y.Z"
+tern add https://github.com/acme/tern-uart --tag v2.0.1   # pinned: update never moves it
 tern add --path ../vendor-ip
 tern update                   # newer compatible versions
 tern vendor                   # copy everything into vendor/ for offline builds

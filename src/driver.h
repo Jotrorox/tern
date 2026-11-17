@@ -14,7 +14,8 @@
  *   - project mode (a tern.toml at or above the current directory): sources
  *     are src/ (plus tests/ with include_tests), dependencies' src/ roots
  *     are library sources, [features] become cfg::name;
- *   - single-file mode (no tern.toml): the files/directories given.
+ *   - single-file mode (no tern.toml): the files/directories given;
+ *     `--features a,-b` defines cfg::a (true) and cfg::b (false).
  *   Explicit paths always win: they are the "user" files that are checked and
  *   whose roots are elaborated; the rest of the project is library code.
  *
@@ -98,9 +99,12 @@ size_t driver_targets(Driver *dr, const TernTarget **out);
 /* Applies a feature list "a,-b" on top of the current cfg values (`tern
  * build` applies the target's features, then --features; elaboration reads
  * them, so call this before elaborating). 0, or -1 after a diagnostic
- * (unknown feature, or no tern.toml). */
+ * (unknown feature). Without a tern.toml the list defines the features. */
 int driver_apply_features(Driver *dr, const char *list);
 
+/* Evaluates every top-level `const` and file-level static_assert of the
+ * user files (driver_elaborate_all does this too; build and test call it). */
+void driver_check_items(Driver *dr);
 /* A configured elaborator writing into `design` (NULL: interpreter only). */
 Elab *driver_elab_new(Driver *dr, IrDesign *design);
 /* Elaborates `item` with generic arguments `args` (NULL: defaults) into a
@@ -110,6 +114,13 @@ IrDesign *driver_elaborate_module(Driver *dr, Item *item, FileUnit *file, const 
 /* By name (NULL: the --top / target top, else the first #[top], else the
  * first default root). */
 IrDesign *driver_elaborate_top(Driver *dr, const char *name, Arena *ir_arena);
+/* A module given on the command line, with generic arguments
+ * (`Fifo<u8, 4>`, `std::fifo::Fifo<u8, 4>`) or without (then as
+ * driver_elaborate_top). `tern prove` and `tern sim` share it. */
+IrDesign *driver_elaborate_spec(Driver *dr, const char *spec, Arena *ir_arena);
+/* The file in whose scope such a spec resolves: the one declaring its base
+ * name, else the first user file. */
+FileUnit *driver_module_scope(Driver *dr, const char *spec);
 /* `tern check`: elaborates every root (given top, #[top]s or default roots,
  * plus the modules that the user's tests instantiate with `sim`) into one
  * design. Returns the design (never NULL). */

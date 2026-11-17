@@ -3380,6 +3380,35 @@ Expr *parse_expr_string(Arena *a, const char *text, size_t len, const char *name
     return e;
 }
 
+Block *parse_block_string(Arena *a, uint32_t src, int *nerrors)
+{
+    LexOutput lx;
+    Parser p;
+    Block *b;
+    PsStmtVec stmts = {0};
+    lex_source(a, src, &lx);
+    ps_init(&p, a, src, &lx);
+    b = ANEW(a, Block);
+    p.ctx.nl_ignore = 0;
+    ps_stmt_list(&p, &stmts);
+    while (!p.panic && ps_kind(&p) == TK_RBRACE) {
+        ps_error(&p, ps_err_span(&p), "unexpected `}`");
+        ps_advance(&p);
+        ps_stmt_list(&p, &stmts);
+    }
+    PS_TAKE(&p, stmts, Stmt *, b->stmts, b->nstmts);
+    if (b->nstmts && p.pos > 0) {
+        Stmt *last = b->stmts[b->nstmts - 1];
+        if (last->kind == STMT_EXPR && p.toks[p.pos - 1].kind != TK_SEMI)
+            b->tail = last->u.expr;
+    }
+    b->span = span_make(src, 0, (uint32_t)src_get(src)->len);
+    ps_flush_lex(&p, UINT32_MAX);
+    if (nerrors)
+        *nerrors = lx.nerrors + p.nerrors;
+    return b;
+}
+
 Type *parse_type_string(Arena *a, const char *text, size_t len, const char *name, uint32_t *src_out)
 {
     uint32_t src = src_add(name ? name : "<type>", text, len);

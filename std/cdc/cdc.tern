@@ -394,6 +394,12 @@ test "handshake sync: back-pressure holds the next value at the source" {
 /// deasserts on the `Stages`-th rising edge of `clk` after `rst_in` is
 /// released, so every flop in the domain leaves reset in the same cycle.
 /// Feed it a raw external reset (button, PLL not locked, power-on).
+///
+/// Because its release is synchronous to `clk`, `rst_out` is a plain
+/// (synchronous, active-high) `reset`: it is the reset of the `clk` domain,
+/// `domain sys = (clk, rs.rst_out)`, and connects to every std module
+/// (`Fifo`, `AsyncFifo`, `PulseSync`, ...) without a cast. It is held for at
+/// least `Stages` cycles, so flops that sample it synchronously all see it.
 #[cdc(reset_sync)]
 pub module ResetSync<Stages: uint = 2>
 where Stages >= 2
@@ -402,8 +408,8 @@ where Stages >= 2
     in clk: clock
     /// Raw asynchronous reset, active high.
     in rst_in: reset<async>
-    /// Reset for the `clk` domain, active high.
-    out rst_out: reset<async>
+    /// Reset for the `clk` domain, active high, released synchronously.
+    out rst_out: reset
     /// `rst_out` as a plain status bit (for LEDs and status registers;
     /// never use it as a reset).
     out active: bool
@@ -420,7 +426,7 @@ where Stages >= 2
     }
 
     active = chain[Stages - 1]
-    rst_out = chain[Stages - 1] as reset<async>
+    rst_out = chain[Stages - 1] as reset
 
     /// The output reset is asserted whenever the input reset is.
     property asserted_with_input {
@@ -456,7 +462,8 @@ test "reset sync: releases Stages cycles after the input" {
 /// even a one-cycle source reset is never missed by a slower destination
 /// clock) and the destination reset is released synchronously to `dst`
 /// after `Stages` cycles. Use it to reset both sides of an `AsyncFifo`
-/// from one source.
+/// from one source. Like `ResetSync`, its output is a plain `reset` of the
+/// destination domain.
 #[cdc(reset_bridge)]
 pub module ResetBridge<Stages: uint = 2>
 where Stages >= 2
@@ -468,7 +475,7 @@ where Stages >= 2
     /// Destination clock.
     in dst: clock
     /// Reset for the destination domain, active high.
-    out dst_rst: reset<async> @ dst
+    out dst_rst: reset @ dst
     /// `dst_rst` as a plain status bit (never use it as a reset).
     out active: bool @ dst
 
@@ -487,7 +494,7 @@ where Stages >= 2
     }
 
     active = chain[Stages - 1]
-    dst_rst = chain[Stages - 1] as reset<async>
+    dst_rst = chain[Stages - 1] as reset
 
     /// The destination reset is asserted whenever the source reset is.
     property asserted_with_source {

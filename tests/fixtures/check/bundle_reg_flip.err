@@ -1,0 +1,1 @@
+bundle_reg_flip.tern:5:12: error: register `r` cannot hold Stream<uint<8>>: its field `ready` is `flip`

@@ -511,6 +511,54 @@ static uint64_t elb_clock_hz(Elab *el, uint32_t sig, Stmt **body, uint32_t n)
 
 /* ------------------------------------------------------- declarations -- */
 
+/* a `flip` field anywhere in a (nested) bundle type: such a bundle has
+ * parts flowing both ways and cannot be registered */
+static const char *elb_flip_field(const Ty *t)
+{
+    uint32_t i;
+    if (t->kind == TY_ARRAY)
+        return elb_flip_field(t->elem);
+    if (t->kind != TY_BUNDLE)
+        return NULL;
+    for (i = 0; i < t->nfields; i++) {
+        const char *f;
+        if (t->fields[i].flip)
+            return t->fields[i].name;
+        if ((f = elb_flip_field(t->fields[i].ty)) != NULL)
+            return f;
+    }
+    return NULL;
+}
+
+/* reset values of a register of bundle type, field by field */
+static int elb_init_tree(Elab *el, Place *p, Value v)
+{
+    uint32_t i;
+    int ok = 1;
+    if (v.kind == VAL_ERROR || v.kind == VAL_VOID)
+        return 1;
+    if (p->kind == PL_SIG) {
+        if (!val_is_const(&v))
+            return 0;
+        ir_set_init(el->design, el->mod->ir, p->sig, elab_const_bits(el, &v, p->ty));
+        return 1;
+    }
+    if (p->kind != PL_AGG)
+        return 1;
+    for (i = 0; i < p->n; i++) {
+        Value fv;
+        if (p->ty->kind == TY_BUNDLE) {
+            if ((v.kind != VAL_BUNDLE && v.kind != VAL_STRUCT) || !v.u.list || i >= v.u.list->n)
+                return ok;
+            fv = v.u.list->v[i];
+        } else {
+            fv = el_index(el, v, val_int(el->S->t_int, (int64_t)i), span_none(), NULL);
+        }
+        ok &= elb_init_tree(el, p->subs[i], fv);
+    }
+    return ok;
+}
+
 static Value elb_force_reg(Elab *el, Binding *b, Stmt *s, Env *env)
 {
     IrModule *m = el->mod->ir;
@@ -521,13 +569,20 @@ static Value elb_force_reg(Elab *el, Binding *b, Stmt *s, Env *env)
     Value v;
     if (t->kind == TY_ERROR)
         return val_error();
-    if (t->kind == TY_BUNDLE) {
-        el_error(el, s->u.reg.type->span, "register `%s` cannot hold a bundle (%s)", s->u.reg.name.name, ty_str(t));
-        el_help(el, "declare one register per field (`reg %s_valid: bool`), or use a struct type",
-                s->u.reg.name.name);
+    if (ty_has_bundle(t) && elb_flip_field(t)) {
+        /* §8.1: a bundle whose fields all flow one way is a group of
+         * registers; a `flip` field flows against the others */
+        el_error(el, s->u.reg.type->span, "register `%s` cannot hold %s: its field `%s` is `flip`", s->u.reg.name.name,
+                 ty_str(t), elb_flip_field(t));
+        el_help(el, "register the forward fields (a bundle without `flip` fields, e.g. Valid<T>, or a struct); "
+                    "the flipped ones flow the other way");
         return val_error();
     }
-    if (!t->hw) {
+    if (ty_has_bundle(t) && t->kind != TY_BUNDLE && t->kind != TY_ARRAY) {
+        el_error(el, s->u.reg.type->span, "register `%s` cannot hold %s", s->u.reg.name.name, ty_str(t));
+        return val_error();
+    }
+    if (!t->hw && !ty_has_bundle(t)) {
         el_error(el, s->u.reg.type->span, "register `%s` has type %s, which is not a hardware type", s->u.reg.name.name,
                  ty_str(t));
         return val_error();
@@ -539,7 +594,18 @@ static Value elb_force_reg(Elab *el, Binding *b, Stmt *s, Env *env)
     dom = s->u.reg.domain ? el_domain_of(el, s->u.reg.domain, env, s->u.reg.domain->span)
                           : elb_default_domain(el, s->span, arena_printf(&el->arena, "register `%s`", s->u.reg.name.name));
     p = elb_declare_tree(el, name, name, t, IRS_REG, 0, dom, &s->attrs, s->u.reg.name.span);
-    if (s->u.reg.init && p->kind == PL_SIG) {
+    if (s->u.reg.init && p->kind == PL_AGG) {
+        /* one register per field; the literal gives each its reset value */
+        Value iv = elab_eval(el, s->u.reg.init, env, t);
+        if (iv.kind != VAL_ERROR)
+            iv = elab_convert(el, iv, t, s->u.reg.init,
+                              arena_printf(&el->arena, "register `%s`", s->u.reg.name.name), s->u.reg.init->span);
+        if (iv.kind != VAL_ERROR && !elb_init_tree(el, p, iv)) {
+            el_error(el, s->u.reg.init->span, "the reset value of `%s` must be a compile-time constant",
+                     s->u.reg.name.name);
+            el_help(el, "a reset value is a constant; to load a signal, assign it in the `on` block");
+        }
+    } else if (s->u.reg.init && p->kind == PL_SIG) {
         Value iv = elab_eval(el, s->u.reg.init, env, t);
         if (iv.kind != VAL_ERROR) {
             iv = elab_convert(el, iv, t, s->u.reg.init,

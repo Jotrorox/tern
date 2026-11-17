@@ -151,9 +151,9 @@ only a warning). Authors come from `git config user.name/user.email`.
 ```
 tern add axi                       # newest release, written as axi = "1.2.3" (caret)
 tern add axi@1.2 dma@~0.4          # explicit requirements, several at once
-tern add https://github.com/acme/tern-uart              # newest vX.Y.Z tag
+tern add https://github.com/acme/tern-uart              # newest vX.Y.Z tag, written as version = "^X.Y.Z"
 tern add https://github.com/acme/tern-uart --tag v2.0.1 # or --rev <commit> / --branch <b>
-tern add ../tern-uart              # a local git checkout (file:// URL), newest vX.Y.Z tag
+tern add ../tern-uart              # a local git checkout (file:// URL), same
 tern add --path ../vendor-ip       # local package
 tern add                           # fetch everything tern.lock says (after a clone)
 ```
@@ -170,8 +170,10 @@ refreshed too.
 
 Refreshes the index and moves the named packages (default: all) to the newest
 versions their requirements allow, then rewrites `tern.lock`
-(`Updating axi v1.2.0 -> v1.3.1`). Git dependencies pinned by tag stay; branch
-pins move to the branch head.
+(`Updating axi v1.2.0 -> v1.3.1`). Git dependencies with a `version`
+requirement (what `tern add <url>` writes) move to the newest matching tag;
+those pinned by `tag` stay (a note names a newer release); branch pins move to
+the branch head.
 
 ### `tern vendor [--remove]`
 

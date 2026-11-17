@@ -1,0 +1,6 @@
+poweron.tern:18:20: warning: reset-less register `acc` is read before any write: its next value is computed from its current value (`acc`)
+poweron.tern:24:15: warning: reset-less register `state` is read before any write: the decision on `state` depends on it
+poweron.tern:35:30: warning: reset-less register `count` is read before any write: its next value is computed from its current value (`next`)
+poweron.tern:40:45: warning: reset-less register `lfsr` is read before any write: its next value is computed from its current value (`lfsr[5]`)
+poweron.tern:46:12: warning: reset-less register `div` is read before any write: the decision on `div == 9` depends on it
+poweron.tern:52:16: warning: reset-less register `toggle` is read before any write: the decision on `swap` depends on it
