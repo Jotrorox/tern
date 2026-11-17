@@ -1,0 +1,77 @@
+// Enum generics whose variant carries a compile-time payload (spec §12.2,
+// `Arbiter<T, N, Policy>` with `.Weighted<[uint; N]>`).
+
+/// A policy with a const payload: declared generic-style, written
+/// `.Weighted<[3, 1, 2]>` (positional) or `.Weighted<Weights: [..]>` (named).
+pub enum Policy<N: uint> {
+    RoundRobin,
+    Fixed,
+    Weighted<Weights: [uint; N]>,
+}
+
+/// A payload declared with braces works the same way.
+pub enum Shape {
+    Square,
+    Rect { w: uint, h: uint },
+}
+
+const fn weight_sum<N: uint>(p: Policy<N>) -> uint {
+    match p {
+        .Weighted { Weights } => {
+            var s = 0
+            for i in 0..N {
+                s = s + Weights[i]
+            }
+            s
+        },
+        _ => N,
+    }
+}
+
+const fn area(s: Shape) -> uint {
+    match s {
+        .Rect { w, h } => w * h,
+        .Square => 1,
+    }
+}
+
+module Sum<N: uint, P: Policy<N> = .RoundRobin> {
+    out total: uint<8>
+    out fixed: bool
+    out weighted_312: bool
+    total = weight_sum<N>(P)
+    fixed = P == .Fixed
+    weighted_312 = P == .Weighted<[3, 1, 2]>
+}
+
+module Area<S: Shape = .Square> {
+    out a: uint<8>
+    a = area(S)
+}
+
+#[top]
+module Top {
+    out t0: uint<8>
+    out t1: uint<8>
+    out t2: uint<8>
+    out t3: uint<8>
+    out f: bool
+    out w: bool
+    out a0: uint<8>
+    out a1: uint<8>
+    let rr = Sum<3>()
+    let wa = Sum<3, .Weighted<[3, 1, 2]>>()
+    let wb = Sum<3, P: .Weighted<Weights: [4, 4, 4]>>()
+    let wc = Sum<3, Policy::Weighted<[1, 1, 1]>>()
+    let fx = Sum<3, .Fixed>()
+    let sq = Area()
+    let re = Area<.Rect { w: 3, h: 5 }>()
+    t0 = rr.total
+    t1 = wa.total
+    t2 = wb.total
+    t3 = wc.total
+    f = fx.fixed
+    w = wa.weighted_312 and !wb.weighted_312
+    a0 = sq.a
+    a1 = re.a
+}

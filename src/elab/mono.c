@@ -466,6 +466,7 @@ static Ty *mono_build(Elab *el, Item *it, FileUnit *file, Env *ctx, Env *genv, E
             Variant *v = it->u.enum_def.variants[i];
             tv[i].name = v->name.name;
             tv[i].loc = v->span;
+            tv[i].angle = v->angle;
             if (v->has_fields) {
                 TyField *tf = (TyField *)xcalloc(v->nfields ? v->nfields : 1, sizeof(TyField));
                 StrBuf pk = {0}, pn = {0};
@@ -474,7 +475,7 @@ static Ty *mono_build(Elab *el, Item *it, FileUnit *file, Env *ctx, Env *genv, E
                     tf[k].name = v->fields[k]->name.name;
                     tf[k].ty = elab_eval_type(el, v->fields[k]->type, genv);
                     tf[k].loc = v->fields[k]->span;
-                    if (tf[k].ty->kind == TY_ERROR || !tf[k].ty->hw)
+                    if (tf[k].ty->kind == TY_ERROR)
                         ok = 0;
                 }
                 if (ok && v->nfields) {

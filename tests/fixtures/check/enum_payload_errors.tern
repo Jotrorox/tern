@@ -1,0 +1,31 @@
+// Errors around enum variants with a compile-time payload.
+pub enum Policy<N: uint> {
+    RoundRobin,
+    Weighted<Weights: [uint; N]>,
+}
+
+module Arb<N: uint, P: Policy<N> = .RoundRobin> {
+    out o: bool
+    o = P == .RoundRobin
+}
+
+module Uses {
+    in p: Policy<2>
+    out o: bool
+    o = true
+}
+
+module Top {
+    out a: bool
+    out b: bool
+    out c: bool
+    out d: bool
+    let x = Arb<2, .Weighted<[1, 2, 3]>>()
+    let y = Arb<2, .Weighted<[1], [2]>>()
+    let z = Arb<2, .RoundRobin<[1, 2]>>()
+    let w = Arb<2, .Weighted<Bogus: [1, 2]>>()
+    a = x.o
+    b = y.o
+    c = z.o
+    d = w.o
+}

@@ -1881,7 +1881,7 @@ static void doc_text_item(DocSet *ds, const DocItem *d, int width, StrBuf *out)
             const Variant *v = it->u.enum_def.variants[i];
             int vw = doc_cols(v->name.name);
             if (v->has_fields)
-                vw += 1 + doc_cols(doc_src(ds, f, span_make(0, doc_end(v->name.span), doc_end(v->span) - doc_end(v->name.span))));
+                vw += (v->angle ? 0 : 1) + doc_cols(doc_src(ds, f, span_make(0, doc_end(v->name.span), doc_end(v->span) - doc_end(v->name.span))));
             w[0] = TERN_MAX(w[0], vw);
         }
         w[0] = TERN_MIN(w[0], 36);
@@ -1894,7 +1894,7 @@ static void doc_text_item(DocSet *ds, const DocItem *d, int width, StrBuf *out)
                 Span sp = v->span;
                 sp.off = doc_end(v->name.span);
                 sp.len = doc_end(v->span) - sp.off;
-                sb_printf(&nm, " %s", doc_src(ds, f, sp));
+                sb_printf(&nm, v->angle ? "%s" : " %s", doc_src(ds, f, sp));
             }
             cells[0] = nm.data;
             doc_text_row(out, cells, w, 1, doc_row_text(ds, doc_text_of(v->doc)), width);

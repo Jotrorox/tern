@@ -1379,7 +1379,12 @@ static Value ce_eval_path(Elab *el, Path *p, Env *env, Ty *expect, int type_ctx)
         PathSeg *s = &p->segs[i];
         if (!s->name.name)
             return val_error();
+        if (i == 1 && p->nsegs == 2 && base.kind == VAL_ITEM && base.u.fn->item &&
+            base.u.fn->item->kind == ITEM_ENUM && expect && expect->kind == TY_ENUM && expect->def == base.u.fn->item)
+            base = val_type(el->S, expect); /* `Policy::Weighted<..>` typed by its context */
         base = el_member(el, base, s->name.name, s->name.span, env);
+        if (s->has_args && i + 1 == p->nsegs && base.kind == VAL_TYPE && base.aux && base.u.type->kind == TY_ENUM)
+            break; /* a variant payload `E::Weighted<[3, 1, 2]>` (EXPR_PATH builds it) */
         if (s->has_args)
             base = el_apply_generics(el, base, s, env, i + 1 == p->nsegs ? expect : NULL);
     }
@@ -3232,6 +3237,54 @@ static Value ce_struct_literal(Elab *el, Expr *e, Env *env, Ty *expect)
     return val_error();
 }
 
+/* A payload given generic-style, `.Weighted<[3, 1, 2]>` or
+ * `ArbPolicy::Weighted<W: [3, 1, 2]>`: positional values fill the payload
+ * fields in declaration order (skipping the ones given by name). */
+static Value ce_angle_payload(Elab *el, Ty *t, int k, const FieldInit *in, uint32_t n, Env *env, Span at)
+{
+    Ty *pt = t->variants[k].payload;
+    FieldInit *fi;
+    ValList fv;
+    uint32_t i, j;
+    int *used, ok = 1;
+    if (!pt) {
+        el_error(el, at, "variant `%s` has no payload", t->variants[k].name);
+        return val_error();
+    }
+    fi = ANEWN(&el->arena, FieldInit, n ? n : 1);
+    used = (int *)xcalloc(pt->nfields ? pt->nfields : 1, sizeof(int));
+    for (i = 0; i < n; i++) {
+        fi[i] = in[i];
+        if (!in[i].name.name)
+            continue;
+        for (j = 0; j < pt->nfields; j++)
+            if (pt->fields[j].name == in[i].name.name)
+                break;
+        if (j < pt->nfields)
+            used[j] = 1;
+    }
+    for (i = 0; ok && i < n; i++) {
+        if (in[i].name.name)
+            continue;
+        for (j = 0; j < pt->nfields; j++)
+            if (!used[j])
+                break;
+        if (j == pt->nfields) {
+            el_error(el, in[i].span, "too many values for the payload of variant `%s` (%u expected)",
+                     t->variants[k].name, (unsigned)pt->nfields);
+            ok = 0;
+            break;
+        }
+        used[j] = 1;
+        fi[i].name.name = pt->fields[j].name;
+        fi[i].name.span = in[i].span;
+    }
+    free(used);
+    if (!ok || !ce_literal_fields(el, pt, fi, n, 0, env, 0, &fv, at))
+        return val_error();
+    return ce_build_enum(el, t, (uint32_t)k, &fv, at);
+}
+
 static Value ce_variant_literal(Elab *el, Expr *e, Env *env, Ty *expect)
 {
     const char *name = e->u.variant.name.name;
@@ -3255,6 +3308,8 @@ static Value ce_variant_literal(Elab *el, Expr *e, Env *env, Ty *expect)
         ce_variant_help(el, expect, name);
         return val_error();
     }
+    if (e->u.variant.angle)
+        return ce_angle_payload(el, expect, k, e->u.variant.fields, e->u.variant.nfields, env, e->span);
     if (expect->variants[k].payload) {
         ValList fv;
         if (!e->u.variant.has_fields && expect->variants[k].payload->nfields) {
@@ -6150,6 +6205,18 @@ Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
         return val_string(S, e->u.string.value, e->u.string.len);
     case EXPR_PATH: {
         Value v = ce_eval_path(el, &e->u.path, env, expect, 0);
+        PathSeg *last = &e->u.path.segs[e->u.path.nsegs - 1];
+        if (v.kind == VAL_TYPE && v.aux && last->has_args && v.u.type->kind == TY_ENUM) {
+            /* `ArbPolicy::Weighted<[3, 1, 2]>` */
+            FieldInit *fi = ANEWN(&el->arena, FieldInit, last->nargs ? last->nargs : 1);
+            uint32_t i;
+            for (i = 0; i < last->nargs; i++) {
+                fi[i].name = last->args[i].name;
+                fi[i].value = last->args[i].expr;
+                fi[i].span = last->args[i].span;
+            }
+            return ce_angle_payload(el, v.u.type, (int)v.aux - 1, fi, last->nargs, env, e->span);
+        }
         if (v.kind == VAL_TYPE && v.aux) {
             el_error(el, e->span, "variant `%s` needs its fields: `%s { .. }`", el_text(e), el_text(e));
             return val_error();

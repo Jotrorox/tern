@@ -301,7 +301,9 @@ void val_print(const Value *v, StrBuf *out)
         break;
     case VAL_ENUM:
         sb_printf(out, ".%s", v->ty && v->ty->kind == TY_ENUM ? v->ty->variants[v->aux].name : "?");
-        if (v->u.list) {
+        if (v->u.list && v->ty->variants[v->aux].angle) {
+            val_print_list(v->u.list, out, "<", ">"); /* .Weighted<[3, 1, 2]> */
+        } else if (v->u.list) {
             Ty *p = v->ty->variants[v->aux].payload;
             sb_puts(out, " { ");
             for (i = 0; i < v->u.list->n; i++) {
