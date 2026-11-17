@@ -488,27 +488,61 @@ static void elb_set_domain_tree(IrModule *m, Place *p, uint32_t d)
         elb_set_domain_tree(m, p->subs[i], d);
 }
 
-static uint64_t elb_clock_hz(Elab *el, uint32_t sig, Stmt **body, uint32_t n)
+/* `#[clock(hz: N)]` on port `name` of a module body */
+static uint64_t elb_port_attr_hz(Elab *el, Stmt **body, uint32_t n, const char *name, Env *env)
 {
     uint32_t i;
-    IrModule *m = el->mod->ir;
     for (i = 0; i < n; i++) {
         Stmt *s = body[i];
         Attr *a;
-        if (s->kind != STMT_PORT || s->u.port.name.name != m->sigs[sig].name)
+        if (s->kind != STMT_PORT || s->u.port.name.name != name)
             continue;
         a = elb_find_attr(&s->attrs, "clock");
         if (a) {
             uint32_t k;
             for (k = 0; k < a->nargs; k++)
                 if (a->args[k].name.name && strcmp(a->args[k].name.name, "hz") == 0) {
-                    Value v = elab_eval_const(el, a->args[k].value, el->mod->scope, el->S->t_int, "a frequency");
+                    Value v = elab_eval_const(el, a->args[k].value, env, el->S->t_int, "a frequency");
                     uint64_t hz = 0;
                     if (val_get_u64(&v, &hz))
                         return hz;
                 }
         }
     }
+    return 0;
+}
+
+/* nominal frequency of clock port `sig` of the module being elaborated:
+ * its `#[clock(hz)]`, else a generic declared `= clock_hz(port)` */
+static uint64_t elb_clock_hz(Elab *el, uint32_t sig, Stmt **body, uint32_t n)
+{
+    IrModule *m = el->mod->ir;
+    ValModule *vm = el->mod->vm;
+    uint64_t hz;
+    uint32_t i;
+    if (m->sigs[sig].kind != IRS_IN)
+        return 0;
+    hz = elb_port_attr_hz(el, body, n, m->sigs[sig].name, el->mod->scope);
+    for (i = 0; !hz && vm && i < vm->nhz; i++)
+        if (vm->hz_ports[i] == m->sigs[sig].name)
+            hz = vm->hz_vals[i];
+    return hz;
+}
+
+/* the frequency of a clock signal of the current module (a domain's, or a
+ * clock port's), 0 when unknown */
+static uint64_t elb_sig_hz(Elab *el, uint32_t sig)
+{
+    IrModule *m = el->mod->ir;
+    Item *it = el->mod->item;
+    uint32_t i;
+    for (i = 0; i < m->ndomains; i++)
+        if (m->domains[i].clock == sig && m->domains[i].hz)
+            return m->domains[i].hz;
+    if (it && it->kind == ITEM_MODULE)
+        return elb_clock_hz(el, sig, it->u.module.body, it->u.module.nbody);
+    if (it && it->kind == ITEM_EXTERN)
+        return elb_clock_hz(el, sig, it->u.extern_mod.body, it->u.extern_mod.nbody);
     return 0;
 }
 
@@ -777,16 +811,28 @@ static int elb_is_instance_init(Elab *el, Expr *init, Env *env, Value *callee_ou
     callee = init->u.call.callee;
     if (callee->kind != EXPR_PATH)
         return 0;
-    q = el->quiet;
-    el->quiet = 1;
-    cv = el_eval_path(el, &callee->u.path, env, NULL, 0);
-    el->quiet = q;
-    el->quiet_errors = 0;
-    if (cv.kind == VAL_MODULE ||
-        (cv.kind == VAL_ITEM && (cv.u.fn->item->kind == ITEM_MODULE || cv.u.fn->item->kind == ITEM_EXTERN))) {
-        /* evaluate again with diagnostics */
-        *callee_out = el_eval_path(el, &callee->u.path, env, NULL, 0);
-        return callee_out->kind != VAL_ERROR;
+    {
+        Expr *ic = el->inst_call;
+        Env *ie = el->inst_env;
+        int is_mod;
+        el->inst_call = init; /* generic defaults may read the clocks (clock_hz) */
+        el->inst_env = env;
+        q = el->quiet;
+        el->quiet = 1;
+        cv = el_eval_path(el, &callee->u.path, env, NULL, 0);
+        el->quiet = q;
+        el->quiet_errors = 0;
+        is_mod = cv.kind == VAL_MODULE ||
+                 (cv.kind == VAL_ITEM && (cv.u.fn->item->kind == ITEM_MODULE || cv.u.fn->item->kind == ITEM_EXTERN));
+        if (is_mod) {
+            /* evaluate again with diagnostics */
+            *callee_out = el_eval_path(el, &callee->u.path, env, NULL, 0);
+            el->inst_call = ic;
+            el->inst_env = ie;
+            return callee_out->kind != VAL_ERROR;
+        }
+        el->inst_call = ic;
+        el->inst_env = ie;
     }
     return 0;
 }
@@ -1137,10 +1183,16 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
         vm = calleev.u.mod;
     else if (calleev.kind == VAL_ITEM) {
         ElabArgs inferred;
+        Expr *ic = el->inst_call;
+        Env *ie = el->inst_env;
+        el->inst_call = call; /* generic defaults may read the clocks (clock_hz) */
+        el->inst_env = env;
         if (elb_infer_generics(el, calleev.u.fn->item, calleev.u.fn->file, call, env, &inferred))
             vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, &inferred, call->u.call.callee->span);
         else
             vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, NULL, call->u.call.callee->span);
+        el->inst_call = ic;
+        el->inst_env = ie;
     }
     else {
         el_error(el, call->u.call.callee->span, "`%s` is not a module", el_text(call->u.call.callee));
@@ -1508,6 +1560,158 @@ Value el_maybe_temp(Elab *el, Value v, Span at)
     map_put(&mc->sig_driven, sig, 1);
     r = el_hw(el, v.ty, ir_sig(el->design->arena, m, sig, at));
     return r;
+}
+
+/* ----------------------------------------------------------- clock_hz -- */
+
+/* the clock input `name` of a module declaration, or NULL */
+static Stmt *elb_clock_port_decl(Item *it, const char *name)
+{
+    Stmt **body = it->kind == ITEM_MODULE ? it->u.module.body : it->kind == ITEM_EXTERN ? it->u.extern_mod.body : NULL;
+    uint32_t n = it->kind == ITEM_MODULE ? it->u.module.nbody : it->kind == ITEM_EXTERN ? it->u.extern_mod.nbody : 0;
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        Stmt *s = body[i];
+        Type *t;
+        if (s->kind != STMT_PORT || s->u.port.name.name != name || s->u.port.dir != PORT_IN)
+            continue;
+        t = s->u.port.type;
+        if (t && t->kind == TYPE_PATH && t->u.path.nsegs == 1 && t->u.path.segs[0].name.name &&
+            strcmp(t->u.path.segs[0].name.name, "clock") == 0)
+            return s;
+    }
+    return NULL;
+}
+
+static Value elb_hz_value(Elab *el, uint64_t hz)
+{
+    BigInt b = {0};
+    Value v;
+    bn_set_u64(&b, hz);
+    v = val_int_bn(&el->arena, el->S->t_int, &b);
+    bn_free(&b);
+    return v;
+}
+
+/* clock_hz(port) in a generic default of module `it`, evaluated while the
+ * module is bound: the port's own #[clock(hz)], else the frequency of what
+ * the instantiation being elaborated connects to it (by name, `@ dom`, or
+ * the parent's default domain) */
+static Value elb_clock_hz_default(Elab *el, Item *it, Expr *a, Span at)
+{
+    const char *pn = a->kind == EXPR_PATH && a->u.path.nsegs == 1 && !a->u.path.segs[0].has_args
+                         ? a->u.path.segs[0].name.name
+                         : NULL;
+    Expr *ic = el->gdef_call;
+    FileUnit *file = sema_file_of_item(el->S, it);
+    Env *fenv;
+    uint64_t hz;
+    const char *where = NULL;
+    uint32_t i;
+    if (!pn || !elb_clock_port_decl(it, pn)) {
+        el_error(el, a->span, "`%s` is not a clock input of `%s`", el_text(a), it->name.name);
+        el_help(el, "`clock_hz` in a generic default names one of the module's clock ports: `clock_hz(clk)`");
+        return val_error();
+    }
+    fenv = elab_env_new(el, NULL, file);
+    hz = it->kind == ITEM_MODULE ? elb_port_attr_hz(el, it->u.module.body, it->u.module.nbody, pn, fenv) : 0;
+    elab_env_free(fenv);
+    if (hz)
+        return elb_hz_value(el, hz);
+    if (ic && el->mod && ic->kind == EXPR_CALL && ic->u.call.callee->kind == EXPR_PATH &&
+        ic->u.call.callee->u.path.segs[ic->u.call.callee->u.path.nsegs - 1].name.name == it->name.name) {
+        IrModule *m = el->mod->ir;
+        Arg *given = NULL;
+        for (i = 0; i < ic->u.call.nargs; i++) {
+            Arg *x = &ic->u.call.args[i];
+            if (x->name.name == pn ||
+                (!x->name.name && x->value->kind == EXPR_PATH && x->value->u.path.nsegs == 1 &&
+                 x->value->u.path.segs[0].name.name == pn))
+                given = x;
+        }
+        if (given) {
+            Value cv = elab_eval(el, given->value, el->gdef_env, NULL);
+            if (cv.kind == VAL_ERROR)
+                return cv;
+            if (cv.kind != VAL_HW || !cv.ty || cv.ty->kind != TY_CLOCK) {
+                el_error(el, given->value->span, "port `%s` needs a clock, found %s", pn,
+                         cv.ty ? ty_str(cv.ty) : val_kind_name((ValKind)cv.kind));
+                return val_error();
+            }
+            hz = cv.u.e->kind == IRE_SIG ? elb_sig_hz(el, cv.u.e->sig) : 0;
+            where = el_text(given->value);
+        } else {
+            uint32_t d = ic->u.call.domain ? el_domain_of(el, ic->u.call.domain, el->gdef_env, ic->u.call.domain->span)
+                                           : m->default_domain;
+            if (d != IR_NONE) {
+                hz = m->domains[d].hz ? m->domains[d].hz : elb_sig_hz(el, m->domains[d].clock);
+                where = m->domains[d].name && m->domains[d].name[0] ? m->domains[d].name
+                                                                    : m->sigs[m->domains[d].clock].name;
+            }
+        }
+        if (hz)
+            return elb_hz_value(el, hz);
+        if (where) {
+            const char *parent = el->mod->vm ? el->mod->vm->display : m->name;
+            el_error(el, ic->span, "the nominal frequency of `%s` is unknown in `%s` (needed by `%s` for `clock_hz(%s)`)",
+                     where, parent, it->name.name, pn);
+            el_help(el, "give `%s` a generic `ClkHz: uint = clock_hz(%s)` (or its clock port `#[clock(hz: N)]`) so the "
+                        "frequency is passed down, or give `%s` its frequency generic explicitly",
+                    parent, where, it->name.name);
+        } else {
+            el_error(el, ic->span, "`%s` needs a clock for `clock_hz(%s)`, but the instance has none", it->name.name,
+                     pn);
+        }
+        return val_error();
+    }
+    el_error(el, at, "the nominal frequency of clock `%s` of `%s` is unknown here", pn, it->name.name);
+    el_help(el, "instantiate `%s` under a clock with a known frequency (`#[clock(hz: N)]` on the top's clock port), "
+                "or give its frequency generic explicitly",
+            it->name.name);
+    return val_error();
+}
+
+Value el_clock_hz(Elab *el, Expr *call, Env *env)
+{
+    Expr *a;
+    Value v;
+    uint64_t hz = 0;
+    IrModule *m;
+    if (call->u.call.nargs != 1 || call->u.call.args[0].name.name) {
+        el_error(el, call->span, "`clock_hz` takes one clock or domain: `clock_hz(clk)`");
+        return val_error();
+    }
+    a = call->u.call.args[0].value;
+    if (el->gdef_item)
+        return elb_clock_hz_default(el, el->gdef_item, a, call->span);
+    if (!el->mod || !el->mod->ir) {
+        el_error(el, call->span, "`clock_hz` reads a clock of the module being elaborated");
+        el_help(el, "use it inside a module or in a module's generic default: `ClkHz: uint = clock_hz(clk)`");
+        return val_error();
+    }
+    m = el->mod->ir;
+    v = elab_eval(el, a, env, NULL);
+    if (v.kind == VAL_ERROR)
+        return v;
+    if (v.kind == VAL_DOMAIN) {
+        IrDomain *d = &m->domains[v.u.dom->idx];
+        hz = d->hz ? d->hz : elb_sig_hz(el, d->clock);
+    } else if (v.kind == VAL_HW && v.ty && v.ty->kind == TY_CLOCK) {
+        hz = v.u.e->kind == IRE_SIG ? elb_sig_hz(el, v.u.e->sig) : 0;
+    } else {
+        el_error(el, a->span, "`clock_hz` needs a clock or a domain, found %s",
+                 v.ty ? ty_str(v.ty) : val_kind_name((ValKind)v.kind));
+        return val_error();
+    }
+    if (!hz) {
+        const char *self = el->mod->vm ? el->mod->vm->display : m->name;
+        el_error(el, call->span, "the nominal frequency of `%s` is unknown in `%s`", el_text(a), self);
+        el_help(el, "give the clock port `#[clock(hz: N)]`, or declare a generic `ClkHz: uint = clock_hz(%s)` so "
+                    "each instantiation passes it in",
+                el_text(a));
+        return val_error();
+    }
+    return elb_hz_value(el, hz);
 }
 
 /* ------------------------------------------------------- unsafe_cross -- */

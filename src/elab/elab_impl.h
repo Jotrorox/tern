@@ -127,6 +127,8 @@ uint32_t el_domain_of(Elab *el, Expr *e, Env *env, Span at);
 Value el_temporal_call(Elab *el, const char *name, Expr *call, Env *env);
 void el_mod_stmts(Elab *el, Stmt **stmts, uint32_t n, Env *env);
 Value el_unsafe_cross(Elab *el, Value v, Span at);
+/* clock_hz(name) (spec §7.5) */
+Value el_clock_hz(Elab *el, Expr *call, Env *env);
 int el_is_signal_place(const Place *p);
 Value el_maybe_temp(Elab *el, Value v, Span at);
 

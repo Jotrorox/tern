@@ -1,0 +1,94 @@
+module Ticker_10_100 "Ticker<10, 100>"
+  param Hz = 32'ha
+  param ClkHz = 32'h64
+  domain 0 "" clock=clk reset=rst hz=100 default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: out tick: bool @0
+  3: reg cnt: uint<4> @0 = 4'h0
+  assign tick = (cnt == 4'h0)
+  on 0 regs(cnt) {
+    cnt = ((cnt == 4'h9) ? 4'h0 : (cnt + 4'h1))
+  }
+end
+module Ticker_10_40 "Ticker<10, 40>"
+  param Hz = 32'ha
+  param ClkHz = 32'h28
+  domain 0 "" clock=clk reset=rst hz=40 default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: out tick: bool @0
+  3: reg cnt: uint<2> @0 = 2'h0
+  assign tick = (cnt == 2'h0)
+  on 0 regs(cnt) {
+    cnt = ((cnt == 2'h3) ? 2'h0 : (cnt + 2'h1))
+  }
+end
+module Ticker_4_100 "Ticker<4, 100>"
+  param Hz = 32'h4
+  param ClkHz = 32'h64
+  domain 0 "" clock=clk reset=rst hz=100 default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: out tick: bool @0
+  3: reg cnt: uint<5> @0 = 5'h0
+  assign tick = (cnt == 5'h0)
+  on 0 regs(cnt) {
+    cnt = ((cnt == 5'h18) ? 5'h0 : (cnt + 5'h1))
+  }
+end
+module Blinker_100 "Blinker<100>"
+  param ClkHz = 32'h64
+  domain 0 "" clock=clk reset=rst hz=100 default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: out led: bool @0
+  3: out hz: uint<32> @0
+  4: wire t_tick (t.tick): bool @0
+  assign led = t_tick
+  assign hz = 32'h64
+  inst t: Ticker_4_100 (clk = clk, rst = rst, tick -> t_tick)
+end
+module Ticker_5_1000 "Ticker<5, 1000>"
+  param Hz = 32'h5
+  param ClkHz = 32'h3e8
+  domain 0 "" clock=clk reset=rst hz=1000 default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: out tick: bool @0
+  3: reg cnt: uint<8> @0 = 8'h0
+  assign tick = (cnt == 8'h0)
+  on 0 regs(cnt) {
+    cnt = ((cnt == 8'hc7) ? 8'h0 : (cnt + 8'h1))
+  }
+end
+module Top top
+  domain 0 "sys" clock=clk reset=rst hz=100
+  domain 1 "slow" clock=clk2 reset=rst hz=40
+  0: in clk: clock
+  1: in rst: reset<sync, high>
+  2: in clk2: clock
+  3: out a: bool
+  4: out b: bool
+  5: out c: bool
+  6: out d: bool
+  7: out e: uint<32>
+  8: out f: uint<32>
+  9: wire t1_tick (t1.tick): bool @0
+  10: wire t2_tick (t2.tick): bool @1
+  11: wire t3_tick (t3.tick): bool @1
+  12: wire bl_led (bl.led): bool @0
+  13: wire bl_hz (bl.hz): uint<32> @0
+  14: wire t4_tick (t4.tick): bool @0
+  assign a = (t1_tick && t4_tick)
+  assign b = t3_tick
+  assign c = bl_led
+  assign d = t2_tick
+  assign e = bl_hz
+  assign f = 32'h50
+  inst t1: Ticker_10_100 (clk = clk, rst = rst, tick -> t1_tick)
+  inst t2: Ticker_10_40 (clk = clk2, rst = rst, tick -> t2_tick)
+  inst t3: Ticker_10_40 (clk = clk2, rst = rst, tick -> t3_tick)
+  inst bl: Blinker_100 (clk = clk, rst = rst, led -> bl_led, hz -> bl_hz)
+  inst t4: Ticker_5_1000 (clk = clk, rst = rst, tick -> t4_tick)
+end

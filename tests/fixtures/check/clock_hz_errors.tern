@@ -1,0 +1,42 @@
+// clock_hz: frequencies that are not known where they are read.
+module Ticker<Hz: uint, ClkHz: uint = clock_hz(clk)> {
+    in clk: clock
+    in rst: reset
+    out tick: bool
+    tick = ClkHz / Hz > 1
+}
+
+/// Its clock's frequency is not passed in: an instance that needs it fails.
+module NoHz {
+    in clk: clock
+    in rst: reset
+    out a: bool
+    out b: uint<32>
+    let t = Ticker<2>()
+    a = t.tick
+    b = clock_hz(clk)
+}
+
+module BadArg<F: uint = clock_hz(rst)> {
+    in clk: clock
+    in rst: reset
+    out o: bool
+    o = F > 0
+}
+
+#[top]
+module Top {
+    #[clock(hz: 50_000_000)]
+    in clk: clock
+    in rst: reset
+    out a: bool
+    out b: uint<32>
+    out c: bool
+    out d: uint<32>
+    let n = NoHz()
+    let x = BadArg()
+    a = n.a
+    b = n.b
+    c = x.o
+    d = clock_hz(rst) + clock_hz(clk, clk)
+}

@@ -167,6 +167,12 @@ typedef struct ValModule {
     const char *cache_key;    /* unique key of (item, generic arguments) */
     const char *display;
     Span span;
+    /* nominal clock frequencies known from generics declared with a
+     * default `clock_hz(port)` (spec §7.5): the generic's value is the
+     * frequency of that clock port inside the module */
+    const char **hz_ports;
+    uint64_t *hz_vals;
+    uint32_t nhz;
 } ValModule;
 
 typedef struct ValInst {
@@ -252,6 +258,18 @@ struct Elab {
      * e.g. the condition of `dut.step_until(cond)` */
     Expr *opq_call;
     struct Env *opq_env;
+    /* `clock_hz(clk)` in a module's generic default (spec §7.5) reads the
+     * frequency of the clock connected to `clk` at the instantiation:
+     * inst_call/inst_env is the call whose callee is being evaluated in a
+     * module body, bind_item the module whose generics are being bound,
+     * gdef_* the module item, call and parent scope while one of its
+     * generic defaults is evaluated */
+    Expr *inst_call;
+    struct Env *inst_env;
+    Item *bind_item;
+    Item *gdef_item;
+    Expr *gdef_call;
+    struct Env *gdef_env;
 };
 
 typedef struct UndoEntry {
@@ -300,5 +318,8 @@ int elab_ir_verify(const IrDesign *d);
 void elab_check_file_items(Elab *el, FileUnit *file);
 /* Regmaps of a file are added to the design (IrRegmap). */
 void elab_add_regmap(Elab *el, Item *regmap, FileUnit *file);
+/* the clock port a generic default `clock_hz(port)` names, or NULL (spec §7.5:
+ * such a generic is the frequency of that clock inside the module) */
+const char *elab_clock_hz_port(const Expr *def);
 
 #endif /* TERN_ELAB_H */

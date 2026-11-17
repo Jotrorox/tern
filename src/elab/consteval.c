@@ -3879,6 +3879,8 @@ static Value ce_builtin(Elab *el, const char *name, Expr *call, Env *env, Ty *ex
         p = elab_eval_const(el, args[0].value, env, NULL, "a file name");
         return ce_include_file(el, &p, expect, name[8] == 'b', at);
     }
+    if (strcmp(name, "clock_hz") == 0)
+        return el_clock_hz(el, call, env);
     if (strcmp(name, "unsafe_cross") == 0) {
         Value v;
         if (n != 1) {
@@ -4333,7 +4335,18 @@ static Value ce_call(Elab *el, Expr *e, Env *env, Ty *expect)
         el_error(el, callee->span, "this expression cannot be called");
         return val_error();
     }
-    fnv = ce_eval_path(el, &callee->u.path, env, NULL, 0);
+    {
+        /* a module instantiation's generic defaults may read its clocks */
+        Expr *ic = el->inst_call;
+        Env *ie = el->inst_env;
+        if (el->mod) {
+            el->inst_call = e;
+            el->inst_env = env;
+        }
+        fnv = ce_eval_path(el, &callee->u.path, env, NULL, 0);
+        el->inst_call = ic;
+        el->inst_env = ie;
+    }
     return el_call_value(el, fnv, e, env, expect);
 }
 
@@ -6251,8 +6264,15 @@ Value elab_eval(Elab *el, Expr *e, Env *env, Ty *expect)
     }
     case EXPR_CALL:
         if (e->u.call.domain && el->mod) {
-            Value cv = e->u.call.callee->kind == EXPR_PATH ? ce_eval_path(el, &e->u.call.callee->u.path, env, NULL, 0)
-                                                           : val_error();
+            Expr *ic = el->inst_call;
+            Env *ie = el->inst_env;
+            Value cv;
+            el->inst_call = e;
+            el->inst_env = env;
+            cv = e->u.call.callee->kind == EXPR_PATH ? ce_eval_path(el, &e->u.call.callee->u.path, env, NULL, 0)
+                                                     : val_error();
+            el->inst_call = ic;
+            el->inst_env = ie;
             return el_instance(el, e, env, NULL, e->span, cv);
         }
         return ce_call(el, e, env, expect);

@@ -428,8 +428,9 @@ void driver_default_roots(Driver *dr, DriverItemVec *out)
             if (it->kind != ITEM_MODULE || !it->name.name)
                 continue;
             for (g = 0; g < it->u.module.generics.n; g++)
-                if (!it->u.module.generics.items[g].default_type && !it->u.module.generics.items[g].default_value)
-                    ok = 0;
+                if ((!it->u.module.generics.items[g].default_type && !it->u.module.generics.items[g].default_value) ||
+                    elab_clock_hz_port(it->u.module.generics.items[g].default_value))
+                    ok = 0; /* a default read from the instantiation's clock needs an instantiation */
             if (!ok)
                 continue;
             di.item = it;
@@ -762,7 +763,7 @@ static void drv_tc_declare(DrvTc *t, const char *name, ModInfo *mi)
 
 static int drv_tc_builtin_call(const char *n)
 {
-    static const char *const names[] = {"bits",    "const_log", "fell", "include_bin", "include_hex",   "log",
+    static const char *const names[] = {"bits",    "clock_hz", "const_log", "fell", "include_bin", "include_hex",   "log",
                                         "past",    "rose",      "stable", "static_assert", "unsafe_cross",
                                         "rand",    "trunc",     NULL};
     size_t i;
