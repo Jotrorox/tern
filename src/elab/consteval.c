@@ -1104,6 +1104,16 @@ Value el_member(Elab *el, Value base, const char *name, Span at, Env *env)
             el_error(el, at, "enum `%s` has no variant `%s`", ty_str(t), name);
             return val_error();
         }
+        if (t->def && (t->def->kind == ITEM_STRUCT || t->def->kind == ITEM_BUNDLE)) {
+            /* associated `const` / `fn` items of the struct or bundle body */
+            Item **fns = t->def->kind == ITEM_STRUCT ? t->def->u.struct_def.fns : t->def->u.bundle.fns;
+            uint32_t nfns = t->def->kind == ITEM_STRUCT ? t->def->u.struct_def.nfns : t->def->u.bundle.nfns, k;
+            for (k = 0; k < nfns; k++)
+                if (fns[k]->name.name && strcmp(fns[k]->name.name, name) == 0) {
+                    ce_record_item_use(el, at, fns[k], name);
+                    return el_item_value(el, fns[k], t->file, (Env *)t->genv, at);
+                }
+        }
         el_error(el, at, "`%s` has no associated item `%s`", ty_str(t), name);
         return val_error();
     }

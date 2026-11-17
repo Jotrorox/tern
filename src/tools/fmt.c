@@ -2003,26 +2003,33 @@ static void fmt_item(FmtState *st, const Item *it)
         fmt_body(st, it->u.extern_mod.body, it->u.extern_mod.nbody,
                  fmt_find(st, fmt_end(it->u.extern_mod.file_span), TK_LBRACE), close, NULL, 0);
         break;
-    case ITEM_BUNDLE: {
+    case ITEM_BUNDLE:
+    case ITEM_STRUCT: {
         FmtList L;
-        uint32_t nf = it->u.bundle.nfields, nfn = it->u.bundle.nfns, a = 0, b = 0, k = 0;
-        FmtBundleEnt *ents = (FmtBundleEnt *)xcalloc(nf + nfn + 1, sizeof *ents);
+        int bundle = it->kind == ITEM_BUNDLE;
+        Field **fields = bundle ? it->u.bundle.fields : it->u.struct_def.fields;
+        Item **fns = bundle ? it->u.bundle.fns : it->u.struct_def.fns;
+        const GenericParams *gp = bundle ? &it->u.bundle.generics : &it->u.struct_def.generics;
+        uint32_t nf = bundle ? it->u.bundle.nfields : it->u.struct_def.nfields;
+        uint32_t nfn = bundle ? it->u.bundle.nfns : it->u.struct_def.nfns, a = 0, b = 0, k = 0;
+        FmtBundleEnt *ents;
+        if (!bundle && !nfn)
+            goto fmt_plain_struct;
+        ents = (FmtBundleEnt *)xcalloc(nf + nfn + 1, sizeof *ents);
         while (a < nf || b < nfn) {
-            if (b >= nfn || (a < nf && it->u.bundle.fields[a]->span.off < it->u.bundle.fns[b]->span.off)) {
-                ents[k].field = it->u.bundle.fields[a];
-                ents[k].off = it->u.bundle.fields[a++]->span.off;
+            if (b >= nfn || (a < nf && fields[a]->span.off < fns[b]->span.off)) {
+                ents[k].field = fields[a];
+                ents[k].off = fields[a++]->span.off;
             } else {
-                ents[k].fn = it->u.bundle.fns[b];
-                ents[k].off = it->u.bundle.fns[b++]->span.off;
+                ents[k].fn = fns[b];
+                ents[k].off = fns[b++]->span.off;
             }
             k++;
         }
-        fmt_kw_name(st, "bundle", it->name);
-        fmt_gparams(st, &it->u.bundle.generics, 2);
+        fmt_kw_name(st, bundle ? "bundle" : "struct", it->name);
+        fmt_gparams(st, gp, 2);
         fmt_sp(st);
-        fmt_list_init(&L, "{", "}", fmt_find(st, it->u.bundle.generics.present ? fmt_end(it->u.bundle.generics.span)
-                                                                                 : fmt_end(it->name.span),
-                                             TK_LBRACE),
+        fmt_list_init(&L, "{", "}", fmt_find(st, gp->present ? fmt_end(gp->span) : fmt_end(it->name.span), TK_LBRACE),
                       close, k, fmt_bundle_elem, fmt_bundle_off, ents);
         L.spaces = 1;
         L.force = nfn > 0;
@@ -2031,7 +2038,7 @@ static void fmt_item(FmtState *st, const Item *it)
         free(ents);
         break;
     }
-    case ITEM_STRUCT:
+    fmt_plain_struct:
         fmt_kw_name(st, "struct", it->name);
         fmt_gparams(st, &it->u.struct_def.generics, 2);
         fmt_sp(st);

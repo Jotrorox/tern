@@ -516,8 +516,9 @@ struct Item {
             Stmt **body;          /* ports (and whatever else was written) */
             uint32_t nbody;
         } extern_mod;
+        /* fns: the `fn` and `const` items of the body (associated items, `T::NAME`) */
         struct { GenericParams generics; Field **fields; uint32_t nfields; Item **fns; uint32_t nfns; } bundle;
-        struct { GenericParams generics; Field **fields; uint32_t nfields; } struct_def;
+        struct { GenericParams generics; Field **fields; uint32_t nfields; Item **fns; uint32_t nfns; } struct_def;
         struct { GenericParams generics; Variant **variants; uint32_t nvariants; } enum_def;
         struct { Type *type; Expr *value; } const_def;   /* type may be NULL (extension) */
         struct {

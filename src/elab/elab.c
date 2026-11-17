@@ -146,6 +146,24 @@ static void elb_mark_driven(Elab *el, uint32_t sig, Span at, const char *how)
     sema_info_set_driver(el->S, mc->ir->sigs[sig].loc, intern_cstr(how), at);
 }
 
+/* a module-level name declared twice in one scope */
+static int elb_redeclared(Elab *el, Env *env, const char *nm, Span def)
+{
+    Binding *old = nm ? ce_lookup_local_binding(env, nm) : NULL;
+    if (!old || (old->def.file == def.file && old->def.off == def.off))
+        return 0;
+    if (old->def.file == def.file && old->def.off > def.off) {
+        /* report the later one in source order */
+        el_error(el, old->def, "`%s` is declared twice in this module", nm);
+        el_note(el, def, "first declared here");
+    } else {
+        el_error(el, def, "`%s` is declared twice in this module", nm);
+        if (old->def.file)
+            el_note(el, old->def, "first declared here");
+    }
+    return 1;
+}
+
 /* --------------------------------------------------------- assignment -- */
 
 static void elb_assign_leaf(Elab *el, Place *p, Value v, Expr *src, Expr *lhs, Span at)
@@ -396,7 +414,7 @@ static void elb_declare_port(Elab *el, Stmt *s, Env *env)
     Place *p;
     Binding *b;
     ModPort mp;
-    if (!name)
+    if (!name || elb_redeclared(el, env, name, s->u.port.name.span))
         return;
     if (t->kind != TY_ERROR && !t->hw && t->kind != TY_BUNDLE && !(t->kind == TY_ARRAY && ty_has_bundle(t))) {
         el_error(el, s->u.port.type->span, "port `%s` has type %s, which is not a hardware type", name, ty_str(t));
@@ -1576,7 +1594,7 @@ static void elb_bind_decls(Elab *el, Stmt **stmts, uint32_t n, Env *env)
         default:
             break;
         }
-        if (nm) {
+        if (nm && !elb_redeclared(el, env, nm, def)) {
             b = elab_env_bind(el, env, nm, val_void(el->S), def);
             b->lazy = 1;
             b->decl = s;

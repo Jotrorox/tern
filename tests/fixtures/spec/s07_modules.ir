@@ -1,0 +1,318 @@
+module Uart
+  0: out rx_valid (rx.valid): bool
+  1: out rx_data (rx.data): uint<8>
+  2: in rx_ready (rx.ready): bool flipped
+  assign rx_valid = 1'h0
+  assign rx_data = 8'h0
+end
+module Cpu
+  0: in rx_valid (rx.valid): bool
+  1: in rx_data (rx.data): uint<8>
+  2: out rx_ready (rx.ready): bool flipped
+  3: out seen: bool
+  assign rx_ready = 1'h1
+  assign seen = rx_valid
+end
+module Fifo_u8_64 "Fifo<uint<8>, 64>"
+  param Depth = 32'h40
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in push_valid (push.valid): bool @0
+  3: in push_data (push.data): uint<8> @0
+  4: out push_ready (push.ready): bool @0 flipped
+  5: out pop_valid (pop.valid): bool @0
+  6: out pop_data (pop.data): uint<8> @0
+  7: in pop_ready (pop.ready): bool @0 flipped
+  8: out count: uint<7> @0
+  9: mem buf: uint<8> x 64
+  10: reg wr: uint<6> @0 = 6'h0
+  11: reg rd: uint<6> @0 = 6'h0
+  12: reg n: uint<7> @0 = 7'h0
+  assign push_ready = (n != 7'h40)
+  assign pop_valid = (n != 7'h0)
+  assign pop_data = buf[rd]
+  assign count = n
+  on 0 regs(wr, rd, n) {
+    if (push_valid && push_ready) {
+      buf[wr] = push_data
+      wr = (wr + 6'h1)
+    }
+    if (pop_valid && pop_ready) {
+      rd = (rd + 6'h1)
+    }
+    n = ((n + zext7((push_valid && push_ready))) - zext7((pop_valid && pop_ready)))
+  }
+end
+module Fifo_u8_16 "Fifo<uint<8>, 16>"
+  param Depth = 32'h10
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in push_valid (push.valid): bool @0
+  3: in push_data (push.data): uint<8> @0
+  4: out push_ready (push.ready): bool @0 flipped
+  5: out pop_valid (pop.valid): bool @0
+  6: out pop_data (pop.data): uint<8> @0
+  7: in pop_ready (pop.ready): bool @0 flipped
+  8: out count: uint<5> @0
+  9: mem buf: uint<8> x 16
+  10: reg wr: uint<4> @0 = 4'h0
+  11: reg rd: uint<4> @0 = 4'h0
+  12: reg n: uint<5> @0 = 5'h0
+  assign push_ready = (n != 5'h10)
+  assign pop_valid = (n != 5'h0)
+  assign pop_data = buf[rd]
+  assign count = n
+  on 0 regs(wr, rd, n) {
+    if (push_valid && push_ready) {
+      buf[wr] = push_data
+      wr = (wr + 4'h1)
+    }
+    if (pop_valid && pop_ready) {
+      rd = (rd + 4'h1)
+    }
+    n = ((n + zext5((push_valid && push_ready))) - zext5((pop_valid && pop_ready)))
+  }
+end
+module Top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in s_valid (s.valid): bool @0
+  3: in s_data (s.data): uint<8> @0
+  4: out s_ready (s.ready): bool @0 flipped
+  5: in push_valid (push.valid): bool @0
+  6: in push_data (push.data): uint<8> @0
+  7: out push_ready (push.ready): bool @0 flipped
+  8: out full: bool @0
+  9: out total: uint<6> @0
+  10: wire uart_rx_valid (uart.rx.valid): bool
+  11: wire uart_rx_data (uart.rx.data): uint<8>
+  12: wire uart_rx_ready (uart.rx.ready): bool
+  13: wire cpu_rx_valid (cpu.rx.valid): bool
+  14: wire cpu_rx_data (cpu.rx.data): uint<8>
+  15: wire cpu_rx_ready (cpu.rx.ready): bool
+  16: wire cpu_seen (cpu.seen): bool
+  17: wire rx_fifo_push_valid (rx_fifo.push.valid): bool @0
+  18: wire rx_fifo_push_data (rx_fifo.push.data): uint<8> @0
+  19: wire rx_fifo_push_ready (rx_fifo.push.ready): bool @0
+  20: wire rx_fifo_pop_valid (rx_fifo.pop.valid): bool @0
+  21: wire rx_fifo_pop_data (rx_fifo.pop.data): uint<8> @0
+  22: wire rx_fifo_pop_ready (rx_fifo.pop.ready): bool @0
+  23: wire rx_fifo_count (rx_fifo.count): uint<7> @0
+  24: wire fifo_full: bool
+  25: wire fifo_0_push_valid (fifo_0.push.valid): bool @0
+  26: wire fifo_0_push_data (fifo_0.push.data): uint<8> @0
+  27: wire fifo_0_push_ready (fifo_0.push.ready): bool @0
+  28: wire fifo_0_pop_valid (fifo_0.pop.valid): bool @0
+  29: wire fifo_0_pop_data (fifo_0.pop.data): uint<8> @0
+  30: wire fifo_0_pop_ready (fifo_0.pop.ready): bool @0
+  31: wire fifo_0_count (fifo_0.count): uint<5> @0
+  32: wire shorthand_push_valid (shorthand.push.valid): bool @0
+  33: wire shorthand_push_data (shorthand.push.data): uint<8> @0
+  34: wire shorthand_push_ready (shorthand.push.ready): bool @0
+  35: wire shorthand_pop_valid (shorthand.pop.valid): bool @0
+  36: wire shorthand_pop_data (shorthand.pop.data): uint<8> @0
+  37: wire shorthand_pop_ready (shorthand.pop.ready): bool @0
+  38: wire shorthand_count (shorthand.count): uint<5> @0
+  assign rx_fifo_push_valid = uart_rx_valid
+  assign rx_fifo_push_data = uart_rx_data
+  assign uart_rx_ready = rx_fifo_push_ready
+  assign cpu_rx_valid = rx_fifo_pop_valid
+  assign cpu_rx_data = rx_fifo_pop_data
+  assign rx_fifo_pop_ready = cpu_rx_ready
+  assign fifo_full = (rx_fifo_count == 7'h40)
+  assign full = fifo_full
+  assign fifo_0_push_valid = s_valid
+  assign fifo_0_push_data = s_data
+  assign s_ready = fifo_0_push_ready
+  assign fifo_0_pop_ready = 1'h1
+  assign shorthand_push_valid = push_valid
+  assign shorthand_push_data = push_data
+  assign push_ready = shorthand_push_ready
+  assign shorthand_pop_ready = 1'h1
+  assign total = zext6((fifo_0_count + shorthand_count))
+  inst uart: Uart (rx_valid -> uart_rx_valid, rx_data -> uart_rx_data, rx_ready = uart_rx_ready)
+  inst cpu: Cpu (rx_valid = cpu_rx_valid, rx_data = cpu_rx_data, rx_ready -> cpu_rx_ready, seen -> cpu_seen)
+  inst rx_fifo: Fifo_u8_64 (clk = clk, rst = rst, push_valid = rx_fifo_push_valid, push_data = rx_fifo_push_data, push_ready -> rx_fifo_push_ready, pop_valid -> rx_fifo_pop_valid, pop_data -> rx_fifo_pop_data, pop_ready = rx_fifo_pop_ready, count -> rx_fifo_count)
+  inst fifo_0: Fifo_u8_16 (clk = clk, rst = rst, push_valid = fifo_0_push_valid, push_data = fifo_0_push_data, push_ready -> fifo_0_push_ready, pop_valid -> fifo_0_pop_valid, pop_data -> fifo_0_pop_data, pop_ready = fifo_0_pop_ready, count -> fifo_0_count)
+  inst shorthand: Fifo_u8_16 (clk = clk, rst = rst, push_valid = shorthand_push_valid, push_data = shorthand_push_data, push_ready -> shorthand_push_ready, pop_valid -> shorthand_pop_valid, pop_data -> shorthand_pop_data, pop_ready = shorthand_pop_ready, count -> shorthand_count)
+end
+module Dma
+  0: out out_valid (out.valid): bool
+  1: out out_data (out.data): uint<8>
+  2: in out_ready (out.ready): bool flipped
+  assign out_valid = 1'h0
+  assign out_data = 8'h0
+end
+module TwoDomains
+  domain 0 "io" clock=clk_io reset=rst_io
+  0: in clk: clock
+  1: in rst: reset<sync, high>
+  2: in clk_io: clock
+  3: in rst_io: reset<sync, high>
+  4: in s_valid (s.valid): bool
+  5: in s_data (s.data): uint<8>
+  6: out s_ready (s.ready): bool flipped
+  7: out level: uint<7>
+  8: wire dma_out_valid (dma.out.valid): bool
+  9: wire dma_out_data (dma.out.data): uint<8>
+  10: wire dma_out_ready (dma.out.ready): bool
+  11: wire tx_fifo_push_valid (tx_fifo.push.valid): bool @0
+  12: wire tx_fifo_push_data (tx_fifo.push.data): uint<8> @0
+  13: wire tx_fifo_push_ready (tx_fifo.push.ready): bool @0
+  14: wire tx_fifo_pop_valid (tx_fifo.pop.valid): bool @0
+  15: wire tx_fifo_pop_data (tx_fifo.pop.data): uint<8> @0
+  16: wire tx_fifo_pop_ready (tx_fifo.pop.ready): bool @0
+  17: wire tx_fifo_count (tx_fifo.count): uint<7> @0
+  18: wire other_push_valid (other.push.valid): bool @0
+  19: wire other_push_data (other.push.data): uint<8> @0
+  20: wire other_push_ready (other.push.ready): bool @0
+  21: wire other_pop_valid (other.pop.valid): bool @0
+  22: wire other_pop_data (other.pop.data): uint<8> @0
+  23: wire other_pop_ready (other.pop.ready): bool @0
+  24: wire other_count (other.count): uint<5> @0
+  assign tx_fifo_push_valid = dma_out_valid
+  assign tx_fifo_push_data = dma_out_data
+  assign dma_out_ready = tx_fifo_push_ready
+  assign tx_fifo_pop_ready = 1'h1
+  assign other_push_valid = s_valid
+  assign other_push_data = s_data
+  assign s_ready = other_push_ready
+  assign other_pop_ready = 1'h0
+  assign level = tx_fifo_count
+  inst dma: Dma (out_valid -> dma_out_valid, out_data -> dma_out_data, out_ready = dma_out_ready)
+  inst tx_fifo: Fifo_u8_64 (clk = clk_io, rst = rst_io, push_valid = tx_fifo_push_valid, push_data = tx_fifo_push_data, push_ready -> tx_fifo_push_ready, pop_valid -> tx_fifo_pop_valid, pop_data -> tx_fifo_pop_data, pop_ready = tx_fifo_pop_ready, count -> tx_fifo_count)
+  inst other: Fifo_u8_16 (clk = clk_io, rst = rst_io, push_valid = other_push_valid, push_data = other_push_data, push_ready -> other_push_ready, pop_valid -> other_pop_valid, pop_data -> other_pop_data, pop_ready = other_pop_ready, count -> other_count)
+end
+module Pipeline_u8_3 "Pipeline<uint<8>, 3>"
+  param Stages = 32'h3
+  domain 0 "" clock=clk reset=none default
+  0: in clk: clock
+  1: in d: uint<8> @0
+  2: out q: uint<8> @0
+  3: var stage: [uint<8>; 4]
+  4: reg r_0: uint<8> @0
+  5: reg r_1: uint<8> @0
+  6: reg r_2: uint<8> @0
+  assign stage[0+:8] = d
+  assign stage[8+:8] = r_0
+  assign stage[16+:8] = r_1
+  assign stage[24+:8] = r_2
+  assign q = stage[24+:8]
+  on 0 regs(r_0) {
+    r_0 = stage[0+:8]
+  }
+  on 0 regs(r_1) {
+    r_1 = stage[8+:8]
+  }
+  on 0 regs(r_2) {
+    r_2 = stage[16+:8]
+  }
+end
+module Adder_8_0 "Adder<8, false>"
+  param W = 32'h8
+  param Fast = 1'h0
+  0: in a: uint<8>
+  1: in b: uint<8>
+  2: out y: uint<9>
+  3: var c: bool
+  4: var s: uint<8>
+  assign y = {c, s}
+  comb {
+    c = 1'h0
+    s = 8'h0
+    s[0+:1] = ((a[0] ^ b[0]) ^ c)
+    c = ((a[0] && b[0]) || (c && (a[0] ^ b[0])))
+    s[1+:1] = ((a[1] ^ b[1]) ^ c)
+    c = ((a[1] && b[1]) || (c && (a[1] ^ b[1])))
+    s[2+:1] = ((a[2] ^ b[2]) ^ c)
+    c = ((a[2] && b[2]) || (c && (a[2] ^ b[2])))
+    s[3+:1] = ((a[3] ^ b[3]) ^ c)
+    c = ((a[3] && b[3]) || (c && (a[3] ^ b[3])))
+    s[4+:1] = ((a[4] ^ b[4]) ^ c)
+    c = ((a[4] && b[4]) || (c && (a[4] ^ b[4])))
+    s[5+:1] = ((a[5] ^ b[5]) ^ c)
+    c = ((a[5] && b[5]) || (c && (a[5] ^ b[5])))
+    s[6+:1] = ((a[6] ^ b[6]) ^ c)
+    c = ((a[6] && b[6]) || (c && (a[6] ^ b[6])))
+    s[7+:1] = ((a[7] ^ b[7]) ^ c)
+    c = ((a[7] && b[7]) || (c && (a[7] ^ b[7])))
+  }
+end
+module Adder_8_1 "Adder<8, true>"
+  param W = 32'h8
+  param Fast = 1'h1
+  0: in a: uint<8>
+  1: in b: uint<8>
+  2: out y: uint<9>
+  assign y = (zext9(a) + zext9(b))
+end
+module Board top
+  domain 0 "" clock=clk100 reset=rst hz=100000000 default
+  0: in clk100: clock
+  1: in rst: reset<sync, high> @0
+  2: in pad: bool @0 #[tri]
+  3: in s_valid (s.valid): bool @0
+  4: in s_data (s.data): uint<8> @0
+  5: out s_ready (s.ready): bool @0 flipped
+  6: in push_valid (push.valid): bool @0
+  7: in push_data (push.data): uint<8> @0
+  8: out push_ready (push.ready): bool @0 flipped
+  9: in d: uint<8> @0
+  10: in x: sint<6> @0
+  11: out full: bool @0
+  12: out q: uint<8> @0
+  13: out sum: uint<9> @0
+  14: out sum_fast: uint<9> @0
+  15: out par: bool @0
+  16: out sat: sint<6> @0
+  17: out level: uint<7> @0
+  18: wire top_s_valid (top.s.valid): bool @0
+  19: wire top_s_data (top.s.data): uint<8> @0
+  20: wire top_s_ready (top.s.ready): bool @0
+  21: wire top_push_valid (top.push.valid): bool @0
+  22: wire top_push_data (top.push.data): uint<8> @0
+  23: wire top_push_ready (top.push.ready): bool @0
+  24: wire top_full (top.full): bool @0
+  25: wire top_total (top.total): uint<6> @0
+  26: wire two_s_valid (two.s.valid): bool @0
+  27: wire two_s_data (two.s.data): uint<8> @0
+  28: wire two_s_ready (two.s.ready): bool @0
+  29: wire two_level (two.level): uint<7> @0
+  30: wire pipe_d (pipe.d): uint<8> @0
+  31: wire pipe_q (pipe.q): uint<8> @0
+  32: wire ripple_a (ripple.a): uint<8>
+  33: wire ripple_b (ripple.b): uint<8>
+  34: wire ripple_y (ripple.y): uint<9>
+  35: wire fast_a (fast.a): uint<8>
+  36: wire fast_b (fast.b): uint<8>
+  37: wire fast_y (fast.y): uint<9>
+  assign top_s_valid = s_valid
+  assign top_s_data = s_data
+  assign s_ready = top_s_ready
+  assign top_push_valid = push_valid
+  assign top_push_data = push_data
+  assign push_ready = top_push_ready
+  assign two_s_valid = s_valid
+  assign two_s_data = s_data
+  assign s_ready = two_s_ready
+  assign level = two_level
+  assign full = top_full
+  assign pipe_d = d
+  assign q = pipe_q
+  assign ripple_a = d
+  assign ripple_b = 8'h3
+  assign sum = ripple_y
+  assign fast_a = d
+  assign fast_b = 8'h3
+  assign sum_fast = fast_y
+  assign par = ^d
+  assign sat = ((x <s 6'h38) ? 6'h38 : ((x >s 6'h7) ? 6'h7 : x))
+  inst top: Top (clk = clk100, rst = rst, s_valid = top_s_valid, s_data = top_s_data, s_ready -> top_s_ready, push_valid = top_push_valid, push_data = top_push_data, push_ready -> top_push_ready, full -> top_full, total -> top_total)
+  inst two: TwoDomains (clk = clk100, rst = rst, clk_io = clk100, rst_io = rst, s_valid = two_s_valid, s_data = two_s_data, s_ready -> two_s_ready, level -> two_level)
+  inst pipe: Pipeline_u8_3 (clk = clk100, d = pipe_d, q -> pipe_q)
+  inst ripple: Adder_8_0 (a = ripple_a, b = ripple_b, y -> ripple_y)
+  inst fast: Adder_8_1 (a = fast_a, b = fast_b, y -> fast_y)
+end

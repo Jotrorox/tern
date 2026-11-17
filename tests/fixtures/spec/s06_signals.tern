@@ -1,0 +1,121 @@
+// §6 Signals and assignment: the three declarations (6.1), the comb block of
+// 6.2, the clocked block of 6.3 and the reset model (6.4).
+enum Op { Nop, Add, Sub, And }
+
+struct Flags {
+    carry: bool,
+    zero: bool,
+
+    // (not in the spec) the associated const the example uses
+    const NONE: Flags = Flags { carry: false, zero: false }
+}
+
+/// 6.2: a var without default assigned on every path, a var with a default.
+module Alu {
+    in op: Op
+    in a: u32
+    in b: u32
+    out y: u32
+    out carry: bool
+
+    var alu_out: u32 // no default: every branch below must assign it
+    var flags: Flags = Flags::NONE // default given: branches may skip it
+    comb {
+        match op {
+            .Add => { alu_out = (a + b) as u32; flags.carry = (a + b)[32] },
+            .Sub => alu_out = a -% b,
+            .And => alu_out = a & b,
+            .Nop => alu_out = 0,
+        }
+    }
+    y = alu_out
+    carry = flags.carry
+}
+
+/// 6.3 with the default domain (one clock port).
+module Counter {
+    in clk: clock
+    in rst: reset
+    in load: bool
+    in en: bool
+    in din: u8
+    in next_data: u32
+    out count_q: u8
+    out data_q: u32
+
+    reg count: u8 = 0 // reset value 0, default domain
+    reg data: u32 // no reset: must be written before read (checked)
+
+    on clk {
+        if load { count = din } else if en { count = count +% 1 }
+        data = next_data // unconditional: a register with no enable
+    }
+    count_q = count
+    data_q = data
+}
+
+/// 6.3 with two clock ports: every reg says `@ which`.
+module TwoClocks {
+    in clk: clock
+    in rst: reset
+    in clk_io: clock
+    in d: u8
+    out q: u8
+    out busy: bool
+
+    reg tx_q: u8 = 0 @ clk_io // explicit domain
+    on clk_io { tx_q = d }
+    q = tx_q
+
+    // 6.4: "are we in reset" is a register that the design clears
+    domain sys = (clk, rst)
+    reg in_reset: bool = true @ sys
+    on sys { in_reset = false }
+    busy = in_reset
+}
+
+/// 6.4: reset styles live in the reset type.
+module Resets {
+    in clk: clock
+    in rst: reset<async, low>
+    in d: bool
+    out q: bool
+
+    reg r: bool = false
+    on clk { r = d }
+    q = r
+}
+
+#[top]
+module Signals {
+    in clk: clock
+    in rst: reset
+    in clk_io: clock
+    in rst_n: reset<async, low>
+    in op: Op
+    in a: u32
+    in b: u32
+    in load: bool
+    in en: bool
+    in din: u8
+    out y: u32
+    out carry: bool
+    out count: u8
+    out data: u32
+    out q: u8
+    out busy: bool
+    out rq: bool
+
+    domain sys = (clk, rst)
+    let alu = Alu(op, a, b)
+    y = alu.y
+    carry = alu.carry
+    let ctr = Counter(load, en, din, next_data: a) @ sys
+    count = ctr.count_q
+    data = ctr.data_q
+    let two = TwoClocks(clk_io, d: din) @ sys
+    q = two.q
+    busy = two.busy
+    let res = Resets(rst: rst_n, d: load) @ sys
+    rq = res.q
+}

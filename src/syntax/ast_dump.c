@@ -791,6 +791,10 @@ static void ad_item(AdState *d, const Item *it)
             ad_nl(d);
             ad_field(d, it->u.struct_def.fields[i]);
         }
+        for (i = 0; i < it->u.struct_def.nfns; i++) {
+            ad_nl(d);
+            ad_item(d, it->u.struct_def.fns[i]);
+        }
         d->indent--;
         break;
     case ITEM_ENUM:
