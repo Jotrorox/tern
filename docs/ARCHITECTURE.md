@@ -51,7 +51,7 @@ spaces — the real syntax is ASCII).
 | `src/check/` | `drivers.c assign.c cdc.c unused.c` | multiple/missing drivers, no-latch proof, CDC report, unused |
 | `src/emit/` | `sv.c constraints.c regmap.c` | SystemVerilog/Verilog-2005, .xdc/.sdc, regmap .h/.svd/.md |
 | `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
-| `src/backend/` | `verilator.c formal.c synth.c` | scripts for external tools |
+| `src/backend/` | `target.c build.c verilator.c vcdread.c formal.c prove.c synth.c cmd_synth.c` (+ `backend.h`) | `tern build`, `tern prove`, `tern synth`: targets, emitted-file output, SymbiYosys / Yosys / Vivado / Quartus scripts and result parsers |
 | `src/pkg/` | `toml.c manifest.c lock.c git.c cmd_pkg.c` (+ `pkg.h`) | tern.toml, tern.lock, semver, dependency resolution, git; `tern new/add/update/vendor/publish` (docs/packages.md, docs/registry.md) |
 | `src/lsp/` | `rpc.c lsp.c` | JSON-RPC language server over stdio |
 | `src/tools/` | `fmt.c doc.c import.c remap.c` | formatter, HTML docs, `tern import` (SV → extern), `tern remap` (docs/migration.md) |
@@ -324,7 +324,7 @@ skipped without git), `build/test_tools` (`tern import` goldens in
 `tests/fixtures/import/<stem>.expected.tern|.log`, `tern remap`),
 `build/test_fmt` (`tern fmt` is faithful and idempotent on every std file and
 fixture; `tern doc` text goldens in `tests/fixtures/doc/` and an HTML smoke
-test over std) and
+test over std), `build/test_backend` (see "Back ends") and
 `tests/run` (the golden-file runner, `tests/run.c`); all are single
 translation units that `#include` the sources they need. The runner walks `tests/fixtures/`. Each fixture is a
 `.tern` file with sibling expectation files; for each expectation, `tern`
@@ -360,6 +360,96 @@ Usage: `tests/run [-v] [-j N] [--tern path] [--no-std] [<filter>...]`.
 (`tern fmt --check std`, docs/style.md) and runs `tern test --diag-format=short std` from the repository
 root and requires exit status 0; while `tern test` is still the stub ("not
 implemented yet", exit 2) that case is reported as skipped.
+
+## Back ends (`src/backend/`, `backend.h`)
+
+**Targets** (`target.c`). `bk_target_resolve` turns `[target.<name>]` of
+tern.toml into a `BkTarget`: `device` picks the family (`xc*` Xilinx,
+`5C*`/`10M*`/`EP4C*` Intel, `ice40`/`up5k`/`hx8k` iCE40, `LFE5U*` ECP5,
+`GW1N*` Gowin, `sky130`/`gf180` ASIC), which sets the defaults for the
+synthesis tool, the constraint format (`.xdc` for Xilinx, `.sdc` otherwise,
+both for unknown devices) and memory-init formats (`.mif` for Intel). Extra
+keys override them: `vendor`, `kind = "fpga"|"asic"`, `constraints`,
+`mem_init`, `features` (applied before `--features`, via
+`driver_apply_features`), `clock_hz` (synthesis timing goal; default: the
+top's `#[clock(hz)]`), `package` (nextpnr), `part` (full Vivado part),
+`family` (Quartus FAMILY). `backend = "yosys"|"vivado"|"quartus"` is the
+synthesis tool.
+
+**`tern build`** (`build.c`). `bk_build_run`: driver -> the tops (`--top`,
+else the target's `top`, else every `#[top]` of the user files, else the
+first module without required generics), each elaborated into its own
+design -> `check_design` (errors fail the build) -> `emit_design` with the
+target's options -> one merged `SvOutput`. Absolute source paths in line
+markers are rewritten to project-relative ones (`bk_rewrite_paths`; the
+development `std/` directory becomes `std/...`), so builds are
+reproducible across checkouts. Extern module sources are found relative to
+the project root (or the declaring file) and copied into the output.
+`bk_build_write` writes `build/<target>/` (or `build/` without a project;
+`-o` overrides) with `os_write_file_if_changed` and prints a summary;
+`--stdout` prints the `// ---- file: X ----` concatenation (the `.sv`
+golden fixtures in `tests/fixtures/build/` use it); `--lint` runs
+`verilator --lint-only` (`verilator.c`, the waivers of
+`tests/lint_emitted.sh`).
+
+**`tern prove`** (`formal.c`, `prove.c`). `fv_generate` restricts the
+design to the module and its descendants and emits it as Verilog-2005
+(what open-source Yosys reads reliably), then appends a checker block under
+`` `ifdef FORMAL `` before each module's `endmodule`; the checks refer to
+the module's own signals through `SvNames`. Every IR node of a checked
+expression becomes a `wire` of its exact IR width, so no Verilog width rule
+can change a value. Immediate assertions (`assert`/`assume`/`cover`/
+`expect`) become `always @* if (<not in reset> && <path>) assert (c);`
+where the path condition is the conjunction of the `if`/`case` branches
+leading to the statement (comb-block assertions that read a variable the
+same block assigns earlier are not translated). Properties are compiled to
+monitors with the simulator's semantics (sim.h): end-match signals for
+antecedent sequences (`##n`, `##[a:b]`, `##[a:$]` via history and sticky
+registers), obligation vectors for ranged consequents and bounded
+`eventually`, a pending flag for `until`, a first-cycle flag for properties
+without `always`; monitor registers clear in reset. Unbounded obligations
+are liveness and are reported as not translated. The wrapper
+`tern_formal_top` instantiates the module with free inputs and assumes each
+top reset for the first two cycles of its domain and released afterwards,
+which is exactly what `dut.reset()` does in a test. `<Mod>.sby` has tasks
+`bmc`, `prove` (`--induct`) and `cover`; `multiclock on` with several top
+clocks. `prove.c` writes `build/formal/<Mod>/`, runs `sby -f` when it is on
+PATH (otherwise it says what to install and exits 2), and
+`fv_parse_sby_log` maps `Assert failed in ...: <file>:<line>`, `Reached /
+Unreached cover statement at ...` and `Writing trace to VCD file` back to
+the checks by generated file and line. For the first failure,
+`vcdr_parse` (`vcdread.c`, a minimal VCD reader) reads the trace and
+`fv_cex_to_test` writes a Tern test: `sim M<..>()`, `dut.reset()` for the
+reset cycles, then the changed top inputs (clocks and resets excluded) and
+`dut.step()` per clock edge up to the failing step; the simulator reports
+the failing check during the last step. It goes to
+`tests/formal_<module>_<check>.tern` (with the package of the existing
+test files and a `use` of the module), or to stdout with `--print-test`.
+
+**`tern synth`** (`synth.c`, `cmd_synth.c`). Runs the build, then writes
+`build/<target>/synth/`: for Yosys a Verilog-2005 emission of the same
+designs plus `synth.ys` (`synth_ice40` / `synth_ecp5` / `synth_xilinx` /
+`synth_gowin` / `synth_intel_alm` / `synth`, then `tee -o utilization.txt
+stat`; nextpnr-ice40/-ecp5 for Fmax when installed); for Vivado
+`synth.tcl` (non-project mode: `read_verilog -sv`, `read_xdc`,
+`synth_design`, `opt_design`, `place_design`, `route_design`,
+`report_utilization`, `report_timing_summary`); for Quartus
+`synth_quartus.tcl` (`project_new`, sources, SDC, `execute_flow
+-compile`). A tool on PATH is run and its reports are parsed
+(`syn_parse_yosys_stat` for both `stat` formats, `syn_parse_nextpnr`,
+`syn_parse_vivado_util/timing`, `syn_parse_quartus_fit/sta`) into
+LUTs/FFs/BRAM/DSP and Fmax/WNS against the target clock (exit 1 when the
+goal is missed). Without the tool the script is written and the command
+line to run it is printed (exit 0).
+
+`build/test_backend` (`tests/unit/test_backend.c`) tests target
+resolution, path rewriting, the formal generator (and compiles its output
+with Icarus Verilog when installed), the sby log parser on
+`tests/fixtures/formal/sby_bmc_fail.log`, the VCD reader and the
+counterexample test on `tests/fixtures/formal/counter_trace.vcd`, the
+synthesis scripts, the report parsers on `tests/fixtures/synth/`, and
+compiles every `tests/fixtures/build/*.sv` golden with Icarus Verilog. No
+test needs Yosys, SymbiYosys, Vivado or Quartus.
 
 ## Conventions
 

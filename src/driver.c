@@ -406,6 +406,22 @@ size_t driver_targets(Driver *dr, const TernTarget **out)
     return dr->prj.manifest.ntargets;
 }
 
+int driver_apply_features(Driver *dr, const char *list)
+{
+    size_t i;
+    if (!list || !*list)
+        return 0;
+    if (!dr->has_project) {
+        diag_error(span_none(), "features `%s` given, but there is no tern.toml declaring [features]", list);
+        return -1;
+    }
+    if (pkg_features_apply(&dr->prj.manifest, list) != 0)
+        return -1;
+    for (i = 0; i < dr->S->nfeatures && i < dr->prj.manifest.nfeatures; i++)
+        dr->S->feature_values[i] = dr->prj.manifest.features[i].enabled;
+    return 0;
+}
+
 Elab *driver_elab_new(Driver *dr, IrDesign *design)
 {
     Elab *el = elab_new(dr->S, design);

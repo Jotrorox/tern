@@ -1,0 +1,17 @@
+// A generic std::fifo::Fifo instance (§11.1): monomorphized as Fifo_u8_16.
+use std::fifo::Fifo
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in push: Stream<u8>
+    out pop: Stream<u8>
+    out count: uint<5>
+    out full: bool
+
+    let q = Fifo<u8, 16>(push)
+    pop = q.pop
+    count = q.count
+    full = q.full
+}

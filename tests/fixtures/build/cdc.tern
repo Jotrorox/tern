@@ -1,0 +1,30 @@
+// Two clock domains (§8.2-8.3): an async FIFO for data, a two-flop
+// synchronizer for a level and reset synchronizers; `tern build` adds the
+// CDC constraints and report to Top.xdc / Top.sdc.
+use std::cdc::{AsyncFifo, ResetSync, Sync2}
+
+#[top]
+module Top {
+    in sys_clk: clock #[clock(hz: 100_000_000)]
+    in pix_clk: clock #[clock(hz: 25_000_000)]
+    in ext_rst: reset<async>
+
+    let sys_rs = ResetSync(clk: sys_clk, rst_in: ext_rst)
+    let pix_rs = ResetSync(clk: pix_clk, rst_in: ext_rst)
+    domain sys = (sys_clk, sys_rs.rst_out)
+    domain pix = (pix_clk, pix_rs.rst_out)
+
+    in data: Stream<u16> @ sys
+    in enable: bool @ sys
+    out pixels: Stream<u16> @ pix
+    out enabled: bool @ pix
+
+    reg en_q: bool = false @ sys
+    on sys { en_q = enable }
+
+    let xfifo = AsyncFifo<u16, 16>(push: data, src: sys.clock, src_rst: sys_rs.rst_out as reset,
+                                   dst: pix.clock, dst_rst: pix_rs.rst_out as reset)
+    pixels = xfifo.pop
+    let en_sync = Sync2(src: sys.clock, dst: pix.clock, d: en_q)
+    enabled = en_sync.q
+}

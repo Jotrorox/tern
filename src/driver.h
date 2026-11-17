@@ -81,6 +81,11 @@ void driver_default_roots(Driver *dr, DriverItemVec *out);
 void driver_tests(Driver *dr, DriverItemVec *out);
 /* Targets of tern.toml (NULL / 0 in single-file mode). */
 size_t driver_targets(Driver *dr, const TernTarget **out);
+/* Applies a feature list "a,-b" on top of the current cfg values (`tern
+ * build` applies the target's features, then --features; elaboration reads
+ * them, so call this before elaborating). 0, or -1 after a diagnostic
+ * (unknown feature, or no tern.toml). */
+int driver_apply_features(Driver *dr, const char *list);
 
 /* A configured elaborator writing into `design` (NULL: interpreter only). */
 Elab *driver_elab_new(Driver *dr, IrDesign *design);

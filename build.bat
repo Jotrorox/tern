@@ -28,6 +28,8 @@ cl %TERN_CFLAGS% tests\unit\test_fmt.c /Fe:build\test_fmt.exe /Fo:build\test_fmt
 if errorlevel 1 exit /b 1
 cl %TERN_CFLAGS% tests\unit\test_emit.c /Fe:build\test_emit.exe /Fo:build\test_emit.obj
 if errorlevel 1 exit /b 1
+cl %TERN_CFLAGS% tests\unit\test_backend.c /Fe:build\test_backend.exe /Fo:build\test_backend.obj
+if errorlevel 1 exit /b 1
 cl %TERN_CFLAGS% tests\run.c /Fe:tests\run.exe /Fo:build\run.obj
 if errorlevel 1 exit /b 1
 
@@ -44,6 +46,8 @@ if errorlevel 1 exit /b 1
 tern.exe fmt --check std
 if errorlevel 1 exit /b 1
 build\test_emit.exe
+if errorlevel 1 exit /b 1
+build\test_backend.exe
 if errorlevel 1 exit /b 1
 tests\run.exe --tern tern.exe
 if errorlevel 1 exit /b 1

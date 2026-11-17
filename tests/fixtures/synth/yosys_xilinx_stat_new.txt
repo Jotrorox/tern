@@ -1,0 +1,21 @@
+
+=== Top ===
+
+        +----------Local Count, excluding submodules.
+        |
+       45 wires
+      210 wire bits
+       10 public wires
+       60 public wire bits
+        8 ports
+       30 port bits
+      120 cells
+       12   CARRY4
+       40   FDRE
+        4   FDSE
+        6   LUT2
+       50   LUT6
+        5   MUXF7
+        1   RAMB18E1
+        2   DSP48E1
+

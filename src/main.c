@@ -21,10 +21,20 @@ static const MainCmd main_cmds[] = {
      "create a project skeleton (tern.toml, src/, tests/)",
      "  <name>              project directory and package name\n"
      "  --no-git            do not run `git init`\n"},
-    {"build", cmd_build, "Project", "[--target <t>] [--std sv|verilog2005]",
+    {"build", cmd_build, "Project", "[--target <t>] [--top <m>] [--stdout | -o <dir>] [<file.tern>...]",
      "elaborate, check and emit build/<target>/*.sv, constraints, regmaps",
-     "  --target <t>        build target from tern.toml ([target.<t>])\n"
-     "  --std <s>           output dialect: sv (default) or verilog2005\n"},
+     "  --target <t>        build target from tern.toml ([target.<t>]; default: the\n"
+     "                      only target or `default`)\n"
+     "  --top <m>           top module (default: the target's top, else every #[top])\n"
+     "  -o, --output <dir>  output directory (default: build/<target>, or build/\n"
+     "                      without a project)\n"
+     "  --stdout            all files to stdout, each after a `// ---- file: X ----` line\n"
+     "  --std <s>           output dialect: sv (default) or verilog2005\n"
+     "  --emit-assertions   keep assertions and properties (assert/assume/cover property)\n"
+     "  --features <list>   enable/disable features: a,b,-c (after the target's)\n"
+     "  --no-line-markers   no `// tern: file:line` markers\n"
+     "  --lint              run `verilator --lint-only` on the output\n"
+     "  -q, --quiet         no summary\n"},
     {"check", cmd_check, "Project", "[<file.tern>...] [--top <m>] [--unused] [--cdc-report] [--strict]",
      "run every compile-time check without emitting; CDC report, unused signals",
      "  --top <m>           elaborate only module m (default: every #[top], else every\n"
@@ -59,12 +69,26 @@ static const MainCmd main_cmds[] = {
      "  -j <n>              number of parallel workers\n"},
     {"sim", cmd_sim, "Verification", "<top> [--vcd <file>] [<script>]",
      "interactive stimulus REPL or a stimulus script against a top", NULL},
-    {"prove", cmd_prove, "Verification", "<module> [--depth <n>] [--induct]",
+    {"prove", cmd_prove, "Verification", "<module> [--depth <n>] [--induct] [<file.tern>...]",
      "formal verification via Yosys and SymbiYosys",
-     "  --depth <n>         bounded model checking depth\n"
-     "  --induct            also try k-induction for an unbounded proof\n"},
-    {"synth", cmd_synth, "Verification", "[--target <t>]",
-     "drive Yosys / Vivado / Quartus; utilization and timing summary", NULL},
+     "  <module>            module to prove (its default generics, else the\n"
+     "                      instantiation in the design's top)\n"
+     "  --depth <n>         bounded model checking depth (default 20)\n"
+     "  --induct            also try k-induction for an unbounded proof\n"
+     "  --engine \"<e>\"      sby [engines] line (default: smtbmc yices)\n"
+     "  --print-test        print the counterexample test instead of writing\n"
+     "                      tests/formal_<module>_<check>.tern\n"
+     "  --no-run            only write build/formal/<module>/\n"
+     "  --keep              keep the sby work directories after a pass\n"
+     "  --features <list>   enable/disable features: a,b,-c\n"},
+    {"synth", cmd_synth, "Verification", "[--target <t>] [--tool yosys|vivado|quartus]",
+     "drive Yosys / Vivado / Quartus; utilization and timing summary",
+     "  --target <t>        build target from tern.toml (device, backend, clock_hz)\n"
+     "  --tool <t>          yosys, vivado or quartus (default: the target's backend,\n"
+     "                      else by device family)\n"
+     "  --top <m>           top module\n"
+     "  --no-run            only write the script to build/<target>/synth/\n"
+     "  --features <list>   enable/disable features: a,b,-c\n"},
     {"add", cmd_add, "Packages", "<pkg>[@<ver>]... | <git-url> [--tag|--rev|--branch <r>] | --path <dir>",
      "add a dependency (index short name or git URL); writes tern.lock",
      "  <pkg>[@<ver>]       registry package; <ver> is a requirement (1.2, =1.2.3, ~1.2,\n"

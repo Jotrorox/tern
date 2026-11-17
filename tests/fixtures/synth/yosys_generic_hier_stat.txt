@@ -1,0 +1,32 @@
+
+=== Sub ===
+
+   Number of wires:                  9
+   Number of wire bits:             20
+   Number of cells:                 10
+     $_AND_                          4
+     $_DFF_P_                        3
+     $_XOR_                          3
+
+=== Top ===
+
+   Number of wires:                 12
+   Number of wire bits:             40
+   Number of cells:                  6
+     $_DFF_P_                        2
+     $_OR_                           2
+     Sub                             2
+
+=== design hierarchy ===
+
+   Top                               1
+     Sub                             2
+
+   Number of wires:                 30
+   Number of wire bits:             80
+   Number of cells:                 24
+     $_AND_                          8
+     $_DFF_P_                        8
+     $_OR_                           2
+     $_XOR_                          6
+

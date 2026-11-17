@@ -15,3 +15,4 @@
 /fuzz/out/
 .claude/
 tools/embed.dSYM/
+!/tests/fixtures/**/*.vcd

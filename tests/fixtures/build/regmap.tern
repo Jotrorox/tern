@@ -1,0 +1,31 @@
+// §10.3 register map: `tern build` writes Ctrl.h, Ctrl.svd and Ctrl.md next to
+// the SystemVerilog; the design uses the generated register structs.
+
+enum Mode { Off, Slow, Fast, Turbo }
+
+regmap Ctrl {
+    0x00 ctrl: rw { enable: bool @0, mode: Mode @[2:1] },
+    0x04 status: ro { busy: bool @0, err: bool @1 },
+    0x08 count: rw u32,
+    0x10 fifo: wo u8 -> Stream<u8>,
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in wr: bool
+    in wdata: u32
+    in busy: bool
+    out enable: bool
+    out mode: Mode
+    out status: Ctrl::Status
+
+    reg ctrl: Ctrl::Ctrl = Ctrl::Ctrl { enable: false, mode: .Off }
+    on clk {
+        if wr { ctrl = Ctrl::Ctrl::from_bits(wdata[2:0]) }
+    }
+    enable = ctrl.enable
+    mode = ctrl.mode
+    status = Ctrl::Status { busy: busy, err: false }
+}

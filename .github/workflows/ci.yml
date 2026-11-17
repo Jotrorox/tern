@@ -46,6 +46,19 @@ jobs:
         run: make EXTRA=-Werror test
       - name: Lint and synthesize the emitted fixtures
         run: tests/lint_emitted.sh
+      # SymbiYosys has no Ubuntu package, so `tern prove` only generates its
+      # files here; Yosys checks that it reads the generated formal checkers.
+      - name: tern build / synth / prove on a sample project
+        run: |
+          set -e
+          T=$PWD/tern
+          mkdir -p build/ci && cd build/ci
+          rm -rf demo && $T new demo --no-git
+          (cd demo && $T build --lint && $T synth)
+          cp ../../tests/fixtures/ir/properties.tern .
+          $T prove Fifo properties.tern --no-run
+          cd build/formal/*/
+          yosys -q -p "read_verilog -formal $(ls *.v | tr '\n' ' '); prep -top tern_formal_top"
 
   warnings:
     name: Linux check-warnings (gcc + clang, c99 + c11)

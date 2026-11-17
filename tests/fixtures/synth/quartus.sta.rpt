@@ -1,0 +1,13 @@
+Timing Analyzer report for Top
+Tue Nov 17 10:00:05 2026
+Quartus Prime Version 22.1std.0 Build 915 10/25/2022 SC Lite Edition
+
+
++-----------------------------------------------------------+
+; Slow 1100mV 85C Model Fmax Summary                        ;
++------------+-----------------+------------+---------------+
+; Fmax       ; Restricted Fmax ; Clock Name ; Note          ;
++------------+-----------------+------------+---------------+
+; 172.68 MHz ; 172.68 MHz      ; clk        ;               ;
++------------+-----------------+------------+---------------+
+This panel reports FMAX for every clock in the design, regardless of the user-specified clock periods.
