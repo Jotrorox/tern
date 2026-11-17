@@ -1,0 +1,8 @@
+// Port defaults exist for data inputs only, and must fit the port type.
+module Bad {
+    in clk: clock = false
+    in s: Stream<u8> = all0
+    in n: u8 = 300
+    out o: bool = true
+    o = s.valid and n == 0
+}

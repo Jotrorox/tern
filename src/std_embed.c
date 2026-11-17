@@ -20931,6 +20931,38 @@ static const char *const tern_std_chunks_57[] = {
     "    pixel_hz: 74_250_000,\n"
     "}\n"
     "\n"
+    "/// 1280x1024 at 60 Hz (VESA DMT SXGA), 108 MHz pixel clock, 1688x1066\n"
+    "/// total, both syncs positive.\n"
+    "pub const Sxga1280x1024: VideoMode = VideoMode {\n"
+    "    h_active: 1280,\n"
+    "    h_front: 48,\n"
+    "    h_sync: 112,\n"
+    "    h_back: 248,\n"
+    "    v_active: 1024,\n"
+    "    v_front: 1,\n"
+    "    v_sync: 3,\n"
+    "    v_back: 38,\n"
+    "    h_sync_positive: true,\n"
+    "    v_sync_positive: true,\n"
+    "    pixel_hz: 108_000_000,\n"
+    "}\n"
+    "\n"
+    "/// 1600x900 at 60 Hz (VESA DMT, reduced blanking), 108 MHz pixel clock,\n"
+    "/// 1800x1000 total, both syncs positive.\n"
+    "pub const Hdp1600x900: VideoMode = VideoMode {\n"
+    "    h_active: 1600,\n"
+    "    h_front: 24,\n"
+    "    h_sync: 80,\n"
+    "    h_back: 96,\n"
+    "    v_active: 900,\n"
+    "    v_front: 1,\n"
+    "    v_sync: 3,\n"
+    "    v_back: 96,\n"
+    "    h_sync_positive: true,\n"
+    "    v_sync_positive: true,\n"
+    "    pixel_hz: 108_000_000,\n"
+    "}\n"
+    "\n"
     "/// 1920x1080 at 60 Hz (CEA-861 1080p, VIC 16), 148.5 MHz pixel clock,\n"
     "/// 2200x1125 total, both syncs positive.\n"
     "pub const Hd1920x1080: VideoMode = VideoMode {\n"
@@ -20952,7 +20984,7 @@ static const char *const tern_std_chunks_57[] = {
     "\n"
     "/// Total lines per frame of a mode.\n"
     "pub const fn v_total(m: VideoMode) -> uint { m.v_active + m.v_front + m.v_sync + m.v_back }\n"
-    "\n"
+    "\n",
     "/// Video timing generator: horizontal and vertical counters for `Mode`,\n"
     "/// sync pulses with the mode's polarity, and the active-video window.\n"
     "///\n"
@@ -20965,7 +20997,7 @@ static const char *const tern_std_chunks_57[] = {
     "///   them (together) at the pins if needed.\n"
     "/// * After reset the counters start at (0, 0): `frame_start` is high on the\n"
     "///   first cycle.\n"
-    "pub module VgaTiming<Mode: VideoMode = Vga640x480> {\n",
+    "pub module VgaTiming<Mode: VideoMode = Vga640x480> {\n"
     "    /// Delay of the decoded outputs relative to the counters.\n"
     "    pub const LATENCY: uint = 0\n"
     "    /// Pixels per line.\n"
@@ -21061,7 +21093,7 @@ static const char *const tern_std_chunks_57[] = {
     "    for i in 0..8 {\n"
     "        expect dut.x == i and dut.y == 0\n"
     "        expect dut.active == act[i]\n"
-    "        expect dut.hsync == hs[i]\n"
+    "        expect dut.hsync == hs[i]\n",
     "        expect dut.vsync                 // negative polarity, not in sync\n"
     "        dut.step()\n"
     "    }\n"
@@ -21080,7 +21112,7 @@ static const char *const tern_std_chunks_57[] = {
     "    dut.step(8)                          // wraps to the next frame\n"
     "    expect dut.frame_start and dut.x == 0 and dut.y == 0\n"
     "}\n"
-    "\n",
+    "\n"
     "test \"640x480 has 800 pixels per line and 525 lines per frame\" {\n"
     "    let dut = sim VgaTiming<Vga640x480>()\n"
     "    dut.reset()\n"
@@ -21103,7 +21135,18 @@ static const char *const tern_std_chunks_57[] = {
     "    expect h_total(Svga800x600) == 1056 and v_total(Svga800x600) == 628\n"
     "    expect h_total(Xga1024x768) == 1344 and v_total(Xga1024x768) == 806\n"
     "    expect h_total(Hd1280x720) == 1650 and v_total(Hd1280x720) == 750\n"
+    "    expect h_total(Sxga1280x1024) == 1688 and v_total(Sxga1280x1024) == 1066\n"
+    "    expect h_total(Hdp1600x900) == 1800 and v_total(Hdp1600x900) == 1000\n"
     "    expect h_total(Hd1920x1080) == 2200 and v_total(Hd1920x1080) == 1125\n"
+    "}\n"
+    "\n"
+    "test \"preset pixel clocks give 60 Hz frames\" {\n"
+    "    for m in [\n"
+    "        Vga640x480, Svga800x600, Xga1024x768, Hd1280x720, Sxga1280x1024, Hdp1600x900, Hd1920x1080,\n"
+    "    ] {\n"
+    "        let fps_milli = m.pixel_hz * 1000 / (h_total(m) * v_total(m))\n"
+    "        expect fps_milli >= 59_900 and fps_milli <= 60_400\n"
+    "    }\n"
     "}\n"
 };
 
@@ -21165,7 +21208,7 @@ const StdEmbedFile tern_std_files[] = {
     {"std/video/framebuffer.tern", tern_std_chunks_54, 1, 3853},
     {"std/video/text.tern", tern_std_chunks_55, 3, 9909},
     {"std/video/tmds.tern", tern_std_chunks_56, 2, 6447},
-    {"std/video/video.tern", tern_std_chunks_57, 3, 8811},
+    {"std/video/video.tern", tern_std_chunks_57, 3, 10023},
 };
 const size_t tern_std_file_count = 58;
 

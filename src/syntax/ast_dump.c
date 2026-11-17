@@ -579,6 +579,7 @@ static void ad_stmt(AdState *d, const Stmt *s)
         sb_putc(d->sb, ' ');
         ad_type(d, s->u.port.type);
         ad_opt(d, "@", s->u.port.domain);
+        ad_opt(d, "=", s->u.port.deflt);
         break;
     case STMT_DOMAIN:
         ad_stmt_head(d, "domain", s);

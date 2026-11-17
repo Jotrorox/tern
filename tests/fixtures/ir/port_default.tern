@@ -1,0 +1,36 @@
+// An input with a default (`in clear: bool = false`) may be left
+// unconnected: the instance then drives the default. Connecting it, or
+// assigning it after the instantiation, overrides the default.
+module Acc {
+    in clk: clock
+    in rst: reset
+    in d: u8
+    in clear: bool = false
+    in gain: uint<2> = 1
+    out q: u8
+
+    reg r: u8 = 0
+    on clk {
+        r = if clear { 0 } else { r +% (d * gain) as u8 }
+    }
+    q = r
+}
+
+#[top]
+module Top {
+    in clk: clock
+    in rst: reset
+    in d: u8
+    in c: bool
+    out a: u8
+    out b: u8
+    out e: u8
+
+    let x = Acc(d: d)
+    let y = Acc(d: d, clear: c, gain: 3)
+    let z = Acc(d: d)
+    z.clear = c
+    a = x.q
+    b = y.q
+    e = z.q
+}

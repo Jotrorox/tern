@@ -463,6 +463,20 @@ static void elb_declare_port(Elab *el, Stmt *s, Env *env)
     mp.is_clock = t->kind == TY_CLOCK;
     mp.is_reset = t->kind == TY_RESET;
     mp.loc = s->u.port.name.span;
+    if (s->u.port.deflt) {
+        if (s->u.port.dir != PORT_IN || !t->hw || mp.is_clock || mp.is_reset) {
+            el_error(el, s->u.port.deflt->span, "only data inputs have defaults; `%s` is %s", name,
+                     s->u.port.dir != PORT_IN ? "an output" : ty_str(t));
+        } else {
+            Value dv = elab_eval_const(el, s->u.port.deflt, env, t, "a port default");
+            if (dv.kind != VAL_ERROR)
+                dv = elab_convert(el, dv, t, s->u.port.deflt, "the port default", s->u.port.deflt->span);
+            if (dv.kind != VAL_ERROR) {
+                mp.has_default = 1;
+                mp.deflt = dv;
+            }
+        }
+    }
     {
         ModInfo *mi = mc->mi;
         ModPort *np = ANEWN(&el->arena, ModPort, mi->nports + 1);
@@ -2484,6 +2498,21 @@ static void elb_finish(Elab *el, ModCtx *mc)
         rp->body.stmts[0]->rhs = f.result;
     }
     elb_check_mem_ports(el, mc);
+    /* inputs left open that declare a default (`in clear: bool = false`) */
+    for (i = 0; i < mc->pendings.len; i++) {
+        PendingIn *pi = &mc->pendings.data[i];
+        ValInst *vi = pi->inst;
+        if (pi->assigned || !vi)
+            continue;
+        for (k = 0; k < vi->mi->nports; k++) {
+            ModPort *pp = &vi->mi->ports[k];
+            if (pp->has_default && strcmp(pp->name, pi->port) == 0) {
+                ir_add_assign(el->design, m, ir_lv_sig(m, pi->sig), el_to_ir(el, &pp->deflt, vi->loc), vi->loc);
+                pi->assigned = 1;
+                break;
+            }
+        }
+    }
     /* unconnected instance inputs */
     for (i = 0; i < mc->pendings.len; i++) {
         PendingIn *pi = &mc->pendings.data[i];

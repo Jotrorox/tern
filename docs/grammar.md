@@ -230,7 +230,7 @@ decides which statements are legal where.
 
 ```
 stmt   = attrs (
-           ( "in" | "out" ) name ":" type [ "@" postfix ] { attr }    (* port *)
+           ( "in" | "out" ) name ":" type [ "@" postfix ] [ "=" expr ] { attr }    (* port *)
          | "domain" name "=" "(" expr [ "," expr ] ")"
          | "let" pattern [ ":" type ] "=" expr [ "where" expr ]
          | "var" name [ ":" type ] [ "=" expr [ "where" expr ] ]
@@ -254,6 +254,12 @@ block  = "{" { stmt NL } "}" ;
   `out[i].valid = ...` and `in = x` are assignments.
 * **Port extras:** a port may carry a domain (`in d: T @ src_d`) and
   trailing attributes on the same line (`in clk: clock #[clock(hz: N)]`).
+* **Input defaults** (an extension that spec §12.3's
+  `Crc32(in: xfifo.pop)` needs for `clear`): a data input may declare a
+  compile-time default, `in clear: bool = false`. An instance that leaves
+  it unconnected (and does not assign it later) drives the default;
+  otherwise an unconnected input is still an error. Outputs, clocks,
+  resets and bundle ports have no defaults.
 * **Domains:** a `reg` or `on` may name a clock port or a domain.
   `domain d = (clk, rst)` takes expressions, so a converted `let` works.
 * **`reg` with domain:** the domain is not part of the initializer
@@ -503,7 +509,8 @@ Appendix A:
     * named arguments (`step_until(c, max: 300)`, `run(ns: 500)`,
       `expect_eventually(c, max: 20)`);
     * several statements per line with `;`.
-18. Enum variant payloads declared and written generic-style
+18. Input port defaults (`in clear: bool = false`, §4.3).
+19. Enum variant payloads declared and written generic-style
     (`Weighted<Weights: [uint; N]>`, `.Weighted<[3, 1, 2]>`), and
     `clock_hz(clk)` (§4.2, §4.8).
 

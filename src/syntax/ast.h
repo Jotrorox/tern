@@ -405,7 +405,8 @@ struct Stmt {
     AttrList attrs;       /* #[...] written before (ports: also after the type) */
     AstDoc *doc;          /* or NULL */
     union {
-        struct { PortDir dir; Ident name; Type *type; Expr *domain; } port;   /* domain may be NULL */
+        struct { PortDir dir; Ident name; Type *type; Expr *domain; Expr *deflt; } port;
+                              /* domain, deflt (`in clear: bool = false`) may be NULL */
         struct { Ident name; Expr *clock; Expr *reset; } domain;               /* reset may be NULL */
         struct { Pattern *pat; Type *type; Expr *init; Expr *constraint; } let; /* type, constraint may be NULL */
         struct { Ident name; Type *type; Expr *init; Expr *constraint; } var;  /* all but name optional */

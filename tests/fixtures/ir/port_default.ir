@@ -1,0 +1,51 @@
+module Acc
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in d: uint<8> @0
+  3: in clear: bool @0
+  4: in gain: uint<2> @0
+  5: out q: uint<8> @0
+  6: reg r: uint<8> @0 = 8'h0
+  assign q = r
+  on 0 regs(r) {
+    r = (clear ? 8'h0 : (r + zext8((zext10(d) * zext10(gain)))))
+  }
+end
+module Top top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in d: uint<8> @0
+  3: in c: bool @0
+  4: out a: uint<8> @0
+  5: out b: uint<8> @0
+  6: out e: uint<8> @0
+  7: wire x_d (x.d): uint<8> @0
+  8: wire x_clear (x.clear): bool @0
+  9: wire x_gain (x.gain): uint<2> @0
+  10: wire x_q (x.q): uint<8> @0
+  11: wire y_d (y.d): uint<8> @0
+  12: wire y_clear (y.clear): bool @0
+  13: wire y_gain (y.gain): uint<2> @0
+  14: wire y_q (y.q): uint<8> @0
+  15: wire z_d (z.d): uint<8> @0
+  16: wire z_clear (z.clear): bool @0
+  17: wire z_gain (z.gain): uint<2> @0
+  18: wire z_q (z.q): uint<8> @0
+  assign x_d = d
+  assign y_d = d
+  assign y_clear = c
+  assign y_gain = 2'h3
+  assign z_d = d
+  assign z_clear = c
+  assign a = x_q
+  assign b = y_q
+  assign e = z_q
+  assign x_clear = 1'h0
+  assign x_gain = 2'h1
+  assign z_gain = 2'h1
+  inst x: Acc (clk = clk, rst = rst, d = x_d, clear = x_clear, gain = x_gain, q -> x_q)
+  inst y: Acc (clk = clk, rst = rst, d = y_d, clear = y_clear, gain = y_gain, q -> y_q)
+  inst z: Acc (clk = clk, rst = rst, d = z_d, clear = z_clear, gain = z_gain, q -> z_q)
+end

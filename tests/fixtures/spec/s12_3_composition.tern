@@ -1,6 +1,8 @@
-// §12.3 Composition in practice: four std components across two domains.
-// Crc32's payload type is inferred from its `in` connection. (Completed with
-// the two domains, the FIFO's resets and Crc32's `clear`.)
+// §12.3 Composition in practice: four std components across two domains,
+// exactly as the spec writes them (completed with the module around them).
+// Crc32's payload type is inferred from its `in` connection, AsyncFifo's
+// resets come from the domains of `src` and `dst`, and Crc32's `clear`
+// input has a default.
 use std::{io::UartRx, fifo::AsyncFifo, stream::Gearbox, crc::Crc32}
 
 #[top]
@@ -17,13 +19,7 @@ module Soc {
 
     let rx = UartRx<ClkHz: 100_000_000, Baud: 3_000_000>(rxd) @ io
     let words = Gearbox<u8, u32>(in: rx.out) @ io
-    let xfifo = AsyncFifo<u32, 512>(
-        push: words.out,
-        src: io.clock,
-        dst: sys.clock,
-        src_rst: io.reset,
-        dst_rst: sys.reset,
-    )
-    let crc = Crc32(in: xfifo.pop, clear: false) @ sys
+    let xfifo = AsyncFifo<u32, 512>(push: words.out, src: io.clock, dst: sys.clock)
+    let crc = Crc32(in: xfifo.pop) @ sys
     crc_value = crc.crc
 }

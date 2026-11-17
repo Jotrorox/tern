@@ -351,7 +351,11 @@ static void syn_stmt(SynWalk *w, Stmt *s, int module_level)
     if (!s)
         return;
     switch (s->kind) {
-    case STMT_PORT: syn_type(w, s->u.port.type); syn_expr(w, s->u.port.domain); break;
+    case STMT_PORT:
+        syn_type(w, s->u.port.type);
+        syn_expr(w, s->u.port.domain);
+        syn_expr(w, s->u.port.deflt);
+        break;
     case STMT_DOMAIN: syn_expr(w, s->u.domain.clock); syn_expr(w, s->u.domain.reset); break;
     case STMT_LET:
         syn_type(w, s->u.let.type);

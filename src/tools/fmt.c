@@ -1685,6 +1685,12 @@ static void fmt_stmt(FmtState *st, const Stmt *s)
             fmt_sp(st);
             fmt_expr(st, s->u.port.domain);
         }
+        if (s->u.port.deflt) {
+            fmt_sp(st);
+            fmt_str(st, "=");
+            fmt_sp(st);
+            fmt_expr(st, s->u.port.deflt);
+        }
         for (i = 0; i < s->attrs.n; i++) {
             if (s->attrs.items[i].span.off > s->u.port.name.span.off) {
                 fmt_sp(st);

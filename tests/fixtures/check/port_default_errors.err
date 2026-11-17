@@ -1,0 +1,4 @@
+port_default_errors.tern:3:21: error: only data inputs have defaults; `clk` is clock
+port_default_errors.tern:4:24: error: only data inputs have defaults; `s` is Stream<uint<8>>
+port_default_errors.tern:5:16: error: literal 300 does not fit in uint<8> (0..=255)
+port_default_errors.tern:6:19: error: only data inputs have defaults; `o` is an output

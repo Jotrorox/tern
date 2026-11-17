@@ -411,8 +411,8 @@ module Soc top
   assign crc_in_valid = xfifo_pop_valid
   assign crc_in_data = xfifo_pop_data
   assign xfifo_pop_ready = crc_in_ready
-  assign crc_clear = 1'h0
   assign crc_value = crc_crc
+  assign crc_clear = 1'h0
   inst rx: UartRx_100000000_3000000 (clk = io_clk, rst = io_rst, rxd = rx_rxd, out_valid -> rx_out_valid, out_data -> rx_out_data, out_ready = rx_out_ready, frame_error -> rx_frame_error, overrun -> rx_overrun)
   inst words: Gearbox_u8_u32 (clk = io_clk, rst = io_rst, in_valid = words_in_valid, in_data = words_in_data, in_ready -> words_in_ready, out_valid -> words_out_valid, out_data -> words_out_data, out_ready = words_out_ready)
   inst xfifo: AsyncFifo_u32_512 (src = io_clk, src_rst = io_rst, dst = sys_clk, dst_rst = sys_rst, push_valid = xfifo_push_valid, push_data = xfifo_push_data, push_ready -> xfifo_push_ready, pop_valid -> xfifo_pop_valid, pop_data -> xfifo_pop_data, pop_ready = xfifo_pop_ready, wr_count -> xfifo_wr_count, rd_count -> xfifo_rd_count)

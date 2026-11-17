@@ -83,8 +83,9 @@ where W >= 1, Poly < (1 << W), Init < (1 << W), XorOut < (1 << W)
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: uint<W>
     /// The raw CRC register (unreflected, before XorOut), for chaining.
@@ -136,8 +137,9 @@ pub module Crc8<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u8
 
@@ -159,8 +161,9 @@ pub module Crc16Ccitt<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u16
 
@@ -182,8 +185,9 @@ pub module Crc16Modbus<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u16
 
@@ -205,8 +209,9 @@ pub module Crc32<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u32
 
@@ -229,8 +234,9 @@ pub module Crc32C<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u32
 

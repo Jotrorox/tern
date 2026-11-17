@@ -2192,6 +2192,11 @@ static Stmt *ps_port(Parser *p, Stmt *s)
         s->u.port.domain = ps_expr_bp(p, PS_BP_UNARY);
         p->ctx = saved;
     }
+    if (!p->panic && ps_kind(p) == TK_ASSIGN && !ps_nl(p)) {
+        /* default of an input left unconnected: in clear: bool = false */
+        ps_advance(p);
+        s->u.port.deflt = ps_expr(p);
+    }
     if (!p->panic && ps_kind(p) == TK_ATTR && !ps_nl(p)) {
         /* trailing attributes: in clk: clock #[clock(hz: 100_000_000)] */
         PsAttrVec v = {0};

@@ -140,6 +140,8 @@ typedef struct ModPort {
     uint32_t domain;          /* child domain index (`@ dom` or default), IR_NONE */
     int is_clock, is_reset;
     Span loc;
+    int has_default;          /* `in clear: bool = false`: connected to `deflt` when left open */
+    Value deflt;
 } ModPort;
 
 /* One elaborated (module, generic arguments) pair. */
