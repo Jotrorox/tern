@@ -704,6 +704,7 @@ static void lsp_did_open(LspServer *srv, const JsonValue *params)
     d->version = json_as_int(json_get(td, "version"), 0);
     lsp_srcpath_clear(srv); /* a new buffer can give a virtual path a home */
     d->group = lsp_group_for(srv, d->path);
+    lsp_drop_unused_groups(srv); /* a reopened document may change groups */
     lsp_mark_dirty(srv, d->path, d->group);
 }
 

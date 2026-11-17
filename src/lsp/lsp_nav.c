@@ -483,6 +483,82 @@ static Span nav_resolve_path(Sema *S, FileUnit *fu, const char *const *segs, siz
     return none;
 }
 
+/* `name:` inside `M<..>(name: x)` / `f(name: x)` / `T { name: x }`: the
+ * port, parameter or field of the callee. Returns the declaration span. */
+static Span nav_named_arg(Sema *S, FileUnit *fu, const AstFile *f, int ti, Item **item_out)
+{
+    const char *segs[16], *rev[16];
+    size_t n = 0, i;
+    int j, depth = 0, open_kind;
+    Item *it = NULL;
+    Span none = span_none();
+    uint32_t k;
+    *item_out = NULL;
+    if ((uint32_t)ti + 1 >= f->ntokens || f->tokens[ti + 1].kind != TK_COLON)
+        return none;
+    for (j = ti - 1; j >= 0; j--) {
+        int kd = f->tokens[j].kind;
+        if (kd == TK_RPAREN || kd == TK_RBRACKET || kd == TK_RBRACE)
+            depth++;
+        else if (kd == TK_LPAREN || kd == TK_LBRACKET || kd == TK_LBRACE) {
+            if (depth == 0)
+                break;
+            depth--;
+        }
+    }
+    if (j <= 0 || f->tokens[j].kind == TK_LBRACKET)
+        return none;
+    open_kind = f->tokens[j].kind;
+    j--;
+    if (f->tokens[j].kind == TK_GT || f->tokens[j].kind == TK_SHR) {
+        /* skip generic arguments back to the matching `<` */
+        int ang = f->tokens[j].kind == TK_SHR ? 2 : 1;
+        for (j--; j >= 0 && ang > 0; j--) {
+            if (f->tokens[j].kind == TK_GT)
+                ang++;
+            else if (f->tokens[j].kind == TK_SHR)
+                ang += 2;
+            else if (f->tokens[j].kind == TK_LT)
+                ang--;
+        }
+        if (ang)
+            return none;
+    }
+    while (j >= 0 && f->tokens[j].kind == TK_IDENT && n < 16) {
+        rev[n++] = f->tokens[j].str;
+        if (j >= 2 && f->tokens[j - 1].kind == TK_COLONCOLON)
+            j -= 2;
+        else
+            break;
+    }
+    if (!n)
+        return none;
+    for (i = 0; i < n; i++)
+        segs[i] = rev[n - 1 - i];
+    nav_resolve_path(S, fu, segs, n, &it);
+    if (!it)
+        return none;
+    *item_out = NULL;
+    if (open_kind == TK_LPAREN && (it->kind == ITEM_MODULE || it->kind == ITEM_EXTERN)) {
+        Stmt **body = it->kind == ITEM_MODULE ? it->u.module.body : it->u.extern_mod.body;
+        uint32_t nb = it->kind == ITEM_MODULE ? it->u.module.nbody : it->u.extern_mod.nbody;
+        for (k = 0; k < nb; k++)
+            if (body[k] && body[k]->kind == STMT_PORT && body[k]->u.port.name.name == f->tokens[ti].str)
+                return body[k]->u.port.name.span;
+    } else if (open_kind == TK_LPAREN && it->kind == ITEM_FN) {
+        for (k = 0; k < it->u.fn.nparams; k++)
+            if (it->u.fn.params[k].name.name == f->tokens[ti].str)
+                return it->u.fn.params[k].name.span;
+    } else if (open_kind == TK_LBRACE && (it->kind == ITEM_STRUCT || it->kind == ITEM_BUNDLE)) {
+        Field **fs = it->kind == ITEM_STRUCT ? it->u.struct_def.fields : it->u.bundle.fields;
+        uint32_t nf = it->kind == ITEM_STRUCT ? it->u.struct_def.nfields : it->u.bundle.nfields;
+        for (k = 0; k < nf; k++)
+            if (fs[k] && fs[k]->name.name == f->tokens[ti].str)
+                return fs[k]->name.span;
+    }
+    return none;
+}
+
 /* ============================================================== targets === */
 
 typedef struct NavTarget {
@@ -568,7 +644,13 @@ static int nav_target(LspDoc *doc, LspFile *lf, uint32_t off, NavTarget *t)
         vec_free(decls);
         return t->si != NULL; /* members need type information */
     }
-    /* 5. local declarations */
+    /* 5. named arguments and struct literal fields */
+    t->def = nav_named_arg(S, lf->fu, f, ti, &t->item);
+    if (t->def.file) {
+        vec_free(decls);
+        return 1;
+    }
+    /* 6. local declarations */
     d = nav_find_local(&decls, tk->str, tk->off);
     if (d) {
         t->def = d->name.span;
@@ -577,7 +659,7 @@ static int nav_target(LspDoc *doc, LspFile *lf, uint32_t off, NavTarget *t)
         return 1;
     }
     vec_free(decls);
-    /* 6. package scope */
+    /* 7. package scope */
     {
         Item *it = NULL;
         const char *seg = tk->str;
@@ -751,6 +833,8 @@ void lsp_nav_hover(LspServer *srv, LspDoc *doc, LspFile *lf, uint32_t off, StrBu
         decl_si = sema_info_decl(S, t.def);
     if (!t.item && d)
         t.item = d->item;
+    if (!t.si && decl_si && (decl_si->type || decl_si->value))
+        t.si = decl_si; /* a use the elaborator did not record (named arguments) */
     if (t.si && (t.si->type || t.si->value || !t.item)) {
         const SemInfo *si = t.si;
         const char *dom = si->domain ? si->domain : decl_si ? decl_si->domain : NULL;

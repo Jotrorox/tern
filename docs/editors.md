@@ -19,9 +19,9 @@ tern lsp [--log FILE] [--debounce MS]
 | Feature | Notes |
 |---|---|
 | Diagnostics | the whole `tern check` pipeline (parse, resolve, elaborate, IR checks) on every change, for the project the file belongs to; help lines and the elaboration path are part of the message, notes become related locations |
-| Go to definition | locals, signals, ports, generics, fields, instance ports, types, modules, functions, constants and `use` paths, across files and into std |
+| Go to definition | locals, signals, ports, generics, fields, instance ports, named arguments (`Fifo(push: x)`, `Stream { valid: .. }`), types, modules, functions, constants and `use` paths, across files and into std |
 | Hover | type, width in bits, clock domain, driver (`on clk`, `comb`, `continuous`, ...), constant value, the item signature and its `///` doc comment |
-| Find references / highlight | uses the elaborator saw, plus `use` imports |
+| Find references / highlight | uses the elaborator saw, plus `use` imports (best effort: code that was never elaborated is not searched, which is also why rename is not offered) |
 | Document symbols | modules with their ports, signals, instances, domains, constants; structs/bundles with fields; enums with variants |
 | Workspace symbols | top-level items of the open projects |
 | Formatting | `tern fmt`; no edit when the file has syntax errors |

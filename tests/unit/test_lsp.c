@@ -352,7 +352,7 @@ static const char tl_src_main[] =
     "    /// The number of beats seen.\n"
     "    reg count: u8 = 0\n"
     "    out level: u8\n"
-    "    let f = Buf<u8>(push)\n"
+    "    let f = Buf<u8>(push: push)\n"
     "    pop = f.pop\n"
     "    level = count\n"
     "    on clk {\n"
@@ -439,6 +439,8 @@ static void test_navigation(void)
     TL_POS_REQ(18, "textDocument/hover", 10, 13);        /* f.pop */
     TL_POS_REQ(19, "textDocument/definition", 22, 15);   /* Stream inside the generic Buf */
     TL_POS_REQ(20, "textDocument/documentHighlight", 7, 9);
+    TL_POS_REQ(21, "textDocument/definition", 9, 21);    /* Buf<u8>(push: ...) */
+    TL_POS_REQ(22, "textDocument/hover", 9, 21);
     tl_sendf(&s,
              "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"textDocument/documentSymbol\",\"params\":{\"textDocument\":"
              "{\"uri\":\"%s\"}}}",
@@ -501,6 +503,10 @@ static void test_navigation(void)
     r = tl_result(&s, 19);
     TL_CHECK(tl_has_str(json_as_str(json_get(r, "uri"), NULL), "std/prelude/prelude.tern"));
     TL_CHECK(json_len(tl_result(&s, 20)) == 4);
+    r = tl_result(&s, 21);
+    TL_CHECK(tl_line(json_get(r, "range"), "start") == 22 && tl_char(json_get(r, "range"), "start") == 7);
+    md = json_as_str(json_get(json_get(tl_result(&s, 22), "contents"), "value"), "");
+    TL_CHECK(tl_has_str(md, "in push: Stream<uint<8>>"));
 
     r = tl_result(&s, 30);
     TL_CHECK(json_len(r) == 2);
