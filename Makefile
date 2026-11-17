@@ -128,17 +128,21 @@ $(OBJ)/syntax_ast_dump.o: src/syntax/ast_dump.c $(HDRS) $(OBJ)/.dir
 SEMA_SRCS = \
 	src/sema/resolve.c \
 	src/sema/types.c \
-	src/sema/info.c
+	src/sema/info.c \
+	src/sema/syninfo.c
 SEMA_OBJS = \
 	$(OBJ)/sema_resolve.o \
 	$(OBJ)/sema_types.o \
-	$(OBJ)/sema_info.o
+	$(OBJ)/sema_info.o \
+	$(OBJ)/sema_syninfo.o
 $(OBJ)/sema_resolve.o: src/sema/resolve.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sema/resolve.c -o $@
 $(OBJ)/sema_types.o: src/sema/types.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sema/types.c -o $@
 $(OBJ)/sema_info.o: src/sema/info.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sema/info.c -o $@
+$(OBJ)/sema_syninfo.o: src/sema/syninfo.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sema/syninfo.c -o $@
 
 # --- elab/
 ELAB_SRCS = \

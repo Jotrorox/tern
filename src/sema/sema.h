@@ -303,4 +303,16 @@ void sema_info_hover(Sema *S, const SemInfo *info, StrBuf *out);
 size_t sema_info_all(Sema *S, const SemInfo **out);
 const char *sema_kind_name(SemKind k);
 
+/* ------------------------------------------------------------ syninfo.c */
+
+/* Records what the resolver alone knows about every user file (one file):
+ * declarations with their declared types as written ("uint<W>"), and the
+ * definition of each name use that lexical scoping and package resolution
+ * can bind. Facts recorded by elaboration win (sema_info_record only fills
+ * unknown fields), so call it after elaborating: code that was never
+ * elaborated (generic modules without instances, unused fns) then still has
+ * hover and go-to-definition, without widths. The driver calls it. */
+void sema_info_syntactic(Sema *S);
+void sema_info_syntactic_file(Sema *S, FileUnit *f);
+
 #endif /* TERN_SEMA_H */

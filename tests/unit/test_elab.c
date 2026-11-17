@@ -531,10 +531,49 @@ static void test_regfile_apb_wb(void)
     tl_close(&t);
 }
 
+/* ------------------------------------------------- semantic info -- */
+
+/* `tern ir --hover` on code that is never elaborated */
+static void test_hover_unelaborated(void)
+{
+    static const char *const expect[] = {
+        "11:14: `r: uint<W>` — reg [def hover.tern:10:9]",
+        "11:18: `d: uint<W>` — input port [def hover.tern:8:8]",
+        "12:9: `helper` — fn [def hover.tern:16:4]",
+        "13:15: `Pair` — type [def hover.tern:4:8]",
+        "13:17: `T: type` — generic [def hover.tern:6:24]",
+        "8:16: `W: uint` — generic [def hover.tern:6:15]",
+        "17:13: `x: uint<8>` — parameter [def hover.tern:16:11]",
+    };
+    char *argv[6];
+    OsSpawnOpts o;
+    OsRunResult r;
+    size_t i;
+    argv[0] = (char *)tl_tern;
+    argv[1] = (char *)"ir";
+    argv[2] = (char *)"--hover";
+    argv[3] = (char *)"11:14,11:18,12:9,13:15,13:17,8:16,17:13";
+    argv[4] = (char *)"tests/fixtures/elab/hover.tern";
+    argv[5] = NULL;
+    memset(&o, 0, sizeof o);
+    o.capture_stdout = 1;
+    o.capture_stderr = 1;
+    memset(&r, 0, sizeof r);
+    os_run(argv, &o, &r);
+    for (i = 0; i < TERN_ARRAY_LEN(expect); i++) {
+        int found = r.out && strstr(r.out, expect[i]) != NULL;
+        if (!found)
+            fprintf(stderr, "test_elab: hover output lacks `%s`:\n%s\n", expect[i], r.out ? r.out : "");
+        TL_CHECK(found);
+    }
+    os_run_result_free(&r);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1)
         tl_tern = argv[1];
+    test_hover_unelaborated();
     test_regfile_axi();
     test_regfile_apb_wb();
     test_index_range();

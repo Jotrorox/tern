@@ -1,0 +1,26 @@
+// Semantic info for code that is never elaborated (a generic module without
+// instances): definitions and declared types from the resolver. Driven by
+// tests/unit/test_elab.c (`tern ir --hover`).
+struct Pair<T: type> { a: T, b: T }
+
+module Unused<W: uint, T: type> {
+    in clk: clock
+    in d: uint<W>
+    out q: uint<W>
+    reg r: uint<W> = 0
+    on clk { r = d }
+    q = helper(r)
+    let p: Pair<T> = all0
+}
+
+fn helper(x: u8) -> u8 {
+    let y = x
+    y
+}
+
+#[top]
+module Used {
+    in a: u8
+    out b: u8
+    b = helper(a)
+}
