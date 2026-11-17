@@ -2947,6 +2947,11 @@ static int sv_attr_text(const IrAttr *a, StrBuf *out)
         sb_puts(out, "ASYNC_REG = \"TRUE\"");
         return 1;
     }
+    if (tern_streq(n, "probe")) {
+        /* #[probe]: keep the net visible to vendor debug flows too */
+        sb_puts(out, "mark_debug = \"true\"");
+        return 1;
+    }
     if (args)
         for (i = 0; args[i]; i++)
             if (args[i] != '"' && args[i] != ' ')

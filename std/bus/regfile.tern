@@ -304,8 +304,9 @@ pub module RegisterFile<Map: type, Bus: type = Axi4Lite<32, 32>> {
     in bus: Bus
 
     // Compiler-generated from `Map` and `Bus` (see the doc comment above):
-    // the front-end instance on `bus`, one port per `Map` entry, and the
-    // register storage and decode on the front-end's RegBus.
+    // the front-end instance on `bus`, one port per `Map` entry, the
+    // register storage and decode on the front-end's RegBus, and
+    // `pub const LATENCY` (the front-end's: Axi4LiteRegPort::LATENCY, ...).
 }
 
 /// Example register map used by the RegisterFile tests: a control register
@@ -341,6 +342,11 @@ test "RegisterFile: rw register reads back what was written over AXI4-Lite" {
     dut.bus.ar.valid = false
     dut.step_until(dut.bus.r.valid, max: 20)
     expect dut.bus.r.data.data == 0xDEAD_BEEF and dut.bus.r.data.resp == RESP_OKAY
+}
+
+test "RegisterFile: LATENCY is the bus front-end's" {
+    expect RegisterFile<DemoRegs>::LATENCY == Axi4LiteRegPort<32, 32>::LATENCY
+    expect RegisterFile<DemoRegs, Apb<32, 32>>::LATENCY == ApbRegPort<32, 32>::LATENCY
 }
 
 test "RegisterFile: byte strobes and register fields" {

@@ -194,7 +194,9 @@ where DivW >= 3
 ///
 /// See [UartTxCore] for the frame format and handshake: one byte per `in`
 /// handshake, accepted only while idle, LSB first, one stop bit.
-pub module UartTx<ClkHz: uint, Baud: uint = 115_200>
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module UartTx<ClkHz: uint = clock_hz(clk), Baud: uint = 115_200>
 where Baud > 0
 {
     /// Clock cycles per bit.
@@ -226,7 +228,9 @@ where Baud > 0
 ///
 /// See [UartRxCore]: two-flop synchroniser, mid-bit sampling, glitch-rejecting
 /// start bit, `frame_error` and `overrun` pulses, one-byte output buffer.
-pub module UartRx<ClkHz: uint, Baud: uint = 115_200>
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module UartRx<ClkHz: uint = clock_hz(clk), Baud: uint = 115_200>
 where Baud > 0
 {
     /// Clock cycles per bit.
@@ -294,6 +298,12 @@ where DivW >= 3, Depth.is_pow2()
     out frame_error: bool
     /// One-cycle pulse: a received byte was lost (receive FIFO full).
     out overrun: bool
+
+    /// Cycles from an `in` handshake (with the transmitter idle and its
+    /// FIFO empty) to the start bit on `txd`.
+    pub const LATENCY: uint = Fifo<u8, Depth>::LATENCY + UartTxCore<DivW>::LATENCY
+    /// Cycles from a received byte leaving the receiver core to `out.valid`.
+    pub const RX_LATENCY: uint = Fifo<u8, Depth>::LATENCY
 
     let tx_fifo = Fifo<u8, Depth>(push: in)
     let tx = UartTxCore<DivW>(divisor: divisor, in: tx_fifo.pop)

@@ -1,0 +1,13 @@
+(file
+  (enum@2:1 Policy (generics (N uint))
+    (variant RoundRobin)
+    (variant Weighted < (field Weights [uint; N]) >)
+    (variant Both < (field A uint) (field B bool) >))
+  (module@8:1 M (generics (P Policy<3> = (.Weighted <(array 3 1 2)>)))
+    (let@9:5 a = (call Arbiter<u8, 3, (.Weighted <(array 3 1 2)>)>))
+    (let@10:5 b = (call Arbiter<u8, 3, Policy: (.Weighted <Weights: (array 1 1 1)>)>))
+    (let@11:5 c = (call Arbiter<u8, 2, Policy::Both<4, B: true>>))
+    (let@12:5 d = (== P (.Weighted <(array 1 2 3)>)))
+    (let@13:5 e = (< x .Idle))
+    (let@14:5 f = .Idle))
+  (comments 1))

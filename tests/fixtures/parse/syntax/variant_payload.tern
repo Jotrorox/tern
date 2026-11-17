@@ -1,0 +1,15 @@
+// Variant payloads written generic-style (spec §12.2 `.Weighted<[uint; N]>`).
+enum Policy<N: uint> {
+    RoundRobin,
+    Weighted<Weights: [uint; N]>,
+    Both<A: uint, B: bool>,
+}
+
+module M<P: Policy<3> = .Weighted<[3, 1, 2]>> {
+    let a = Arbiter<u8, 3, .Weighted<[3, 1, 2]>>()
+    let b = Arbiter<u8, 3, Policy: .Weighted<Weights: [1, 1, 1]>>()
+    let c = Arbiter<u8, 2, Policy::Both<4, B: true>>()
+    let d = P == .Weighted<[1, 2, 3]>
+    let e = x < .Idle
+    let f = .Idle
+}

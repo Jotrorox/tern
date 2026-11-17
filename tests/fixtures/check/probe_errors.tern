@@ -1,0 +1,19 @@
+// #[probe] misuse.
+module BadProbes {
+    in clk: clock
+    in rst: reset
+    #[probe(deep)]
+    in a: bool
+    out b: bool
+    #[probe]
+    mem m: [u8; 4]
+    b = a
+}
+
+module Clash {
+    in clk: clock
+    #[probe]
+    in a: bool
+    out probes: bool
+    probes = a
+}

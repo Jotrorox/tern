@@ -3,27 +3,31 @@ package std::debug
 // std::debug — on-chip debugging aids: Ila (integrated logic analyzer),
 // Heartbeat (alive LED) and ErrorLatch (sticky error flags).
 //
-// The #[probe] attribute on a signal (handled by the compiler) routes it to
-// an Ila without touching the design's ports; the Ila below is the capture
-// engine it instantiates, and can also be instantiated by hand.
+// `#[probe]` on a signal marks it for capture: the compiler collects the
+// probed signals of a module into the struct `Probes` (one field per
+// signal, in declaration order) and the value `probes` of that type, so
+// `Ila<Probes>(probes: probes, ..)` watches all of them without listing
+// them by hand. IlaUart and IlaAxiLite add the read-out paths.
 
 use std::stream::Beat
 use std::math::priority_encode
+use std::io::{UartTx, UartRx}
+use std::bus::{Axi4Lite, Axi4LiteSlave, Axi4LiteMaster, RegReq, RegRsp, RESP_OKAY}
 
 // ---------------------------------------------------------------------------
 // Ila
 // ---------------------------------------------------------------------------
 
 /// Integrated logic analyzer: a trigger-and-capture engine for a probe
-/// word of any type. After `arm` it records `probes` every cycle into a
+/// word of any type (a struct of the signals to watch, or the `Probes`
+/// struct the compiler collects from the `#[probe]` signals of a module). After `arm` it records `probes` every cycle into a
 /// circular buffer; once at least `Pre` samples are recorded, the first
 /// cycle with `trigger` freezes a window of `Depth` samples: `Pre` before
 /// the trigger cycle, the trigger cycle itself and `Depth - Pre - 1` after.
 /// The window is then streamed out on `out`, oldest sample first, `last` on
-/// the final one, after which the Ila is idle until armed again. Connect
-/// `out` through a Gearbox to a UART transmitter or an AXI-Stream / register
-/// interface to read it out.
-pub module Ila<T: type, Depth: uint = 1024, Pre: uint = Depth / 2>
+/// the final one, after which the Ila is idle until armed again.
+/// `IlaUart` and `IlaAxiLite` read it out over a UART or an AXI4-Lite bus.
+pub module Ila<Probes: type, Depth: uint = 1024, Pre: uint = Depth / 2>
 where Depth.is_pow2(), Depth >= 2, Pre < Depth
 {
     /// Clock.
@@ -31,13 +35,13 @@ where Depth.is_pow2(), Depth >= 2, Pre < Depth
     /// Reset; the Ila goes idle.
     in rst: reset
     /// The signals to record.
-    in probes: T
+    in probes: Probes
     /// Trigger condition (accepted once `Pre` samples are recorded).
     in trigger: bool
     /// Start recording and wait for a trigger.
     in arm: bool
     /// The captured window, oldest sample first.
-    out out: Stream<Beat<T>>
+    out out: Stream<Beat<Probes>>
     /// Recording, waiting for the trigger.
     out armed: bool
     /// Triggered: capturing the rest of the window or reading out.
@@ -51,7 +55,7 @@ where Depth.is_pow2(), Depth >= 2, Pre < Depth
     type Ptr = uint<clog2(Depth)>
     type Cnt = uint<clog2(Depth + 1)>
 
-    mem buf: [T; Depth]
+    mem buf: [Probes; Depth]
     reg state: State = .Idle
     reg wp: Ptr = 0
     reg fill: Cnt = 0          // samples recorded while armed (saturates at Pre)
@@ -192,12 +196,289 @@ test "ila: trigger is ignored until the pre-trigger window is full" {
 }
 
 // ---------------------------------------------------------------------------
+// IlaUart
+// ---------------------------------------------------------------------------
+
+/// `Ila` read out over a UART (8N1). Any byte received on `rxd` arms it,
+/// as does `arm`; after the trigger the window is sent on `txd`, `Depth`
+/// samples oldest first, each as `ceil(Probes::WIDTH / 8)` bytes, least
+/// significant byte first. `ClkHz` defaults to the clock's nominal
+/// frequency (`clock_hz(clk)`).
+pub module IlaUart<
+    Probes: type,
+    Depth: uint = 1024,
+    Pre: uint = Depth / 2,
+    Baud: uint = 115_200,
+    ClkHz: uint = clock_hz(clk),
+> {
+    /// Clock at `ClkHz`.
+    in clk: clock
+    /// Reset; the Ila goes idle.
+    in rst: reset
+    /// The signals to record.
+    in probes: Probes
+    /// Trigger condition.
+    in trigger: bool
+    /// Start recording (in addition to a byte on `rxd`); never when left
+    /// unconnected.
+    in arm: bool = false
+    /// Serial input (asynchronous), idle high: any byte arms the Ila.
+    in rxd: bool
+    /// Serial output, idle high: the captured window.
+    out txd: bool
+    /// Recording, waiting for the trigger.
+    out armed: bool
+    /// Triggered: capturing the rest of the window or sending it.
+    out triggered: bool
+
+    /// Bytes per sample.
+    pub const BYTES: uint = (Probes::WIDTH + 7) / 8
+    /// Cycles from the end of the capture to the first start bit.
+    pub const LATENCY: uint = 3
+
+    let _rx = UartRx<ClkHz, Baud>(rxd: rxd)
+    _rx.out.ready = true
+    let ila = Ila<Probes, Depth, Pre>(probes: probes, trigger: trigger, arm: arm or _rx.out.valid)
+
+    // byte serializer: one sample at a time, least significant byte first
+    reg word: bit<BYTES * 8> = all0
+    reg left: uint<clog2(BYTES + 1)> = 0
+    let _tx = UartTx<ClkHz, Baud>(in: Stream { valid: left != 0, data: word[7:0] as u8 })
+    ila.out.ready = left == 0
+
+    on clk {
+        if ila.out.fire() {
+            word = bits(ila.out.data.data) as uint<BYTES * 8>
+            left = BYTES
+        } else if left != 0 and _tx.in.ready {
+            word = word >> 8
+            left = left -% 1
+        }
+    }
+
+    txd = _tx.txd
+    armed = ila.armed
+    triggered = ila.triggered
+
+    /// The serializer never holds more than one sample.
+    property bytes_bounded {
+        always left <= BYTES
+    }
+}
+
+/// Test bench: an IlaUart whose output is decoded by a UART receiver.
+module IlaUartBench {
+    #[clock(hz: 16)]
+    in clk: clock
+    in rst: reset
+    /// Probe value.
+    in probes: uint<12>
+    /// Trigger.
+    in trigger: bool
+    /// Arm from the design side.
+    in arm: bool
+    /// Bytes decoded from `txd`.
+    out bytes: Stream<u8>
+    /// The Ila is armed.
+    out armed: bool
+
+    let _ila = IlaUart<uint<12>, 4, 1, Baud: 1>(
+        probes: probes,
+        trigger: trigger,
+        arm: arm,
+        rxd: true,
+    )
+    let _rx = UartRx<Baud: 1>(rxd: _ila.txd)
+    bytes = _rx.out
+    armed = _ila.armed
+}
+
+test "ila uart: the window is sent byte by byte" {
+    let dut = sim IlaUartBench()
+    dut.reset()
+    dut.bytes.ready = true
+    dut.trigger = false
+    dut.arm = true
+    dut.probes = 0
+    dut.step()
+    dut.arm = false
+    expect dut.armed
+    for v in 1..6 {
+        dut.probes = (0x100 * v + v) as uint<12>       // 0x101, 0x202, ...
+        dut.trigger = v == 3
+        dut.step()
+    }
+    dut.trigger = false
+    // window: 2 (pre), 3 (trigger), 4, 5; two bytes each, LSB first
+    let want = [0x02, 0x02, 0x03, 0x03, 0x04, 0x04, 0x05, 0x05]
+    for k in 0..8 {
+        dut.step_until(dut.bytes.valid, max: 400)
+        expect dut.bytes.data == want[k]
+        dut.step()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IlaAxiLite
+// ---------------------------------------------------------------------------
+
+/// `Ila` read out over AXI4-Lite. Registers (byte offsets, aliased every
+/// 16 bytes):
+///
+/// * `0x0` control / status. Write bit 0 = 1: arm. Read: bit 0 armed, bit 1
+///   triggered, bit 2 a sample is ready to be read from `0x8`.
+/// * `0x4` geometry (read-only): `Depth` in bits 15:0, `WORDS` (data words
+///   per sample) in bits 31:16.
+/// * `0x8` data (read-only): the next `DW`-bit word of the captured window,
+///   samples oldest first, each least significant word first; 0 when no
+///   sample is ready.
+/// * `0xC` the probe width in bits (read-only).
+pub module IlaAxiLite<
+    Probes: type,
+    Depth: uint = 1024,
+    Pre: uint = Depth / 2,
+    AW: uint = 32,
+    DW: uint = 32,
+>
+where AW >= 4
+{
+    /// Clock.
+    in clk: clock
+    /// Reset; the Ila goes idle.
+    in rst: reset
+    /// The signals to record.
+    in probes: Probes
+    /// Trigger condition.
+    in trigger: bool
+    /// AXI4-Lite slave port.
+    in s: Axi4Lite<AW, DW>
+    /// Recording, waiting for the trigger.
+    out armed: bool
+    /// Triggered: capturing the rest of the window or reading out.
+    out triggered: bool
+
+    /// Data words per sample.
+    pub const WORDS: uint = (Probes::WIDTH + DW - 1) / DW
+    /// Cycles from the end of the capture to the first sample being readable.
+    pub const LATENCY: uint = 3
+
+    let fe = Axi4LiteSlave<AW, DW>(s: s)
+    let rq = fe.req.data
+    let reg_idx = rq.addr[3:2]
+    let wr_arm = fe.req.valid and rq.write and reg_idx == 0 and rq.wdata[0]
+    let rd_data = fe.req.valid and !rq.write and reg_idx == 2
+
+    let ila = Ila<Probes, Depth, Pre>(probes: probes, trigger: trigger, arm: wr_arm)
+
+    // the sample being read, one word at a time
+    reg cur: bit<WORDS * DW> = all0
+    reg have: bool = false
+    reg widx: uint<clog2(WORDS + 1)> = 0
+    ila.out.ready = !have
+
+    on clk {
+        if ila.out.fire() {
+            cur = bits(ila.out.data.data) as uint<WORDS * DW>
+            have = true
+            widx = 0
+        } else if rd_data and have {
+            cur = cur >> DW
+            if widx == WORDS - 1 {
+                have = false
+            } else {
+                widx = widx +% 1
+            }
+        }
+    }
+
+    let status = (have as uint<DW>) << 2 | (ila.triggered as uint<DW>) << 1 | (ila.armed as uint<DW>)
+    let rdata: uint<DW> = match reg_idx {
+        0 => status,
+        1 => (WORDS << 16 | Depth) as uint<DW>,
+        2 => if have { cur[DW - 1:0] as uint<DW> } else { 0 },
+        _ => Probes::WIDTH as uint<DW>,
+    }
+
+    fe.req.ready = true
+    fe.rsp = Valid {
+        valid: fe.req.valid,
+        data: RegRsp { rdata: if rq.write { 0 } else { rdata }, resp: RESP_OKAY },
+    }
+    armed = ila.armed
+    triggered = ila.triggered
+
+    /// Reads only consume words of a loaded sample.
+    property word_bounded {
+        always widx < WORDS
+    }
+}
+
+/// Test bench: an IlaAxiLite behind an AXI4-Lite master.
+module IlaAxiLiteBench {
+    in clk: clock
+    in rst: reset
+    /// Probe value.
+    in probes: u8
+    /// Trigger.
+    in trigger: bool
+    /// Accesses to issue.
+    in req: Stream<RegReq<32, 32>>
+    /// Their completions.
+    out rsp: Valid<RegRsp<32>>
+
+    let m = Axi4LiteMaster(req: req)
+    let _ila = IlaAxiLite<u8, 4, 1>(probes: probes, trigger: trigger, s: m.m)
+    rsp = m.rsp
+}
+
+test "ila axi-lite: arm, trigger and read the window" {
+    let dut = sim IlaAxiLiteBench()
+    dut.reset()
+    dut.trigger = false
+    dut.probes = 0
+    // arm: write 1 to 0x0
+    dut.req = Stream { valid: true, data: RegReq { addr: 0x0, wdata: 1, strb: all1, write: true } }
+    dut.step_until(dut.req.ready, max: 20)
+    dut.step()
+    dut.req.valid = false
+    dut.step_until(dut.rsp.valid, max: 20)
+    for v in 1..8 {
+        dut.probes = (10 * v) as u8
+        dut.trigger = v == 4
+        dut.step()
+    }
+    dut.trigger = false
+    dut.step(4)
+    // the window: 30 (pre), 40 (trigger), 50, 60
+    for want in [30, 40, 50, 60] {
+        dut.req = Stream {
+            valid: true,
+            data: RegReq { addr: 0x8, wdata: 0, strb: all0, write: false },
+        }
+        dut.step_until(dut.req.ready, max: 20)
+        dut.step()
+        dut.req.valid = false
+        dut.step_until(dut.rsp.valid, max: 20)
+        expect dut.rsp.data.rdata == want
+        dut.step()
+    }
+    dut.req = Stream { valid: true, data: RegReq { addr: 0x4, wdata: 0, strb: all0, write: false } }
+    dut.step_until(dut.req.ready, max: 20)
+    dut.step()
+    dut.req.valid = false
+    dut.step_until(dut.rsp.valid, max: 20)
+    expect dut.rsp.data.rdata == (1 << 16) | 4
+}
+
+// ---------------------------------------------------------------------------
 // Heartbeat
 // ---------------------------------------------------------------------------
 
-/// Blinks an LED at `Hz` (50 % duty) from a clock of `ClkHz`: the simplest
-/// proof that a bitstream is loaded, the clock runs and reset is released.
-pub module Heartbeat<ClkHz: uint, Hz: uint = 1>
+/// Blinks an LED at `Hz` (50 % duty): the simplest proof that a bitstream
+/// is loaded, the clock runs and reset is released. `ClkHz` is the clock's
+/// nominal frequency (the top's `#[clock(hz: ..)]`, passed down through the
+/// instance connections); give it explicitly to override.
+pub module Heartbeat<Hz: uint = 1, ClkHz: uint = clock_hz(clk)>
 where Hz >= 1, ClkHz >= 2 * Hz
 {
     /// Clock running at ClkHz.
@@ -238,7 +519,7 @@ where Hz >= 1, ClkHz >= 2 * Hz
 }
 
 test "heartbeat: toggles every half period" {
-    let dut = sim Heartbeat<20, 2>()  // half period = 5 cycles
+    let dut = sim Heartbeat<2, ClkHz: 20>()  // half period = 5 cycles
     dut.reset()
     var toggles: uint = 0
     var prev: bool = false
@@ -248,6 +529,30 @@ test "heartbeat: toggles every half period" {
         prev = dut.led
     }
     expect toggles == 10
+}
+
+/// Test bench: a Heartbeat under a top clock that records its frequency.
+module HeartbeatBench {
+    #[clock(hz: 40)]
+    in clk: clock
+    in rst: reset
+    /// The LED, 4 Hz from the 40 Hz clock.
+    out led: bool
+
+    led = Heartbeat<4>().led
+}
+
+test "heartbeat: the clock rate comes from #[clock(hz)]" {
+    let dut = sim HeartbeatBench()
+    dut.reset()
+    var toggles: uint = 0
+    var prev: bool = false
+    for _ in 0..40 {
+        dut.step()
+        if dut.led != prev { toggles = toggles + 1 }
+        prev = dut.led
+    }
+    expect toggles == 8
 }
 
 // ---------------------------------------------------------------------------

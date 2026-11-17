@@ -578,20 +578,25 @@ static int tr_domain_or_error(TrSim *s, int dom, Span at)
     return dom;
 }
 
-static int tr_step_until(TrSim *s, int dom, const Value *args, const Ident *names, uint32_t n, Span at, Value *out)
+/* step_until(cond, max: n) stops the test when cond does not hold within n
+ * cycles; expect_eventually(cond, max: n) (std::sim, spec §12.2) records the
+ * failure like `expect` and lets the test continue */
+static int tr_step_until(TrSim *s, int dom, const Value *args, const Ident *names, uint32_t n, Span at, Value *out,
+                         int fatal)
 {
     TrCtx *c = s->ctx;
     Elab *el = c->el;
     static const char *const allowed[] = {"cond", "max", NULL};
+    const char *what = fatal ? "step_until" : "expect_eventually";
     Expr *call = el->opq_call;
     Env *env = el->opq_env;
     Expr *ce = NULL;
     uint64_t max, k;
     uint32_t i, pos = 0;
-    if (!tr_check_args(el, names, n, 2, allowed, "step_until", at))
+    if (!tr_check_args(el, names, n, 2, allowed, what, at))
         return -1;
     if (!tr_arg(args, names, n, 0, "cond")) {
-        el_error(el, at, "`step_until()` needs a condition");
+        el_error(el, at, "`%s()` needs a condition", what);
         return -1;
     }
     if (!tr_arg_u64(el, tr_arg(args, names, n, 1, "max"), TR_STEP_UNTIL_MAX, &max, "`max`", at))
@@ -616,7 +621,7 @@ static int tr_step_until(TrSim *s, int dom, const Value *args, const Ident *name
         if (v.kind == VAL_ERROR || c->stopped)
             return -1;
         if (v.kind != VAL_BOOL) {
-            el_error(el, ce ? ce->span : at, "the condition of `step_until()` must be bool");
+            el_error(el, ce ? ce->span : at, "the condition of `%s()` must be bool", what);
             return -1;
         }
         if (v.u.i) {
@@ -630,7 +635,7 @@ static int tr_step_until(TrSim *s, int dom, const Value *args, const Ident *name
             return 1;
     }
     if (tr_fail_begin(c, at)) {
-        sb_puts(c->out, "step_until failed");
+        sb_printf(c->out, "%s failed", what);
         tr_at_cycle(c, c->out);
         sb_puts(c->out, ": `");
         if (ce)
@@ -639,7 +644,9 @@ static int tr_step_until(TrSim *s, int dom, const Value *args, const Ident *name
             sb_puts(c->out, "condition");
         sb_printf(c->out, "` did not hold within %llu cycles\n", (unsigned long long)max);
     }
-    tr_stop(c);
+    if (fatal)
+        tr_stop(c);
+    *out = val_int(el->S->t_int, (int64_t)max);
     return 1;
 }
 
@@ -672,7 +679,9 @@ static int tr_root_method(TrSim *s, const char *name, const Value *args, const I
         return 1;
     }
     if (strcmp(name, "step_until") == 0)
-        return tr_step_until(s, -1, args, names, n, at, out);
+        return tr_step_until(s, -1, args, names, n, at, out, 1);
+    if (strcmp(name, "expect_eventually") == 0)
+        return tr_step_until(s, -1, args, names, n, at, out, 0);
     if (strcmp(name, "settle") == 0) {
         if (!tr_check_args(el, names, n, 0, none, name, at))
             return -1;
@@ -866,7 +875,9 @@ static int tr_op_call(Elab *el, void *obj, const char *name, const Value *args, 
             return 1;
         }
         if (strcmp(name, "step_until") == 0)
-            return tr_step_until(s, n->h, args, names, nargs, at, out);
+            return tr_step_until(s, n->h, args, names, nargs, at, out, 1);
+        if (strcmp(name, "expect_eventually") == 0)
+            return tr_step_until(s, n->h, args, names, nargs, at, out, 0);
         if (strcmp(name, "cycle") == 0) {
             if (!tr_check_args(el, names, nargs, 0, none, name, at))
                 return -1;
@@ -1316,7 +1327,8 @@ static void tr_operands(Expr *e, TrExprVec *out)
         Expr *cl = e->u.call.callee;
         const char *n = cl->kind == EXPR_FIELD ? cl->u.field.name.name
                       : cl->kind == EXPR_PATH ? cl->u.path.segs[cl->u.path.nsegs - 1].name.name : NULL;
-        static const char *const impure[] = {"rand", "log", "step", "step_until", "reset", "settle", "run", "dump",
+        static const char *const impure[] = {"rand", "log", "step", "step_until", "expect_eventually",
+                                             "reset", "settle", "run", "dump",
                                              NULL};
         const char *const *p;
         int ok = n != NULL;

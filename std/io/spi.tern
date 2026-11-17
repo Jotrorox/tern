@@ -31,7 +31,9 @@ package std::io
 /// * `miso` is sampled directly on the internal SCK edge: it is synchronous to
 ///   the SCK this module generates, and the slave had half an SCK period to
 ///   drive it.
-pub module SpiMaster<ClkHz: uint, SckHz: uint, Mode: uint = 0, W: uint = 8>
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module SpiMaster<ClkHz: uint = clock_hz(clk), SckHz: uint, Mode: uint = 0, W: uint = 8>
 where Mode <= 3, W >= 2, SckHz > 0
 {
     const CPOL: bool = Mode >= 2
@@ -305,7 +307,9 @@ pub struct QspiCmd {
 ///   the rising edges (`SckHz` <= `ClkHz / 4` recommended).
 /// * `out` has no backpressure: SCK is not stopped; buffer in a Fifo if needed.
 /// * `done` pulses when CS_N has risen again after a command.
-pub module QspiMaster<ClkHz: uint, SckHz: uint>
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module QspiMaster<ClkHz: uint = clock_hz(clk), SckHz: uint>
 where SckHz > 0
 {
     /// Clock cycles per half SCK period.

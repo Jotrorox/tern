@@ -1,0 +1,5 @@
+clock_hz_errors.tern:15:13: error: the nominal frequency of `clk` is unknown in `NoHz` (needed by `Ticker` for `clock_hz(clk)`)
+clock_hz_errors.tern:17:9: error: the nominal frequency of `clk` is unknown in `NoHz`
+clock_hz_errors.tern:20:34: error: `rst` is not a clock input of `BadArg`
+clock_hz_errors.tern:41:18: error: `clock_hz` needs a clock or a domain, found reset
+clock_hz_errors.tern:41:25: error: `clock_hz` takes one clock or domain: `clock_hz(clk)`

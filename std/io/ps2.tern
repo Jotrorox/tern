@@ -22,7 +22,9 @@ package std::io
 ///   high meanwhile; afterwards `tx_ack` tells whether the device acknowledged.
 ///   If the device stops clocking for 20 ms the transfer is abandoned with
 ///   `tx_ack` low.
-pub module Ps2<ClkHz: uint> {
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module Ps2<ClkHz: uint = clock_hz(clk)> {
     /// Clock cycles per microsecond.
     pub const US: uint = ClkHz / 1_000_000
     static_assert(US >= 1, "Ps2 needs a clock of at least 1 MHz")

@@ -81,7 +81,9 @@ pub enum SdError {
 /// * `error` describes the last command; it is cleared when the next command
 ///   is accepted. CmdRejected, DataError and WriteRejected return to `ready`.
 /// * Between commands CS_N is high and one byte of clocks is sent (Ncs).
-pub module Sdio<ClkHz: uint, SlowHz: uint = 400_000, FastHz: uint = 25_000_000>
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module Sdio<ClkHz: uint = clock_hz(clk), SlowHz: uint = 400_000, FastHz: uint = 25_000_000>
 where SlowHz <= FastHz, SlowHz > 0
 {
     /// Clock cycles per half SCK period during initialisation.

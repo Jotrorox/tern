@@ -1,0 +1,125 @@
+struct Beat_struct (11 bits) { data: struct { start: bool, count: uint<8>, wrap: bool } @1, last: bool @0 }
+enum Ila_struct_16_4_State (2 bits, tag 2, binary) { Idle = 2'h0, Armed = 2'h1, Capture = 2'h2, Readout = 2'h3 }
+module Ila_struct_16_4 "Ila<struct { start: bool, count: uint<8>, wrap: bool }, 16, 4>" in std::debug
+  param Depth = 32'h10
+  param Pre = 32'h4
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in probes: struct { start: bool, count: uint<8>, wrap: bool } @0
+  3: in trigger: bool @0
+  4: in arm: bool @0
+  5: out out_valid (out.valid): bool @0
+  6: out out_data (out.data): Beat_struct @0
+  7: in out_ready (out.ready): bool @0 flipped
+  8: out armed: bool @0
+  9: out triggered: bool @0
+  10: mem buf: struct { start: bool, count: uint<8>, wrap: bool } x 16
+  11: reg state: Ila_struct_16_4_State @0 = 2'h0
+  12: reg wp: uint<4> @0 = 4'h0
+  13: reg fill: uint<5> @0 = 5'h0
+  14: reg post: uint<5> @0 = 5'h0
+  15: reg rp: uint<4> @0 = 4'h0
+  16: reg left: uint<5> @0 = 5'h0
+  17: reg primed: bool @0 = 1'h0
+  18: wire capturing: bool
+  19: wire rd_addr: uint<4>
+  20: reg buf_rd0: struct { start: bool, count: uint<8>, wrap: bool } @0
+  21: wire rdata: struct { start: bool, count: uint<8>, wrap: bool }
+  assign capturing = ((state == 2'h1) || (state == 2'h2))
+  assign rd_addr = ((out_valid && out_ready) ? (rp + 4'h1) : rp)
+  assign rdata = buf_rd0
+  assign out_valid = ((state == 2'h3) && primed)
+  assign out_data = {rdata, (left == 5'h1)}
+  assign armed = (state == 2'h1)
+  assign triggered = ((state == 2'h2) || (state == 2'h3))
+  on 0 regs(buf_rd0) {
+    buf_rd0 = buf[rd_addr]
+  }
+  on 0 regs(state, wp, fill, post, rp, left, primed) {
+    if capturing {
+      buf[wp] = probes
+      wp = (wp + 4'h1)
+    }
+    case state {
+      2'h0 => {
+        if arm {
+          state = 2'h1
+          fill = 5'h0
+        }
+      }
+      2'h1 => {
+        if ((fill == 5'h4) && trigger) {
+          state = 2'h2
+          post = 5'hb
+        } else {
+          if (fill != 5'h4) {
+            fill = (fill + 5'h1)
+          }
+        }
+      }
+      2'h2 => {
+        post = (post - 5'h1)
+        if (post == 5'h1) {
+          state = 2'h3
+          rp = (wp + 4'h1)
+          left = 5'h10
+          primed = 1'h0
+        }
+      }
+      2'h3 => {
+        primed = 1'h1
+        if (out_valid && out_ready) {
+          rp = (rp + 4'h1)
+          left = (left - 5'h1)
+          if (left == 5'h1) {
+            state = 2'h0
+          }
+        }
+      }
+    }
+  }
+  assert property readout_bounded @0: always (left <= 5'h10)
+  assert property no_capture_during_readout @0: never (capturing && out_valid)
+  assert property out_stable @0: always ((out_valid && !out_ready) |=> (out_valid && (out_data == past(out_data, 1))))
+  cover property triggers @0: (state == 2'h2)
+end
+module Probed top
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in start: bool @0 #[probe]
+  3: in arm: bool @0
+  4: reg count: uint<8> @0 = 8'h0 #[probe]
+  5: wire wrap: bool #[probe]
+  6: out dump_valid (dump.valid): bool @0
+  7: out dump_data (dump.data): Beat_struct @0
+  8: in dump_ready (dump.ready): bool @0 flipped
+  9: var mode: uint<2>
+  10: wire ila_probes (ila.probes): struct { start: bool, count: uint<8>, wrap: bool } @0
+  11: wire ila_trigger (ila.trigger): bool @0
+  12: wire ila_arm (ila.arm): bool @0
+  13: wire ila_out_valid (ila.out.valid): bool @0
+  14: wire ila_out_data (ila.out.data): Beat_struct @0
+  15: wire ila_out_ready (ila.out.ready): bool @0
+  16: wire ila_armed (ila.armed): bool @0
+  17: wire ila_triggered (ila.triggered): bool @0
+  18: wire probes: struct { start: bool, count: uint<8>, wrap: bool }
+  assign wrap = (count == 8'hff)
+  assign probes = {start, count, wrap}
+  assign ila_probes = probes
+  assign ila_trigger = wrap
+  assign ila_arm = arm
+  assign dump_valid = ila_out_valid
+  assign dump_data = ila_out_data
+  assign ila_out_ready = dump_ready
+  comb {
+    mode = (wrap ? 2'h2 : 2'h1)
+  }
+  on 0 regs(count) {
+    if (start || (count != 8'h0)) {
+      count = (count + 8'h1)
+    }
+  }
+  inst ila: Ila_struct_16_4 (clk = clk, rst = rst, probes = ila_probes, trigger = ila_trigger, arm = ila_arm, out_valid -> ila_out_valid, out_data -> ila_out_data, out_ready = ila_out_ready, armed -> ila_armed, triggered -> ila_triggered)
+end

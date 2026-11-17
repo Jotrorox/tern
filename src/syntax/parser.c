@@ -1085,6 +1085,42 @@ static void ps_sync_list(Parser *p)
     }
 }
 
+/* `.Weighted<[3, 1, 2]>`: a payload given as generic-style arguments. Inside
+ * a generic argument list it is always parsed; elsewhere speculatively (a
+ * `<` after a variant that does not close is a comparison). */
+static void ps_variant_args(Parser *p, Expr *e)
+{
+    PathSeg seg;
+    PsFieldInitVec v = {0};
+    uint32_t i;
+    memset(&seg, 0, sizeof seg);
+    if (p->ctx.generic) {
+        ps_generic_args(p, &seg);
+    } else if (p->spec < PS_MAX_SPEC) {
+        ParseMark m = ps_mark(p);
+        p->spec++;
+        ps_generic_args(p, &seg);
+        p->spec--;
+        if (p->panic) {
+            ps_reset(p, m);
+            return;
+        }
+    } else {
+        return;
+    }
+    for (i = 0; i < seg.nargs; i++) {
+        FieldInit fi;
+        memset(&fi, 0, sizeof fi);
+        fi.name = seg.args[i].name;
+        fi.value = seg.args[i].expr;
+        fi.span = seg.args[i].span;
+        vec_push(v, fi);
+    }
+    e->u.variant.has_fields = 1;
+    e->u.variant.angle = 1;
+    PS_TAKE(p, v, FieldInit, e->u.variant.fields, e->u.variant.nfields);
+}
+
 /* `{ name: value, name, .. }` after a struct path or `.Variant`. */
 static void ps_field_inits(Parser *p, FieldInit **out, uint32_t *n, int *has_rest)
 {
@@ -1480,6 +1516,8 @@ static Expr *ps_primary(Parser *p)
         if (!p->panic && ps_kind(p) == TK_LBRACE && !p->ctx.no_struct && !ps_nl(p)) {
             e->u.variant.has_fields = 1;
             ps_field_inits(p, &e->u.variant.fields, &e->u.variant.nfields, NULL);
+        } else if (!p->panic && ps_kind(p) == TK_LT && !ps_nl(p)) {
+            ps_variant_args(p, e);
         }
         return ps_done(p, e, start);
     case TK_LPAREN:
@@ -2154,6 +2192,11 @@ static Stmt *ps_port(Parser *p, Stmt *s)
         s->u.port.domain = ps_expr_bp(p, PS_BP_UNARY);
         p->ctx = saved;
     }
+    if (!p->panic && ps_kind(p) == TK_ASSIGN && !ps_nl(p)) {
+        /* default of an input left unconnected: in clear: bool = false */
+        ps_advance(p);
+        s->u.port.deflt = ps_expr(p);
+    }
     if (!p->panic && ps_kind(p) == TK_ATTR && !ps_nl(p)) {
         /* trailing attributes: in clk: clock #[clock(hz: 100_000_000)] */
         PsAttrVec v = {0};
@@ -2668,6 +2711,38 @@ static void ps_variants(Parser *p, PsVariantVec *out)
             v->has_fields = 1;
             ps_field_list(p, &fields, NULL, 0, "variant fields");
             PS_TAKE(p, fields, Field *, v->fields, v->nfields);
+        } else if (!p->panic && ps_kind(p) == TK_LT && !ps_nl(p)) {
+            /* const payload written generic-style: `Weighted<W: [uint; N]>` */
+            PsFieldVec fields = {0};
+            ParseCtx inner = p->ctx;
+            v->has_fields = 1;
+            v->angle = 1;
+            ps_advance(p);
+            p->ctx.nl_ignore++;
+            p->ctx.generic = 1;
+            while (!p->panic && !ps_is_gt(p) && ps_kind(p) != TK_EOF) {
+                Field *f = ANEW(p->a, Field);
+                uint32_t fstart = ps_off(p);
+                f->name = ps_name(p, "a payload name", 1);
+                if (!p->panic && ps_expect(p, TK_COLON, "after the payload name"))
+                    f->type = ps_type(p);
+                else
+                    f->type = ps_error_type(p, ps_off(p));
+                f->span = ps_span(p, fstart);
+                if (f->name.name)
+                    vec_push(fields, f);
+                if (!ps_accept(p, TK_COMMA))
+                    break;
+            }
+            p->ctx = inner;
+            PS_TAKE(p, fields, Field *, v->fields, v->nfields);
+            if (!p->panic) {
+                if (ps_is_gt(p))
+                    ps_eat_gt(p);
+                else
+                    ps_error(p, ps_err_span(p), "expected `,` or `>` after the variant payload, found %s",
+                             ps_describe(p));
+            }
         } else if (!p->panic && ps_kind(p) == TK_LPAREN) {
             if (ps_error(p, ps_tok_span(p), "tuple variants do not exist"))
                 diag_help("give the payload named fields: `%s { value: T }`", v->name.name);

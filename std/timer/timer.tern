@@ -1,7 +1,10 @@
 package std::timer
 
 // std::timer — counters measured in clock cycles: Timer, Prescaler, Pulse,
-// Stopwatch, Rtc and Watchdog. Clock-rate enables live in std::clk.
+// Stopwatch and Rtc. Clock-rate enables and the Watchdog live in std::clk
+// (Watchdog is re-exported here).
+
+pub use std::clk::Watchdog
 
 // ---------------------------------------------------------------------------
 // Timer
@@ -359,10 +362,11 @@ pub struct RtcTime {
 }
 
 /// Real-time clock: counts seconds, minutes, hours and days from a clock of
-/// `ClkHz` (pass the frequency given by the clock's #[clock(hz: ..)]
-/// attribute). `pps` pulses once per second. `set` loads a new time and
-/// restarts the current second.
-pub module Rtc<ClkHz: uint>
+/// `ClkHz`, by default the clock's nominal frequency (the top's
+/// `#[clock(hz: ..)]`, passed down through the instance connections; give
+/// it explicitly to override). `pps` pulses once per second. `set` loads a
+/// new time and restarts the current second.
+pub module Rtc<ClkHz: uint = clock_hz(clk)>
 where ClkHz >= 1
 {
     /// Clock running at ClkHz.
@@ -452,85 +456,26 @@ test "rtc: one second per ClkHz cycles" {
     expect dut.time.seconds == 10
 }
 
-// ---------------------------------------------------------------------------
-// Watchdog
-// ---------------------------------------------------------------------------
-
-/// Watchdog timer: if `timeout` consecutive enabled cycles pass without a
-/// `kick`, `bite` goes high and stays high until the next kick, a disable
-/// or reset. With a kick in cycle t and none after, `bite` is high from
-/// cycle t + timeout + 1.
-pub module Watchdog<W: uint = 24>
-where W >= 1
-{
-    /// Clock.
+/// Test bench: an Rtc under a top clock that records its frequency.
+module RtcBench {
+    #[clock(hz: 8)]
     in clk: clock
-    /// Reset; the watchdog restarts its count.
     in rst: reset
-    /// Watch (when low, the count is held at zero and `bite` is low).
-    in enable: bool
-    /// Restart the count.
-    in kick: bool
-    /// Cycles allowed between kicks.
-    in timeout: uint<W>
-    /// The watchdog expired (sticky until a kick).
-    out bite: bool
-    /// Cycles since the last kick.
-    out elapsed: uint<W>
+    /// Seconds of the Rtc.
+    out seconds: uint<6>
 
-    /// Cycles from the expiry to `bite`.
-    pub const LATENCY: uint = 1
-
-    reg cnt: uint<W> = 0
-    reg bitten: bool = false
-
-    on clk {
-        if !enable or kick {
-            cnt = 0
-            bitten = false
-        } else if !bitten {
-            let nxt = cnt +% 1
-            cnt = nxt
-            if nxt >= timeout { bitten = true }
-        }
-    }
-
-    bite = bitten
-    elapsed = cnt
-
-    /// Once bitten, only a kick (or disabling) clears it.
-    property sticky {
-        always (bitten and enable and !kick) |=> bitten
-    }
+    let rtc = Rtc(set: Valid {
+        valid: false,
+        data: RtcTime { days: 0, hours: 0, minutes: 0, seconds: 0 },
+    })
+    seconds = rtc.time.seconds
 }
 
-test "watchdog: bites after the timeout, kick clears" {
-    let dut = sim Watchdog<8>()
+test "rtc: the clock rate comes from #[clock(hz)]" {
+    let dut = sim RtcBench()
     dut.reset()
-    dut.enable = true
-    dut.timeout = 10
-    dut.kick = true
-    dut.step()                        // kick in cycle t
-    dut.kick = false
-    dut.step(9)
-    expect !dut.bite
-    dut.step()
-    expect dut.bite                   // cycle t + 11
-    dut.step(20)
-    expect dut.bite
-    dut.kick = true
-    dut.step()
-    expect !dut.bite
-}
-
-test "watchdog: regular kicks keep it quiet" {
-    let dut = sim Watchdog<8>()
-    dut.reset()
-    dut.enable = true
-    dut.timeout = 5
-    for c in 0..100 {
-        dut.kick = (c & 3) == 0
-        dut.step()
-        expect !dut.bite
-    }
+    dut.step(39)
+    expect dut.seconds == 4
+    dut.step(1)
+    expect dut.seconds == 5
 }

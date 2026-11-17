@@ -428,8 +428,9 @@ void driver_default_roots(Driver *dr, DriverItemVec *out)
             if (it->kind != ITEM_MODULE || !it->name.name)
                 continue;
             for (g = 0; g < it->u.module.generics.n; g++)
-                if (!it->u.module.generics.items[g].default_type && !it->u.module.generics.items[g].default_value)
-                    ok = 0;
+                if ((!it->u.module.generics.items[g].default_type && !it->u.module.generics.items[g].default_value) ||
+                    elab_clock_hz_port(it->u.module.generics.items[g].default_value))
+                    ok = 0; /* a default read from the instantiation's clock needs an instantiation */
             if (!ok)
                 continue;
             di.item = it;
@@ -762,7 +763,7 @@ static void drv_tc_declare(DrvTc *t, const char *name, ModInfo *mi)
 
 static int drv_tc_builtin_call(const char *n)
 {
-    static const char *const names[] = {"bits",    "const_log", "fell", "include_bin", "include_hex",   "log",
+    static const char *const names[] = {"bits",    "clock_hz", "const_log", "fell", "include_bin", "include_hex",   "log",
                                         "past",    "rose",      "stable", "static_assert", "unsafe_cross",
                                         "rand",    "trunc",     NULL};
     size_t i;
@@ -986,7 +987,8 @@ static void drv_tc_access(DrvTc *t, Expr *e, int method)
         if (!name)
             break;
         if (is_method) {
-            static const char *const root[] = {"reset", "step", "step_until", "settle", "run", "dump", "cycle",
+            static const char *const root[] = {"reset", "step", "step_until", "expect_eventually",
+                                               "settle", "run", "dump", "cycle",
                                                "time_ns", NULL};
             uint32_t k;
             if (p.len)
@@ -996,7 +998,8 @@ static void drv_tc_access(DrvTc *t, Expr *e, int method)
                     break;
             if (!root[k]) {
                 diag_error(f->u.field.name.span, "`%s` has no method `%s`", mi->display, name);
-                diag_help("a simulation handle has reset(), step(n), step_until(cond, max: n), settle(), "
+                diag_help("a simulation handle has reset(), step(n), step_until(cond, max: n), "
+                          "expect_eventually(cond, max: n), settle(), "
                           "run(ns: n), dump(file), cycle() and time_ns()");
             }
             break;

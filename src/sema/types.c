@@ -273,6 +273,7 @@ Ty *ty_enum(Sema *S, const char *key, const char *name, const char *emit_name, I
     const char *ik = intern_cstr(key);
     Ty *t = ty_lookup_key(S, ik);
     uint32_t i, pw = 0, tw;
+    int hw = 1;
     if (t)
         return t;
     t = ty_new(S, TY_ENUM, ik);
@@ -302,11 +303,16 @@ Ty *ty_enum(Sema *S, const char *key, const char *name, const char *emit_name, I
             t->variants[i].tag = i;
         if (variants[i].payload && variants[i].payload->width > pw)
             pw = variants[i].payload->width;
+        if (variants[i].payload && !variants[i].payload->hw)
+            hw = 0;
     }
     t->tag_width = tw;
     t->payload_width = pw;
-    t->width = tw + pw;
-    t->hw = 1;
+    /* a payload without a bit representation (widthless `uint`, arrays of
+     * them: `Weighted<W: [uint; N]>`) makes a compile-time-only enum, usable
+     * as a generic parameter or const but not as a signal */
+    t->hw = hw;
+    t->width = hw ? tw + pw : 0;
     return t;
 }
 

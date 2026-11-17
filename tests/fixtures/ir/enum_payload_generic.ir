@@ -1,0 +1,95 @@
+module Sum_3_RoundRobin "Sum<3, .RoundRobin>"
+  param N = 32'h3
+  0: out total: uint<8>
+  1: out fixed: bool
+  2: out weighted_312: bool
+  assign total = 8'h3
+  assign fixed = 1'h0
+  assign weighted_312 = 1'h0
+end
+module Sum_3_Weighted_3_1_2 "Sum<3, .Weighted<[3, 1, 2]>>"
+  param N = 32'h3
+  0: out total: uint<8>
+  1: out fixed: bool
+  2: out weighted_312: bool
+  assign total = 8'h6
+  assign fixed = 1'h0
+  assign weighted_312 = 1'h1
+end
+module Sum_3_Weighted_4_4_4 "Sum<3, .Weighted<[4, 4, 4]>>"
+  param N = 32'h3
+  0: out total: uint<8>
+  1: out fixed: bool
+  2: out weighted_312: bool
+  assign total = 8'hc
+  assign fixed = 1'h0
+  assign weighted_312 = 1'h0
+end
+module Sum_3_Weighted_1_1_1 "Sum<3, .Weighted<[1, 1, 1]>>"
+  param N = 32'h3
+  0: out total: uint<8>
+  1: out fixed: bool
+  2: out weighted_312: bool
+  assign total = 8'h3
+  assign fixed = 1'h0
+  assign weighted_312 = 1'h0
+end
+module Sum_3_Fixed "Sum<3, .Fixed>"
+  param N = 32'h3
+  0: out total: uint<8>
+  1: out fixed: bool
+  2: out weighted_312: bool
+  assign total = 8'h3
+  assign fixed = 1'h1
+  assign weighted_312 = 1'h0
+end
+module Area_Square "Area<.Square>"
+  0: out a: uint<8>
+  assign a = 8'h1
+end
+module Area_Rect_3_5 "Area<.Rect { w: 3, h: 5 }>"
+  0: out a: uint<8>
+  assign a = 8'hf
+end
+module Top top
+  0: out t0: uint<8>
+  1: out t1: uint<8>
+  2: out t2: uint<8>
+  3: out t3: uint<8>
+  4: out f: bool
+  5: out w: bool
+  6: out a0: uint<8>
+  7: out a1: uint<8>
+  8: wire rr_total (rr.total): uint<8>
+  9: wire rr_fixed (rr.fixed): bool
+  10: wire rr_weighted_312 (rr.weighted_312): bool
+  11: wire wa_total (wa.total): uint<8>
+  12: wire wa_fixed (wa.fixed): bool
+  13: wire wa_weighted_312 (wa.weighted_312): bool
+  14: wire wb_total (wb.total): uint<8>
+  15: wire wb_fixed (wb.fixed): bool
+  16: wire wb_weighted_312 (wb.weighted_312): bool
+  17: wire wc_total (wc.total): uint<8>
+  18: wire wc_fixed (wc.fixed): bool
+  19: wire wc_weighted_312 (wc.weighted_312): bool
+  20: wire fx_total (fx.total): uint<8>
+  21: wire fx_fixed (fx.fixed): bool
+  22: wire fx_weighted_312 (fx.weighted_312): bool
+  23: wire sq_a (sq.a): uint<8>
+  24: wire re_a (re.a): uint<8>
+  assign t0 = rr_total
+  assign t1 = wa_total
+  assign t2 = wb_total
+  assign t3 = wc_total
+  assign f = fx_fixed
+  assign w = (wa_weighted_312 && !wb_weighted_312)
+  assign a0 = sq_a
+  assign a1 = re_a
+  inst rr: Sum_3_RoundRobin (total -> rr_total, fixed -> rr_fixed, weighted_312 -> rr_weighted_312)
+  inst wa: Sum_3_Weighted_3_1_2 (total -> wa_total, fixed -> wa_fixed, weighted_312 -> wa_weighted_312)
+  inst wb: Sum_3_Weighted_4_4_4 (total -> wb_total, fixed -> wb_fixed, weighted_312 -> wb_weighted_312)
+  inst wc: Sum_3_Weighted_1_1_1 (total -> wc_total, fixed -> wc_fixed, weighted_312 -> wc_weighted_312)
+  inst fx: Sum_3_Fixed (total -> fx_total, fixed -> fx_fixed, weighted_312 -> fx_weighted_312)
+  inst sq: Area_Square (a -> sq_a)
+  inst re: Area_Rect_3_5 (a -> re_a)
+end

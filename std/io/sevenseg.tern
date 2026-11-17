@@ -72,6 +72,12 @@ where Digits >= 1, ScanCycles >= 2
     /// Digit select lines; digit `i` is lit while `an[i]` is active.
     out an: bit<Digits>
 
+    /// Cycles from a change of `digits`, `dp` or `enable` to the segment
+    /// lines of the lit digit (combinational).
+    pub const LATENCY: uint = 0
+    /// Cycles one digit stays lit before the scan moves on.
+    pub const SCAN_PERIOD: uint = ScanCycles
+
     reg sel: uint<SW> = 0
     reg tick: uint<clog2(ScanCycles)> = 0
 

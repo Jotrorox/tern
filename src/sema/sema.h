@@ -130,6 +130,7 @@ typedef struct TyVariant {
     const char *name;     /* interned */
     Ty *payload;          /* anonymous TY_STRUCT of the payload fields, or NULL */
     uint64_t tag;         /* encoded tag value (binary index, one-hot bit, gray code) */
+    int angle;            /* payload declared generic-style (`Weighted<W: [uint; N]>`) */
     Span loc;
 } TyVariant;
 

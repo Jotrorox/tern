@@ -9,8 +9,8 @@ package std::crc
 // below states its standard check value: the CRC of the ASCII string
 // "123456789".
 //
-// Parallelism comes from the payload type: Crc<u8, ..> consumes a byte per
-// cycle, Crc<u32, ..> a 32-bit word per cycle (word-parallel), Crc<bool, ..>
+// Parallelism comes from the payload type: Crc<.., u8> consumes a byte per
+// cycle, Crc<.., u32> a 32-bit word per cycle (word-parallel), Crc<.., bool>
 // one bit per cycle. The update is an unrolled XOR network that synthesis
 // flattens to the usual parallel CRC matrix.
 //
@@ -20,7 +20,7 @@ package std::crc
 // RefIn is set and MSB first otherwise. Words narrower than 8 bits are
 // taken LSB first (RefIn) or MSB first (not RefIn) as a whole.
 
-use std::math::reverse_bits
+use std::math::{reverse_bits, flog2}
 
 /// Maximal-length LFSR, re-exported from `std::math`.
 pub use std::math::Lfsr
@@ -63,8 +63,18 @@ pub const fn crc_update<Poly: uint, RefIn: bool>(c: bit<W>, d: bit<DW>) -> bit<W
 /// (`in.ready` is always high) and `crc` shows the finished CRC (reflected
 /// and XORed as the parameters say) of every word since the last `clear` or
 /// reset, one cycle after the last word. `clear` together with a word
-/// starts a new message with that word.
-pub module Crc<T: type, W: uint, Poly: uint, Init: uint, RefIn: bool, RefOut: bool, XorOut: uint>
+/// starts a new message with that word. The generics follow the usual CRC
+/// catalogue order; the payload type `T` comes last (byte-parallel `u8` by
+/// default, word-parallel with a wider `T`, bit-serial with `bool`).
+pub module Crc<
+    W: uint,
+    Poly: uint,
+    Init: uint,
+    RefIn: bool,
+    RefOut: bool,
+    XorOut: uint,
+    T: type = u8,
+>
 where W >= 1, Poly < (1 << W), Init < (1 << W), XorOut < (1 << W)
 {
     /// Clock.
@@ -73,8 +83,9 @@ where W >= 1, Poly < (1 << W), Init < (1 << W), XorOut < (1 << W)
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: uint<W>
     /// The raw CRC register (unreflected, before XorOut), for chaining.
@@ -126,8 +137,9 @@ pub module Crc8<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u8
 
@@ -136,7 +148,7 @@ pub module Crc8<T: type = u8> {
     /// CRC of "123456789".
     pub const CHECK: uint = 0xF4
 
-    let c = Crc<T, 8, 0x07, 0x00, false, false, 0x00>(in: in, clear: clear)
+    let c = Crc<8, 0x07, 0x00, false, false, 0x00, T>(in: in, clear: clear)
     crc = c.crc
 }
 
@@ -149,8 +161,9 @@ pub module Crc16Ccitt<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u16
 
@@ -159,7 +172,7 @@ pub module Crc16Ccitt<T: type = u8> {
     /// CRC of "123456789".
     pub const CHECK: uint = 0x29B1
 
-    let c = Crc<T, 16, 0x1021, 0xFFFF, false, false, 0x0000>(in: in, clear: clear)
+    let c = Crc<16, 0x1021, 0xFFFF, false, false, 0x0000, T>(in: in, clear: clear)
     crc = c.crc
 }
 
@@ -172,8 +185,9 @@ pub module Crc16Modbus<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u16
 
@@ -182,7 +196,7 @@ pub module Crc16Modbus<T: type = u8> {
     /// CRC of "123456789".
     pub const CHECK: uint = 0x4B37
 
-    let c = Crc<T, 16, 0x8005, 0xFFFF, true, true, 0x0000>(in: in, clear: clear)
+    let c = Crc<16, 0x8005, 0xFFFF, true, true, 0x0000, T>(in: in, clear: clear)
     crc = c.crc
 }
 
@@ -195,8 +209,9 @@ pub module Crc32<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u32
 
@@ -205,7 +220,7 @@ pub module Crc32<T: type = u8> {
     /// CRC of "123456789".
     pub const CHECK: uint = 0xCBF4_3926
 
-    let c = Crc<T, 32, 0x04C1_1DB7, 0xFFFF_FFFF, true, true, 0xFFFF_FFFF>(in: in, clear: clear)
+    let c = Crc<32, 0x04C1_1DB7, 0xFFFF_FFFF, true, true, 0xFFFF_FFFF, T>(in: in, clear: clear)
     crc = c.crc
 }
 
@@ -219,8 +234,9 @@ pub module Crc32C<T: type = u8> {
     in rst: reset
     /// Message words. Always ready.
     in in: Stream<T>
-    /// Start a new message (with the word on `in`, if any).
-    in clear: bool
+    /// Start a new message (with the word on `in`, if any); never when
+    /// left unconnected (one running CRC since reset).
+    in clear: bool = false
     /// The finished CRC of the message so far.
     out crc: u32
 
@@ -229,7 +245,7 @@ pub module Crc32C<T: type = u8> {
     /// CRC of "123456789".
     pub const CHECK: uint = 0xE306_9283
 
-    let c = Crc<T, 32, 0x1EDC_6F41, 0xFFFF_FFFF, true, true, 0xFFFF_FFFF>(in: in, clear: clear)
+    let c = Crc<32, 0x1EDC_6F41, 0xFFFF_FFFF, true, true, 0xFFFF_FFFF, T>(in: in, clear: clear)
     crc = c.crc
 }
 
@@ -331,7 +347,7 @@ test "crc-16/ccitt word-parallel matches byte-serial" {
 }
 
 test "crc-8 bit-serial (MSB first) check value" {
-    let dut = sim Crc<bool, 8, 0x07, 0x00, false, false, 0x00>()
+    let dut = sim Crc<8, 0x07, 0x00, false, false, 0x00, bool>()
     dut.reset()
     dut.clear = false
     for b in CHECK_MSG {
@@ -382,14 +398,11 @@ test "crc_update at compile time" {
 /// its own output, the descrambler's (`Descramble = true`) is its input, so
 /// a descrambler locks to any scrambler after W bits regardless of the
 /// starting states. Taps use the `lfsr_taps` convention (bit k-1 set for
-/// x^k). The default is the 64b/66b scrambler x^58 + x^39 + 1.
-pub module Scrambler<
-    T: type,
-    W: uint = 58,
-    Taps: uint = 0x0200_0040_0000_0000,
-    Descramble: bool = false,
->
-where W >= 2, Taps < (1 << W), (Taps >> (W - 1)) == 1
+/// x^k; the highest set bit gives the degree W). The default is the 64b/66b
+/// scrambler x^58 + x^39 + 1; the payload type `T` (bits per beat) follows
+/// the polynomial.
+pub module Scrambler<Poly: uint = 0x0200_0040_0000_0000, T: type = u8, Descramble: bool = false>
+where Poly >= 2
 {
     /// Clock.
     in clk: clock
@@ -403,8 +416,10 @@ where W >= 2, Taps < (1 << W), (Taps >> (W - 1)) == 1
     /// Added latency in cycles.
     pub const LATENCY: uint = 0
 
+    /// Degree of the polynomial (history length).
+    const W: uint = flog2(Poly) + 1
     const DW: uint = T::WIDTH
-    const P: bit<W> = Taps as bit<W>
+    const P: bit<W> = Poly as bit<W>
 
     struct Step {
         data: bit<DW>,
@@ -441,8 +456,8 @@ where W >= 2, Taps < (1 << W), (Taps >> (W - 1)) == 1
 }
 
 test "scrambler: descrambler recovers the data" {
-    let scr = sim Scrambler<u32>()
-    let des = sim Scrambler<u32, Descramble: true>()
+    let scr = sim Scrambler<T: u32>()
+    let des = sim Scrambler<T: u32, Descramble: true>()
     scr.reset()
     des.reset()
     scr.out.ready = true
@@ -463,8 +478,8 @@ test "scrambler: descrambler recovers the data" {
 }
 
 test "scrambler: descrambler self-synchronizes" {
-    let scr = sim Scrambler<u8, 7, 0x60>()                       // x^7 + x^6 + 1
-    let des = sim Scrambler<u8, 7, 0x60, Descramble: true>()
+    let scr = sim Scrambler<0x60, u8>()                       // x^7 + x^6 + 1
+    let des = sim Scrambler<0x60, u8, Descramble: true>()
     scr.reset()
     des.reset()
     scr.out.ready = true

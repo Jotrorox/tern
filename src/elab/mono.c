@@ -237,7 +237,20 @@ Env *el_bind_generics(Elab *el, GenericParams *gp, const char *owner, FileUnit *
             Ty *t = elab_eval_type(el, p->default_type, genv);
             v = t->kind == TY_ERROR ? val_error() : val_type(el->S, t);
         } else if (p->kind == GENERIC_VALUE && p->default_value) {
+            /* a module's default may read the instantiation's clock (clock_hz) */
+            Item *gi = el->gdef_item;
+            Expr *gc = el->gdef_call;
+            Env *ge = el->gdef_env;
+            Item *bi = el->bind_item;
+            el->gdef_item = el->bind_item && el->bind_item->name.name == owner ? el->bind_item : NULL;
+            el->gdef_call = el->inst_call;
+            el->gdef_env = el->inst_env;
+            el->bind_item = NULL;
             v = elab_eval_const(el, p->default_value, genv, pt, "a generic default");
+            el->bind_item = bi;
+            el->gdef_item = gi;
+            el->gdef_call = gc;
+            el->gdef_env = ge;
             if (pt && v.kind != VAL_ERROR)
                 v = elab_convert(el, v, pt, p->default_value, NULL, p->default_value->span);
         } else {
@@ -330,7 +343,41 @@ static ValModule *mono_make_module(Elab *el, Item *item, FileUnit *file, Env *ge
     vm->display = mono_display(item->name.name, args);
     if (w->n && !el_check_where(el, w, genv, vm->display, at))
         return NULL;
+    {
+        /* `ClkHz: uint = clock_hz(clk)`: the generic's value (default or
+         * explicit) is the nominal frequency of `clk` inside the module */
+        uint32_t i, n = 0;
+        for (i = 0; i < gp->n && i < args->n; i++)
+            if (elab_clock_hz_port(gp->items[i].default_value))
+                n++;
+        if (n) {
+            vm->hz_ports = ANEWN(&el->arena, const char *, n);
+            vm->hz_vals = ANEWN(&el->arena, uint64_t, n);
+            for (i = 0; i < gp->n && i < args->n; i++) {
+                const char *pn = elab_clock_hz_port(gp->items[i].default_value);
+                uint64_t hz = 0;
+                if (pn && val_get_u64(&args->items[i].val, &hz) && hz) {
+                    vm->hz_ports[vm->nhz] = pn;
+                    vm->hz_vals[vm->nhz++] = hz;
+                }
+            }
+        }
+    }
     return vm;
+}
+
+const char *elab_clock_hz_port(const Expr *def)
+{
+    const Expr *a;
+    if (!def || def->kind != EXPR_CALL || def->u.call.nargs != 1 || def->u.call.callee->kind != EXPR_PATH ||
+        def->u.call.callee->u.path.nsegs != 1 || def->u.call.callee->u.path.segs[0].has_args ||
+        !def->u.call.callee->u.path.segs[0].name.name ||
+        strcmp(def->u.call.callee->u.path.segs[0].name.name, "clock_hz") != 0)
+        return NULL;
+    a = def->u.call.args[0].value;
+    if (a->kind != EXPR_PATH || a->u.path.nsegs != 1 || a->u.path.segs[0].has_args)
+        return NULL;
+    return a->u.path.segs[0].name.name;
 }
 
 ValModule *el_bind_module_ast(Elab *el, Item *item, FileUnit *file, GenericArg *args, uint32_t nargs, Env *argenv,
@@ -341,7 +388,12 @@ ValModule *el_bind_module_ast(Elab *el, Item *item, FileUnit *file, GenericArg *
     Env *genv;
     if (!file)
         file = sema_file_of_item(el->S, item);
-    genv = el_bind_generics(el, gp, item->name.name, file, NULL, args, nargs, argenv, NULL, at, &out);
+    {
+        Item *bi = el->bind_item;
+        el->bind_item = item;
+        genv = el_bind_generics(el, gp, item->name.name, file, NULL, args, nargs, argenv, NULL, at, &out);
+        el->bind_item = bi;
+    }
     if (!genv)
         return NULL;
     return mono_make_module(el, item, file, genv, &out, at);
@@ -356,7 +408,12 @@ ValModule *elab_bind_module(Elab *el, Item *item, FileUnit *file, const ElabArgs
     if (!file)
         file = sema_file_of_item(el->S, item);
     memset(&none, 0, sizeof none);
-    genv = el_bind_generics(el, gp, item->name.name, file, NULL, NULL, 0, NULL, args ? args : &none, at, &out);
+    {
+        Item *bi = el->bind_item;
+        el->bind_item = item;
+        genv = el_bind_generics(el, gp, item->name.name, file, NULL, NULL, 0, NULL, args ? args : &none, at, &out);
+        el->bind_item = bi;
+    }
     if (!genv)
         return NULL;
     return mono_make_module(el, item, file, genv, &out, at);
@@ -466,6 +523,7 @@ static Ty *mono_build(Elab *el, Item *it, FileUnit *file, Env *ctx, Env *genv, E
             Variant *v = it->u.enum_def.variants[i];
             tv[i].name = v->name.name;
             tv[i].loc = v->span;
+            tv[i].angle = v->angle;
             if (v->has_fields) {
                 TyField *tf = (TyField *)xcalloc(v->nfields ? v->nfields : 1, sizeof(TyField));
                 StrBuf pk = {0}, pn = {0};
@@ -474,7 +532,7 @@ static Ty *mono_build(Elab *el, Item *it, FileUnit *file, Env *ctx, Env *genv, E
                     tf[k].name = v->fields[k]->name.name;
                     tf[k].ty = elab_eval_type(el, v->fields[k]->type, genv);
                     tf[k].loc = v->fields[k]->span;
-                    if (tf[k].ty->kind == TY_ERROR || !tf[k].ty->hw)
+                    if (tf[k].ty->kind == TY_ERROR)
                         ok = 0;
                 }
                 if (ok && v->nfields) {

@@ -14,7 +14,9 @@ package std::io
 ///   WS2812, 280 (default) for WS2812B and later revisions.
 /// * Within a frame the producer must therefore keep `in.valid` high (e.g. by
 ///   reading from a FIFO); a stall ends the frame.
-pub module Ws2812<ClkHz: uint, ResetUs: uint = 280> {
+/// `ClkHz` defaults to the clock's nominal frequency (`clock_hz(clk)`: the
+/// top's `#[clock(hz: ..)]`, passed down through the instances).
+pub module Ws2812<ClkHz: uint = clock_hz(clk), ResetUs: uint = 280> {
     /// Clock cycles per bit (1.25 us).
     pub const T_BIT: uint = ClkHz * 125 / 100_000_000
     /// High time of a 0 bit (0.40 us), in cycles.

@@ -291,6 +291,32 @@ Beyond the parts described in `elab.h`, `sema.h` and `check.h`:
 * **Generic inference for modules**: a module instantiated without `<..>`
   gets type and width generics from the types of its connected inputs
   (`Crc32(in: words)`, §12.3); the rest keep their defaults.
+* **`clock_hz(clk)`** (§7.5, docs/grammar.md §4.8): `Elab.inst_call` is
+  the call whose callee is being evaluated in a module body (set by
+  `ce_call`, `elb_is_instance_init`, `el_instance`), `Elab.bind_item` the
+  module whose generics `el_bind_generics` is binding; while a generic
+  default of that module is evaluated, `gdef_item/gdef_call/gdef_env` let
+  `clock_hz(port)` find the connection of `port` (named, `@ dom` or the
+  parent's default domain) and the frequency the parent knows for it.
+  `mono_make_module` records every generic declared `= clock_hz(port)` in
+  `ValModule.hz_ports/hz_vals`; `elb_clock_hz` (domains) and `elb_sig_hz`
+  read them after the port's own `#[clock(hz)]`. Because the frequency is
+  a generic, the module cache and the mangled names stay exact.
+* **Enum payloads as generic values**: a payload variant written
+  `.Weighted<[3, 1, 2]>` is built by `ce_angle_payload`; an enum whose
+  payload has no bit representation is `hw = 0` (compile-time only).
+  `val_equal`, `val_mangle` (`Weighted_3_1_2`) and `mono_key` already
+  cover payloads, so comparison, `match` and monomorphization work as for
+  plain variants.
+* **Input defaults** (`in clear: bool = false`, docs/grammar.md §4.3):
+  `ModPort.has_default/deflt`; `elb_finish` drives the default into the
+  parent wire of every instance input that is still unassigned, before the
+  unconnected-input check.
+* **`#[probe]`**: `elb_probe_body` appends generated Tern text (`type
+  Probes = struct { s: typeof(s), .. }`, `let probes = Probes { .. }`,
+  source `<#[probe] signals of M>`) to the module body; such a module
+  declares its clock/reset ports before the others so `Probes` may appear
+  in port types.
 * **std::bus::RegisterFile** (`src/elab/regfile.c`, §10.3): elaborating
   `RegisterFile<Map, Bus>` appends a generated body to the declared one: the
   generated Tern source (registered as `<RegisterFile<..>>`) instantiates
@@ -535,9 +561,11 @@ and `lsp_nav.c` (definition, hover, references, symbols, completion,
   assigned a literal or another handle's bundle (`dec.in = enc.out`); bundle
   methods (`dut.out.fire()`) run on the bundle value read from the handle.
   Methods: `reset()`, `step(n)`, `step_until(cond, max: n)` (the condition is
-  re-evaluated each cycle through `Elab.opq_call`), `settle()`,
-  `run(ns: n)`, `dump(file)`, `cycle()`, `time_ns()`; `dut.<domain or clock
-  port>.step(n)` steps one domain.
+  re-evaluated each cycle through `Elab.opq_call`; a timeout stops the
+  test), `expect_eventually(cond, max: n)` (std::sim's `expect_eventually`:
+  the same wait, but a timeout is recorded like `expect` and the test
+  goes on), `settle()`, `run(ns: n)`, `dump(file)`, `cycle()`,
+  `time_ns()`; `dut.<domain or clock port>.step(n)` steps one domain.
 * **`#[test_port]`** (spec §11.1, "a signal a test must drive is exposed
   with #[test_port]"; the spec has no `force`). Semantics: a test_port may
   be driven by a test; once the test assigns it, the test's value wins

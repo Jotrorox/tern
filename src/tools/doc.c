@@ -1752,7 +1752,8 @@ static void doc_text_item(DocSet *ds, const DocItem *d, int width, StrBuf *out)
             any = 1;
             w[1] = TERN_MAX(w[1], doc_cols(s->u.port.name.name));
             w[2] = TERN_MAX(w[2], doc_cols(doc_src(ds, f, s->u.port.type->span)) +
-                                      (s->u.port.domain ? 3 + doc_cols(doc_src(ds, f, s->u.port.domain->span)) : 0));
+                                      (s->u.port.domain ? 3 + doc_cols(doc_src(ds, f, s->u.port.domain->span)) : 0) +
+                                      (s->u.port.deflt ? 3 + doc_cols(doc_src(ds, f, s->u.port.deflt->span)) : 0));
         }
         w[2] = TERN_MIN(w[2], 28);
         if (any) {
@@ -1766,6 +1767,8 @@ static void doc_text_item(DocSet *ds, const DocItem *d, int width, StrBuf *out)
                 sb_puts(&ty, doc_src(ds, f, s->u.port.type->span));
                 if (s->u.port.domain)
                     sb_printf(&ty, " @ %s", doc_src(ds, f, s->u.port.domain->span));
+                if (s->u.port.deflt)
+                    sb_printf(&ty, " = %s", doc_src(ds, f, s->u.port.deflt->span));
                 cells[0] = s->u.port.dir == PORT_IN ? "in" : "out";
                 cells[1] = s->u.port.name.name;
                 cells[2] = ty.data;
@@ -1881,7 +1884,7 @@ static void doc_text_item(DocSet *ds, const DocItem *d, int width, StrBuf *out)
             const Variant *v = it->u.enum_def.variants[i];
             int vw = doc_cols(v->name.name);
             if (v->has_fields)
-                vw += 1 + doc_cols(doc_src(ds, f, span_make(0, doc_end(v->name.span), doc_end(v->span) - doc_end(v->name.span))));
+                vw += (v->angle ? 0 : 1) + doc_cols(doc_src(ds, f, span_make(0, doc_end(v->name.span), doc_end(v->span) - doc_end(v->name.span))));
             w[0] = TERN_MAX(w[0], vw);
         }
         w[0] = TERN_MIN(w[0], 36);
@@ -1894,7 +1897,7 @@ static void doc_text_item(DocSet *ds, const DocItem *d, int width, StrBuf *out)
                 Span sp = v->span;
                 sp.off = doc_end(v->name.span);
                 sp.len = doc_end(v->span) - sp.off;
-                sb_printf(&nm, " %s", doc_src(ds, f, sp));
+                sb_printf(&nm, v->angle ? "%s" : " %s", doc_src(ds, f, sp));
             }
             cells[0] = nm.data;
             doc_text_row(out, cells, w, 1, doc_row_text(ds, doc_text_of(v->doc)), width);
@@ -2234,6 +2237,10 @@ static void doc_html_item(DocSet *ds, const DocItem *d, StrBuf *out)
             sb_printf(out, "</code></td><td class=\"dir %s\">%s</td><td><code>",
                       s->u.port.dir == PORT_IN ? "in" : "out", s->u.port.dir == PORT_IN ? "in" : "out");
             doc_html_code(ds, f, doc_src(ds, f, s->u.port.type->span), out);
+            if (s->u.port.deflt) {
+                sb_puts(out, " = ");
+                doc_html_code(ds, f, doc_src(ds, f, s->u.port.deflt->span), out);
+            }
             sb_puts(out, "</code></td><td>");
             if (s->u.port.domain) {
                 sb_puts(out, "<code>");

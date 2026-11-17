@@ -302,10 +302,43 @@ test "gearbox last: wide to narrow puts last on the final lane" {
 // Packetizer / DelimPacketizer
 // ---------------------------------------------------------------------------
 
-/// Add a `last` flag by count: every `Len`-th beat ends a packet.
-/// Combinational pass-through of the handshake.
-pub module Packetizer<T: type, Len: uint>
-where Len >= 1
+/// How `Packetizer` and `Depacketizer` frame packets.
+pub enum Framing<T: type = u8> {
+    /// Fixed-length packets of `Len` beats: `Packetizer` sets `last` on
+    /// every Len-th beat (`.Count<64>`).
+    Count<Len: uint>,
+    /// Delimited packets: a beat equal to `Value` ends a packet and is not
+    /// part of it (`.Delim<0x0A>`). `Packetizer` drops the delimiter and
+    /// sets `last` on the beat before it; `Depacketizer` inserts one after
+    /// every packet.
+    Delim<Value: T>,
+    /// Only the `last` flag frames packets: `Depacketizer` drops the flag
+    /// and exposes `first` / `last` beside the payload.
+    Flag,
+}
+
+/// The packet length of `.Count<Len>`, else 0.
+pub const fn framing_len<T: type>(f: Framing<T>) -> uint {
+    match f {
+        .Count { Len } => Len,
+        _ => 0,
+    }
+}
+
+/// The delimiter of `.Delim<Value>`, else zero.
+pub const fn framing_delim<T: type>(f: Framing<T>) -> T {
+    match f {
+        .Delim { Value } => Value,
+        _ => T::from_bits(all0),
+    }
+}
+
+/// Add a `last` flag by count (`.Count<Len>`: every `Len`-th beat ends a
+/// packet; a combinational pass-through of the handshake) or by delimiter
+/// (`.Delim<Value>`, the default with a zero delimiter: see
+/// `DelimPacketizer`, which takes the delimiter as a port instead).
+pub module Packetizer<T: type, By: Framing<T> = .Delim<all0>>
+where By != .Flag
 {
     /// Clock.
     in clk: clock
@@ -313,33 +346,41 @@ where Len >= 1
     in rst: reset
     /// Unframed beats.
     in in: Stream<T>
-    /// The same beats, `last` set on every `Len`-th.
+    /// The same beats with `last` flags (delimiters removed).
     out out: Stream<Beat<T>>
 
-    /// Added latency in cycles.
-    pub const LATENCY: uint = 0
+    const LEN: uint = framing_len<T>(By)
+    static_assert(LEN >= 1 or By != .Count<0>, "Packetizer: `.Count<Len>` needs Len >= 1")
 
-    reg cnt: uint<clog2(Len + 1)> = 0
-    let at_end = cnt == Len - 1
+    /// Added latency in cycles (`.Delim` holds one beat back).
+    pub const LATENCY: uint = if LEN > 0 { 0 } else { 1 }
 
-    out.valid = in.valid
-    out.data = Beat { data: in.data, last: at_end }
-    in.ready = out.ready
+    if LEN > 0 {
+        reg cnt: uint<clog2(LEN + 1)> = 0
+        let at_end = cnt == LEN - 1
 
-    on clk {
-        if out.fire() {
-            cnt = if at_end { 0 } else { cnt +% 1 }
+        out.valid = in.valid
+        out.data = Beat { data: in.data, last: at_end }
+        in.ready = out.ready
+
+        on clk {
+            if out.fire() {
+                cnt = if at_end { 0 } else { cnt +% 1 }
+            }
         }
-    }
 
-    /// The beat counter never reaches the packet length.
-    property count_bounded {
-        always cnt < Len
+        /// The beat counter never reaches the packet length.
+        property count_bounded {
+            always cnt < LEN
+        }
+    } else {
+        let framer = DelimPacketizer<T>(in: in, delim: framing_delim<T>(By))
+        out = framer.out
     }
 }
 
 test "packetizer: last on every Len-th beat" {
-    let dut = sim Packetizer<u8, 3>()
+    let dut = sim Packetizer<u8, .Count<3>>()
     dut.reset()
     dut.out.ready = true
     for i in 0..9 {
@@ -352,7 +393,7 @@ test "packetizer: last on every Len-th beat" {
 }
 
 test "packetizer: stalls do not advance the count" {
-    let dut = sim Packetizer<u8, 2>()
+    let dut = sim Packetizer<u8, .Count<2>>()
     dut.reset()
     dut.in = Stream { valid: true, data: 1 }
     dut.out.ready = false
@@ -363,6 +404,38 @@ test "packetizer: stalls do not advance the count" {
     dut.step()
     dut.settle()
     expect dut.out.data.last
+}
+
+test "packetizer: by delimiter" {
+    let dut = sim Packetizer<u8, .Delim<0x0A>>()
+    dut.reset()
+    dut.out.ready = true
+    let input = [0x41, 0x42, 0x0A, 0x43, 0x0A]
+    let want_data = [0x41, 0x42, 0x43]
+    let want_last = [false, true, true]
+    var n: uint = 0
+    for b in input {
+        dut.in = Stream { valid: true, data: b }
+        dut.settle()
+        if dut.out.valid {
+            expect dut.out.data.data == want_data[n]
+            expect dut.out.data.last == want_last[n]
+            n = n + 1
+        }
+        dut.step()
+    }
+    expect n == 3
+}
+
+test "packetizer: zero-delimited by default" {
+    let dut = sim Packetizer<u8>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: 7 }
+    dut.step()
+    dut.in.data = 0
+    dut.settle()
+    expect dut.out.valid and dut.out.data.data == 7 and dut.out.data.last
 }
 
 /// Add a `last` flag by delimiter: an input beat equal to `delim` ends the
@@ -438,15 +511,19 @@ test "delim packetizer: delimiter becomes last" {
 // ---------------------------------------------------------------------------
 
 /// Consume the `last` flag: forward the payload and expose the framing as
-/// side-band `first` / `last` flags of the current beat.
-pub module Depacketizer<T: type> {
+/// side-band `first` / `last` flags of the current beat (`.Flag`, the
+/// default, and `.Count<Len>`), or insert a delimiter beat after every
+/// packet (`.Delim<Value>`; `first` / `last` then mark the first payload
+/// beat and the delimiter beat). `DelimDepacketizer` takes the delimiter as
+/// a port instead.
+pub module Depacketizer<T: type, By: Framing<T> = .Flag> {
     /// Clock.
     in clk: clock
     /// Reset; the next beat is the first of a packet.
     in rst: reset
     /// Packet beats.
     in in: Stream<Beat<T>>
-    /// Payload beats.
+    /// Payload beats (with delimiters for `.Delim`).
     out out: Stream<T>
     /// The beat on `out` starts a packet (valid with `out.valid`).
     out first: bool
@@ -456,21 +533,47 @@ pub module Depacketizer<T: type> {
     /// Added latency in cycles.
     pub const LATENCY: uint = 0
 
+    const DELIM: bool = By != .Flag and framing_len<T>(By) == 0
+
     reg inside: bool = false
 
-    out.valid = in.valid
-    out.data = in.data.data
-    in.ready = out.ready
-    first = !inside
-    last = in.data.last
+    if DELIM {
+        reg pending: bool = false
 
-    on clk {
-        if in.fire() { inside = !in.data.last }
-    }
+        out.valid = pending or in.valid
+        out.data = if pending { framing_delim<T>(By) } else { in.data.data }
+        in.ready = !pending and out.ready
+        first = !pending and !inside
+        last = pending
 
-    /// The beat after a last beat starts a new packet.
-    property restart_after_last {
-        always (in.fire() and in.data.last) |=> first
+        on clk {
+            if pending {
+                if out.ready { pending = false }
+            } else if in.fire() and in.data.last {
+                pending = true
+            }
+            if in.fire() { inside = !in.data.last }
+        }
+
+        /// Every packet end is followed by a delimiter beat.
+        property delim_follows_last {
+            always (in.fire() and in.data.last) |=> pending and out.valid
+        }
+    } else {
+        out.valid = in.valid
+        out.data = in.data.data
+        in.ready = out.ready
+        first = !inside
+        last = in.data.last
+
+        on clk {
+            if in.fire() { inside = !in.data.last }
+        }
+
+        /// The beat after a last beat starts a new packet.
+        property restart_after_last {
+            always (in.fire() and in.data.last) |=> first
+        }
     }
 }
 
@@ -488,6 +591,26 @@ test "depacketizer: first and last flags" {
         expect dut.last == lasts[i]
         dut.step()
     }
+}
+
+test "depacketizer: by delimiter" {
+    let dut = sim Depacketizer<u8, .Delim<0x7E>>()
+    dut.reset()
+    dut.out.ready = true
+    dut.in = Stream { valid: true, data: Beat { data: 1, last: false } }
+    dut.settle()
+    expect dut.out.data == 1 and dut.first and !dut.last
+    dut.step()
+    dut.in.data = Beat { data: 2, last: true }
+    dut.settle()
+    expect dut.out.data == 2 and !dut.first and !dut.last
+    dut.step()
+    dut.in.data = Beat { data: 3, last: true }
+    dut.settle()
+    expect dut.out.valid and dut.out.data == 0x7E and dut.last and !dut.in.ready
+    dut.step()
+    dut.settle()
+    expect dut.out.data == 3 and dut.first and dut.in.ready
 }
 
 /// Consume the `last` flag by delimiter: forward the payload and insert one

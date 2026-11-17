@@ -94,6 +94,38 @@ pub const Hd1280x720: VideoMode = VideoMode {
     pixel_hz: 74_250_000,
 }
 
+/// 1280x1024 at 60 Hz (VESA DMT SXGA), 108 MHz pixel clock, 1688x1066
+/// total, both syncs positive.
+pub const Sxga1280x1024: VideoMode = VideoMode {
+    h_active: 1280,
+    h_front: 48,
+    h_sync: 112,
+    h_back: 248,
+    v_active: 1024,
+    v_front: 1,
+    v_sync: 3,
+    v_back: 38,
+    h_sync_positive: true,
+    v_sync_positive: true,
+    pixel_hz: 108_000_000,
+}
+
+/// 1600x900 at 60 Hz (VESA DMT, reduced blanking), 108 MHz pixel clock,
+/// 1800x1000 total, both syncs positive.
+pub const Hdp1600x900: VideoMode = VideoMode {
+    h_active: 1600,
+    h_front: 24,
+    h_sync: 80,
+    h_back: 96,
+    v_active: 900,
+    v_front: 1,
+    v_sync: 3,
+    v_back: 96,
+    h_sync_positive: true,
+    v_sync_positive: true,
+    pixel_hz: 108_000_000,
+}
+
 /// 1920x1080 at 60 Hz (CEA-861 1080p, VIC 16), 148.5 MHz pixel clock,
 /// 2200x1125 total, both syncs positive.
 pub const Hd1920x1080: VideoMode = VideoMode {
@@ -266,5 +298,16 @@ test "preset totals match the standards" {
     expect h_total(Svga800x600) == 1056 and v_total(Svga800x600) == 628
     expect h_total(Xga1024x768) == 1344 and v_total(Xga1024x768) == 806
     expect h_total(Hd1280x720) == 1650 and v_total(Hd1280x720) == 750
+    expect h_total(Sxga1280x1024) == 1688 and v_total(Sxga1280x1024) == 1066
+    expect h_total(Hdp1600x900) == 1800 and v_total(Hdp1600x900) == 1000
     expect h_total(Hd1920x1080) == 2200 and v_total(Hd1920x1080) == 1125
+}
+
+test "preset pixel clocks give 60 Hz frames" {
+    for m in [
+        Vga640x480, Svga800x600, Xga1024x768, Hd1280x720, Sxga1280x1024, Hdp1600x900, Hd1920x1080,
+    ] {
+        let fps_milli = m.pixel_hz * 1000 / (h_total(m) * v_total(m))
+        expect fps_milli >= 59_900 and fps_milli <= 60_400
+    }
 }

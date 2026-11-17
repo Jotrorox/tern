@@ -683,6 +683,38 @@ static void fmt_gargs(FmtState *st, uint32_t name_end, uint32_t seg_end, const G
     fmt_list(st, &L);
 }
 
+/* a variant payload written generic-style: `.Weighted<[3, 1, 2]>` */
+static void fmt_vinit(FmtState *st, const void *ctx, uint32_t i)
+{
+    const FieldInit *f = &((const FieldInit *)ctx)[i];
+    if (f->name.name) {
+        fmt_name(st, f->name);
+        fmt_str(st, ":");
+        fmt_sp(st);
+    }
+    fmt_expr(st, f->value);
+}
+
+static uint32_t fmt_vinit_off(const void *ctx, uint32_t i)
+{
+    return ((const FieldInit *)ctx)[i].span.off;
+}
+
+/* and declared that way: `Weighted<W: [uint; N]>` */
+static void fmt_vfield(FmtState *st, const void *ctx, uint32_t i)
+{
+    const Field *f = ((Field *const *)ctx)[i];
+    fmt_name(st, f->name);
+    fmt_str(st, ":");
+    fmt_sp(st);
+    fmt_type(st, f->type);
+}
+
+static uint32_t fmt_vfield_off(const void *ctx, uint32_t i)
+{
+    return ((Field *const *)ctx)[i]->span.off;
+}
+
 static void fmt_path(FmtState *st, const Path *p)
 {
     uint32_t i;
@@ -1281,7 +1313,14 @@ static void fmt_expr(FmtState *st, const Expr *e)
     case EXPR_VARIANT:
         fmt_str(st, ".");
         fmt_name(st, e->u.variant.name);
-        if (e->u.variant.has_fields) {
+        if (e->u.variant.angle) {
+            FmtList L;
+            uint32_t open = fmt_find(st, fmt_end(e->u.variant.name.span), TK_LT);
+            fmt_list_init(&L, "<", ">", open, fmt_end(e->span) - 1, e->u.variant.nfields, fmt_vinit, fmt_vinit_off,
+                          e->u.variant.fields);
+            L.hug = 1;
+            fmt_list(st, &L);
+        } else if (e->u.variant.has_fields) {
             fmt_sp(st);
             fmt_inits(st, fmt_find(st, fmt_end(e->u.variant.name.span), TK_LBRACE), fmt_end(e->span) - 1,
                       e->u.variant.fields, e->u.variant.nfields, 0);
@@ -1646,6 +1685,12 @@ static void fmt_stmt(FmtState *st, const Stmt *s)
             fmt_sp(st);
             fmt_expr(st, s->u.port.domain);
         }
+        if (s->u.port.deflt) {
+            fmt_sp(st);
+            fmt_str(st, "=");
+            fmt_sp(st);
+            fmt_expr(st, s->u.port.deflt);
+        }
         for (i = 0; i < s->attrs.n; i++) {
             if (s->attrs.items[i].span.off > s->u.port.name.span.off) {
                 fmt_sp(st);
@@ -1804,7 +1849,13 @@ static void fmt_variant_elem(FmtState *st, const void *ctx, uint32_t i)
     fmt_lead_attrs(st, v->attrs, fmt_kw_off(st, v->span.off, v->attrs), 0);
     fmt_comments_before(st, v->name.span.off);
     fmt_name(st, v->name);
-    if (v->has_fields) {
+    if (v->angle) {
+        FmtList L;
+        uint32_t open = fmt_find(st, fmt_end(v->name.span), TK_LT);
+        fmt_list_init(&L, "<", ">", open, fmt_end(v->span) - 1, v->nfields, fmt_vfield, fmt_vfield_off, v->fields);
+        L.hug = 1;
+        fmt_list(st, &L);
+    } else if (v->has_fields) {
         uint32_t open = fmt_find(st, fmt_end(v->name.span), TK_LBRACE);
         fmt_sp(st);
         fmt_fields(st, open, fmt_end(v->span) - 1, v->fields, v->nfields);
@@ -2653,7 +2704,14 @@ static int fmt_naming_item(const Item *it)
         for (i = 0; i < it->u.enum_def.nvariants; i++) {
             const Variant *v = it->u.enum_def.variants[i];
             w += fmt_name_check(v->name, FMT_CAMEL, "enum variant");
-            w += fmt_naming_fields(v->fields, v->nfields);
+            if (v->angle) {
+                /* `Weighted<Weights: [uint; N]>` reads like a generic parameter */
+                uint32_t k;
+                for (k = 0; k < v->nfields; k++)
+                    w += fmt_name_check(v->fields[k]->name, FMT_CAMEL, "variant payload");
+            } else {
+                w += fmt_naming_fields(v->fields, v->nfields);
+            }
         }
         break;
     case ITEM_CONST:

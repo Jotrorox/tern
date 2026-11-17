@@ -1,0 +1,5 @@
+enum_payload_errors.tern:13:11: error: port `p` has type Policy<2>, which is not a hardware type
+enum_payload_errors.tern:23:30: error: array literal has 3 elements, [uint; 2] has 2
+enum_payload_errors.tern:24:35: error: too many values for the payload of variant `Weighted` (1 expected)
+enum_payload_errors.tern:25:20: error: variant `RoundRobin` has no payload
+enum_payload_errors.tern:26:30: error: `Policy<2>::Weighted` has no field `Bogus`

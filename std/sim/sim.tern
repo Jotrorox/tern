@@ -263,7 +263,9 @@ where Depth.is_pow2()
 /// * If the window expires, `failed` becomes high (sticky) and, with `Strict`,
 ///   an assertion fails at that cycle.
 /// * The same check is available directly in a test as
-///   `dut.step_until(cond, max: n)`, which fails at `n`; use this module when
+///   `dut.expect_eventually(cond, max: n)` (records a failure after `n`
+///   cycles, like `expect`, and the test continues) or
+///   `dut.step_until(cond, max: n)` (stops the test); use this module when
 ///   the check belongs inside a bench, next to the design.
 pub module ExpectEventually<Max: uint, Strict: bool = true>
 where Max >= 2
@@ -544,6 +546,19 @@ test "ExpectEventually passes when the condition arrives in time" {
     dut.cond = false
     dut.step(10)
     expect !dut.failed and !dut.waiting
+}
+
+test "expect_eventually waits for a condition in a test" {
+    let dut = sim ExpectEventually<Max: 3>()
+    dut.reset()
+    dut.cond = false
+    dut.trigger = true
+    dut.step()
+    dut.trigger = false
+    expect dut.waiting
+    dut.cond = true
+    let cycles = dut.expect_eventually(!dut.waiting, max: 2)
+    expect cycles == 0
 }
 
 test "ExpectEventually fails when the window expires" {

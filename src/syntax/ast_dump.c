@@ -243,7 +243,21 @@ static void ad_expr(AdState *d, const Expr *e)
         ad_path(d, &e->u.path);
         break;
     case EXPR_VARIANT:
-        if (e->u.variant.has_fields) {
+        if (e->u.variant.angle) {
+            sb_puts(d->sb, "(.");
+            ad_name(d, e->u.variant.name);
+            sb_puts(d->sb, " <");
+            for (i = 0; i < e->u.variant.nfields; i++) {
+                const FieldInit *fi = &e->u.variant.fields[i];
+                sb_puts(d->sb, i ? ", " : "");
+                if (fi->name.name) {
+                    ad_name(d, fi->name);
+                    sb_puts(d->sb, ": ");
+                }
+                ad_expr(d, fi->value);
+            }
+            sb_puts(d->sb, ">)");
+        } else if (e->u.variant.has_fields) {
             sb_puts(d->sb, "(.");
             ad_name(d, e->u.variant.name);
             ad_field_inits(d, e->u.variant.fields, e->u.variant.nfields);
@@ -565,6 +579,7 @@ static void ad_stmt(AdState *d, const Stmt *s)
         sb_putc(d->sb, ' ');
         ad_type(d, s->u.port.type);
         ad_opt(d, "@", s->u.port.domain);
+        ad_opt(d, "=", s->u.port.deflt);
         break;
     case STMT_DOMAIN:
         ad_stmt_head(d, "domain", s);
@@ -808,9 +823,9 @@ static void ad_item(AdState *d, const Item *it)
             ad_attrs(d, v->attrs);
             ad_doc(d, v->doc);
             if (v->has_fields) {
-                sb_puts(d->sb, " {");
+                sb_puts(d->sb, v->angle ? " <" : " {");
                 ad_fields(d, v->fields, v->nfields);
-                sb_puts(d->sb, " }");
+                sb_puts(d->sb, v->angle ? " >" : " }");
             }
             sb_putc(d->sb, ')');
         }

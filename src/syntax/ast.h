@@ -270,7 +270,10 @@ struct Expr {
         Path path;
         struct {
             Ident name;           /* without the dot */
-            int has_fields;       /* `.Write { ... }` */
+            int has_fields;       /* `.Write { ... }` or `.Weighted<[3, 1, 2]>` */
+            int angle;            /* payload written as generic-style arguments
+                                   * `.Weighted<[3, 1, 2]>`: fields may be positional
+                                   * (name.name == NULL), in payload field order */
             FieldInit *fields;
             uint32_t nfields;
         } variant;
@@ -402,7 +405,8 @@ struct Stmt {
     AttrList attrs;       /* #[...] written before (ports: also after the type) */
     AstDoc *doc;          /* or NULL */
     union {
-        struct { PortDir dir; Ident name; Type *type; Expr *domain; } port;   /* domain may be NULL */
+        struct { PortDir dir; Ident name; Type *type; Expr *domain; Expr *deflt; } port;
+                              /* domain, deflt (`in clear: bool = false`) may be NULL */
         struct { Ident name; Expr *clock; Expr *reset; } domain;               /* reset may be NULL */
         struct { Pattern *pat; Type *type; Expr *init; Expr *constraint; } let; /* type, constraint may be NULL */
         struct { Ident name; Type *type; Expr *init; Expr *constraint; } var;  /* all but name optional */
@@ -442,7 +446,8 @@ typedef enum ItemKind {
 
 typedef struct Variant {
     Ident name;
-    int has_fields;       /* `Write { addr: u16, data: u32 }` */
+    int has_fields;       /* `Write { addr: u16, data: u32 }` or `Weighted<W: [uint; N]>` */
+    int angle;            /* payload declared generic-style: `Weighted<W: [uint; N]>` */
     Field **fields;
     uint32_t nfields;
     AttrList attrs;

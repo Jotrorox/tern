@@ -163,7 +163,8 @@ where      = "where" expr { "," expr } ;
 bundle     = "bundle" name [ generics ] "{" { attrs ( [ "flip" ] name ":" type | [ "pub" ] ( const | fn ) ) SEP } "}" ;
 struct     = "struct" name [ generics ] "{" { attrs ( field | [ "pub" ] ( const | fn ) ) SEP } "}" ;
 field      = attrs name ":" type ;
-enum       = "enum" name [ generics ] "{" { attrs name [ "{" { field SEP } "}" ] SEP } "}" ;
+enum       = "enum" name [ generics ] "{" { attrs name [ "{" { field SEP } "}" | payload ] SEP } "}" ;
+payload    = "<" name ":" type { "," name ":" type } [","] ">" ;   (* Weighted<Weights: [uint; N]> *)
 const      = "const" name [ ":" type ] "=" expr ;
 fn         = [ "const" ] "fn" name [ generics ] "(" [ param { "," param } [","] ] ")"
              [ "->" type ] [ where ] block ;
@@ -186,6 +187,23 @@ Notes:
   `.RoundRobin`, an array literal, an `if` expression or a const fn call.
   Generic parameter types may be enums, structs or arrays (`Data: [T; N]`).
   The generic list may span lines, and its `>` may sit on its own line.
+* A module's generic default may be `clock_hz(port)`, the nominal frequency
+  of the clock that the instantiation connects to that clock port (spec
+  §7.5; §4.8). The generic then *is* that clock's frequency inside the
+  module, whether it took the default or was given explicitly.
+* An enum variant may carry a payload declared like generic parameters,
+  `Weighted<Weights: [uint; N]>` (spec §12.2, `Arbiter`'s
+  `.Weighted<[uint; N]>`). It is stored exactly like a `{ .. }` payload
+  (`Variant.angle` records the spelling) and is written generic-style:
+  `.Weighted<[3, 1, 2]>` (positional, in declaration order) or
+  `.Weighted<Weights: [3, 1, 2]>`, also `ArbPolicy::Weighted<..>`; any
+  payload variant accepts this form, and patterns use the brace form
+  (`.Weighted { Weights }`). Payload names are UpperCamel like generic
+  parameters. A payload without a bit representation (widthless `uint`,
+  arrays of it) makes the enum compile-time only: usable as a generic
+  parameter, const or const fn value, not as a signal. Such values compare
+  with `==`, take part in `match`, and appear in monomorphized names
+  (`Arbiter_u8_3_Weighted_3_1_2`).
 * A `where` clause may follow a line break. Its expressions do not allow
   struct literals (§5.2).
 * An extern's string is the SystemVerilog file; `""` means a vendor-library
@@ -212,7 +230,7 @@ decides which statements are legal where.
 
 ```
 stmt   = attrs (
-           ( "in" | "out" ) name ":" type [ "@" postfix ] { attr }    (* port *)
+           ( "in" | "out" ) name ":" type [ "@" postfix ] [ "=" expr ] { attr }    (* port *)
          | "domain" name "=" "(" expr [ "," expr ] ")"
          | "let" pattern [ ":" type ] "=" expr [ "where" expr ]
          | "var" name [ ":" type ] [ "=" expr [ "where" expr ] ]
@@ -236,6 +254,12 @@ block  = "{" { stmt NL } "}" ;
   `out[i].valid = ...` and `in = x` are assignments.
 * **Port extras:** a port may carry a domain (`in d: T @ src_d`) and
   trailing attributes on the same line (`in clk: clock #[clock(hz: N)]`).
+* **Input defaults** (an extension that spec §12.3's
+  `Crc32(in: xfifo.pop)` needs for `clear`): a data input may declare a
+  compile-time default, `in clear: bool = false`. An instance that leaves
+  it unconnected (and does not assign it later) drives the default;
+  otherwise an unconnected input is still an error. Outputs, clocks,
+  resets and bundle ports have no defaults.
 * **Domains:** a `reg` or `on` may name a clock port or a domain.
   `domain d = (clk, rst)` takes expressions, so a converted `let` works.
 * **`reg` with domain:** the domain is not part of the initializer
@@ -262,7 +286,8 @@ block  = "{" { stmt NL } "}" ;
 ```
 primary = int | typed_int | "true" | "false" | "all0" | "all1" | string
         | path                                (* a, T::WIDTH, Fifo<u8, 64>, std::bus::X<..> *)
-        | "." name [ "{" field_inits "}" ]    (* .Idle, .Write { addr, data: d } *)
+        | "." name [ "{" field_inits "}" | generic_args ]
+                                              (* .Idle, .Write { addr, data: d }, .Weighted<[3, 1]> *)
         | "(" ")" | "(" expr ")" | "(" expr "," [ expr { "," expr } [","] ] ")"
         | "[" [ expr { "," expr } [","] ] "]" (* array literal *)
         | "[" type ";" expr "]"               (* array type in generic-argument position *)
@@ -298,7 +323,11 @@ garg       = [ name ":" ] expr ;                      (* types and values share 
   `Stream<u8> { .. }`, `Cmd::Write { .. }`. Shorthand fields (`{ data }`)
   have `value == NULL`.
 * `x.trunc<8>()`: method generic arguments are accepted when `(` follows.
-* `x[i +: w]` and `x[i -: w]` are rejected with a message.
+* `.Name<..>` is a variant with its payload given generic-style
+  (`EXPR_VARIANT` with `angle` set; the arguments become `FieldInit`s whose
+  `name` is empty for positional ones). Inside a generic list it is always
+  parsed; elsewhere speculatively, and it is kept when the `>` closes (a
+  comparison with a variant on the left is meaningless).
 
 ### 4.5 Patterns
 
@@ -351,6 +380,37 @@ expression, so `a ##1 (b)` is a delay and not a call. `stable(x)`,
 properties, `|->`, `|=>` and `##` are reported, and `always` and the other
 words are plain identifiers. A property may sit inside an elaboration
 `if`/`for`.
+
+### 4.8 Builtin functions
+
+Besides the prelude, these names are handled by the elaborator (and in
+tests by the interpreter) when nothing in scope shadows them: `bits(x)`,
+`static_assert(c, "msg")`, `unsafe_cross(x)`, `include_hex(f)` /
+`include_bin(f)`, `const_log(..)`, `stable`/`rose`/`fell`/`past` (properties)
+and:
+
+* `clock_hz(clk)` — the nominal frequency in Hz (a widthless `uint`) of a
+  clock port or domain of the module being elaborated (spec §7.5). It is
+  known when the clock port carries `#[clock(hz: N)]`, or when a generic of
+  the module is declared `= clock_hz(port)`: in that default it reads the
+  frequency of the clock the instantiation connects (by name, through `@
+  dom`, or the parent's default domain), so the frequency travels down the
+  hierarchy one generic at a time, `ClkHz: uint = clock_hz(clk)`, and
+  instances under different clocks are different modules
+  (`Strobe<10, 100000000>`). Anywhere else an unknown frequency is an
+  error with the fix. A module whose generic defaults to `clock_hz(..)` is
+  not elaborated on its own as a default root (`tern check` without tops).
+  The known frequency also fills `IrDomain.hz` of the module's domains (the
+  simulator's time base).
+
+Attributes with compiler support on declarations: `#[clock(hz: N)]`,
+`#[test_port]`, `#[keep]`, `#[async_reg]`, `#[ram(..)]`, and
+`#[probe]` (std::debug): the probed ports and module-level `let`/`var`/`reg`
+signals of a module become the struct type `Probes` (one field per
+signal, named after it, in declaration order) and the module-level value
+`probes` of that type, so `Ila<Probes>(probes: probes, ..)` captures them
+all. Probed signals are emitted with `(* mark_debug = "true" *)`.
+* `x[i +: w]` and `x[i -: w]` are rejected with a message.
 
 ## 5. Disambiguation rules
 
@@ -446,8 +506,13 @@ Appendix A:
     * `= reset` values;
     * docs on entries and fields.
 17. Tests:
-    * named arguments (`step_until(c, max: 300)`, `run(ns: 500)`);
+    * named arguments (`step_until(c, max: 300)`, `run(ns: 500)`,
+      `expect_eventually(c, max: 20)`);
     * several statements per line with `;`.
+18. Input port defaults (`in clear: bool = false`, §4.3).
+19. Enum variant payloads declared and written generic-style
+    (`Weighted<Weights: [uint; N]>`, `.Weighted<[3, 1, 2]>`), and
+    `clock_hz(clk)` (§4.2, §4.8).
 
 ## 7. Error recovery
 

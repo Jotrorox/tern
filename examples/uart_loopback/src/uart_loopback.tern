@@ -84,7 +84,7 @@ where Depth.is_pow2(), Depth <= 16
 
     txd = tx_line
     irq = regs.errors != 0
-    led = Heartbeat<ClkHz: 100_000_000>().led
+    led = Heartbeat().led
 
     on clk {
         assert regs.baud_div >= 4 or !tx.busy, "baud divider below 4 while sending"

@@ -14,6 +14,7 @@
  *     reset inputs are connected directly to the parent's signal.
  */
 #include "elab_impl.h"
+#include "../syntax/parser.h"
 
 /* deepest chain of module instances (stack depth of elab_module) */
 #define EL_MAX_MOD_DEPTH 128
@@ -462,6 +463,20 @@ static void elb_declare_port(Elab *el, Stmt *s, Env *env)
     mp.is_clock = t->kind == TY_CLOCK;
     mp.is_reset = t->kind == TY_RESET;
     mp.loc = s->u.port.name.span;
+    if (s->u.port.deflt) {
+        if (s->u.port.dir != PORT_IN || !t->hw || mp.is_clock || mp.is_reset) {
+            el_error(el, s->u.port.deflt->span, "only data inputs have defaults; `%s` is %s", name,
+                     s->u.port.dir != PORT_IN ? "an output" : ty_str(t));
+        } else {
+            Value dv = elab_eval_const(el, s->u.port.deflt, env, t, "a port default");
+            if (dv.kind != VAL_ERROR)
+                dv = elab_convert(el, dv, t, s->u.port.deflt, "the port default", s->u.port.deflt->span);
+            if (dv.kind != VAL_ERROR) {
+                mp.has_default = 1;
+                mp.deflt = dv;
+            }
+        }
+    }
     {
         ModInfo *mi = mc->mi;
         ModPort *np = ANEWN(&el->arena, ModPort, mi->nports + 1);
@@ -488,27 +503,61 @@ static void elb_set_domain_tree(IrModule *m, Place *p, uint32_t d)
         elb_set_domain_tree(m, p->subs[i], d);
 }
 
-static uint64_t elb_clock_hz(Elab *el, uint32_t sig, Stmt **body, uint32_t n)
+/* `#[clock(hz: N)]` on port `name` of a module body */
+static uint64_t elb_port_attr_hz(Elab *el, Stmt **body, uint32_t n, const char *name, Env *env)
 {
     uint32_t i;
-    IrModule *m = el->mod->ir;
     for (i = 0; i < n; i++) {
         Stmt *s = body[i];
         Attr *a;
-        if (s->kind != STMT_PORT || s->u.port.name.name != m->sigs[sig].name)
+        if (s->kind != STMT_PORT || s->u.port.name.name != name)
             continue;
         a = elb_find_attr(&s->attrs, "clock");
         if (a) {
             uint32_t k;
             for (k = 0; k < a->nargs; k++)
                 if (a->args[k].name.name && strcmp(a->args[k].name.name, "hz") == 0) {
-                    Value v = elab_eval_const(el, a->args[k].value, el->mod->scope, el->S->t_int, "a frequency");
+                    Value v = elab_eval_const(el, a->args[k].value, env, el->S->t_int, "a frequency");
                     uint64_t hz = 0;
                     if (val_get_u64(&v, &hz))
                         return hz;
                 }
         }
     }
+    return 0;
+}
+
+/* nominal frequency of clock port `sig` of the module being elaborated:
+ * its `#[clock(hz)]`, else a generic declared `= clock_hz(port)` */
+static uint64_t elb_clock_hz(Elab *el, uint32_t sig, Stmt **body, uint32_t n)
+{
+    IrModule *m = el->mod->ir;
+    ValModule *vm = el->mod->vm;
+    uint64_t hz;
+    uint32_t i;
+    if (m->sigs[sig].kind != IRS_IN)
+        return 0;
+    hz = elb_port_attr_hz(el, body, n, m->sigs[sig].name, el->mod->scope);
+    for (i = 0; !hz && vm && i < vm->nhz; i++)
+        if (vm->hz_ports[i] == m->sigs[sig].name)
+            hz = vm->hz_vals[i];
+    return hz;
+}
+
+/* the frequency of a clock signal of the current module (a domain's, or a
+ * clock port's), 0 when unknown */
+static uint64_t elb_sig_hz(Elab *el, uint32_t sig)
+{
+    IrModule *m = el->mod->ir;
+    Item *it = el->mod->item;
+    uint32_t i;
+    for (i = 0; i < m->ndomains; i++)
+        if (m->domains[i].clock == sig && m->domains[i].hz)
+            return m->domains[i].hz;
+    if (it && it->kind == ITEM_MODULE)
+        return elb_clock_hz(el, sig, it->u.module.body, it->u.module.nbody);
+    if (it && it->kind == ITEM_EXTERN)
+        return elb_clock_hz(el, sig, it->u.extern_mod.body, it->u.extern_mod.nbody);
     return 0;
 }
 
@@ -777,16 +826,28 @@ static int elb_is_instance_init(Elab *el, Expr *init, Env *env, Value *callee_ou
     callee = init->u.call.callee;
     if (callee->kind != EXPR_PATH)
         return 0;
-    q = el->quiet;
-    el->quiet = 1;
-    cv = el_eval_path(el, &callee->u.path, env, NULL, 0);
-    el->quiet = q;
-    el->quiet_errors = 0;
-    if (cv.kind == VAL_MODULE ||
-        (cv.kind == VAL_ITEM && (cv.u.fn->item->kind == ITEM_MODULE || cv.u.fn->item->kind == ITEM_EXTERN))) {
-        /* evaluate again with diagnostics */
-        *callee_out = el_eval_path(el, &callee->u.path, env, NULL, 0);
-        return callee_out->kind != VAL_ERROR;
+    {
+        Expr *ic = el->inst_call;
+        Env *ie = el->inst_env;
+        int is_mod;
+        el->inst_call = init; /* generic defaults may read the clocks (clock_hz) */
+        el->inst_env = env;
+        q = el->quiet;
+        el->quiet = 1;
+        cv = el_eval_path(el, &callee->u.path, env, NULL, 0);
+        el->quiet = q;
+        el->quiet_errors = 0;
+        is_mod = cv.kind == VAL_MODULE ||
+                 (cv.kind == VAL_ITEM && (cv.u.fn->item->kind == ITEM_MODULE || cv.u.fn->item->kind == ITEM_EXTERN));
+        if (is_mod) {
+            /* evaluate again with diagnostics */
+            *callee_out = el_eval_path(el, &callee->u.path, env, NULL, 0);
+            el->inst_call = ic;
+            el->inst_env = ie;
+            return callee_out->kind != VAL_ERROR;
+        }
+        el->inst_call = ic;
+        el->inst_env = ie;
     }
     return 0;
 }
@@ -1137,10 +1198,16 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
         vm = calleev.u.mod;
     else if (calleev.kind == VAL_ITEM) {
         ElabArgs inferred;
+        Expr *ic = el->inst_call;
+        Env *ie = el->inst_env;
+        el->inst_call = call; /* generic defaults may read the clocks (clock_hz) */
+        el->inst_env = env;
         if (elb_infer_generics(el, calleev.u.fn->item, calleev.u.fn->file, call, env, &inferred))
             vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, &inferred, call->u.call.callee->span);
         else
             vm = elab_bind_module(el, calleev.u.fn->item, calleev.u.fn->file, NULL, call->u.call.callee->span);
+        el->inst_call = ic;
+        el->inst_env = ie;
     }
     else {
         el_error(el, call->u.call.callee->span, "`%s` is not a module", el_text(call->u.call.callee));
@@ -1508,6 +1575,158 @@ Value el_maybe_temp(Elab *el, Value v, Span at)
     map_put(&mc->sig_driven, sig, 1);
     r = el_hw(el, v.ty, ir_sig(el->design->arena, m, sig, at));
     return r;
+}
+
+/* ----------------------------------------------------------- clock_hz -- */
+
+/* the clock input `name` of a module declaration, or NULL */
+static Stmt *elb_clock_port_decl(Item *it, const char *name)
+{
+    Stmt **body = it->kind == ITEM_MODULE ? it->u.module.body : it->kind == ITEM_EXTERN ? it->u.extern_mod.body : NULL;
+    uint32_t n = it->kind == ITEM_MODULE ? it->u.module.nbody : it->kind == ITEM_EXTERN ? it->u.extern_mod.nbody : 0;
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        Stmt *s = body[i];
+        Type *t;
+        if (s->kind != STMT_PORT || s->u.port.name.name != name || s->u.port.dir != PORT_IN)
+            continue;
+        t = s->u.port.type;
+        if (t && t->kind == TYPE_PATH && t->u.path.nsegs == 1 && t->u.path.segs[0].name.name &&
+            strcmp(t->u.path.segs[0].name.name, "clock") == 0)
+            return s;
+    }
+    return NULL;
+}
+
+static Value elb_hz_value(Elab *el, uint64_t hz)
+{
+    BigInt b = {0};
+    Value v;
+    bn_set_u64(&b, hz);
+    v = val_int_bn(&el->arena, el->S->t_int, &b);
+    bn_free(&b);
+    return v;
+}
+
+/* clock_hz(port) in a generic default of module `it`, evaluated while the
+ * module is bound: the port's own #[clock(hz)], else the frequency of what
+ * the instantiation being elaborated connects to it (by name, `@ dom`, or
+ * the parent's default domain) */
+static Value elb_clock_hz_default(Elab *el, Item *it, Expr *a, Span at)
+{
+    const char *pn = a->kind == EXPR_PATH && a->u.path.nsegs == 1 && !a->u.path.segs[0].has_args
+                         ? a->u.path.segs[0].name.name
+                         : NULL;
+    Expr *ic = el->gdef_call;
+    FileUnit *file = sema_file_of_item(el->S, it);
+    Env *fenv;
+    uint64_t hz;
+    const char *where = NULL;
+    uint32_t i;
+    if (!pn || !elb_clock_port_decl(it, pn)) {
+        el_error(el, a->span, "`%s` is not a clock input of `%s`", el_text(a), it->name.name);
+        el_help(el, "`clock_hz` in a generic default names one of the module's clock ports: `clock_hz(clk)`");
+        return val_error();
+    }
+    fenv = elab_env_new(el, NULL, file);
+    hz = it->kind == ITEM_MODULE ? elb_port_attr_hz(el, it->u.module.body, it->u.module.nbody, pn, fenv) : 0;
+    elab_env_free(fenv);
+    if (hz)
+        return elb_hz_value(el, hz);
+    if (ic && el->mod && ic->kind == EXPR_CALL && ic->u.call.callee->kind == EXPR_PATH &&
+        ic->u.call.callee->u.path.segs[ic->u.call.callee->u.path.nsegs - 1].name.name == it->name.name) {
+        IrModule *m = el->mod->ir;
+        Arg *given = NULL;
+        for (i = 0; i < ic->u.call.nargs; i++) {
+            Arg *x = &ic->u.call.args[i];
+            if (x->name.name == pn ||
+                (!x->name.name && x->value->kind == EXPR_PATH && x->value->u.path.nsegs == 1 &&
+                 x->value->u.path.segs[0].name.name == pn))
+                given = x;
+        }
+        if (given) {
+            Value cv = elab_eval(el, given->value, el->gdef_env, NULL);
+            if (cv.kind == VAL_ERROR)
+                return cv;
+            if (cv.kind != VAL_HW || !cv.ty || cv.ty->kind != TY_CLOCK) {
+                el_error(el, given->value->span, "port `%s` needs a clock, found %s", pn,
+                         cv.ty ? ty_str(cv.ty) : val_kind_name((ValKind)cv.kind));
+                return val_error();
+            }
+            hz = cv.u.e->kind == IRE_SIG ? elb_sig_hz(el, cv.u.e->sig) : 0;
+            where = el_text(given->value);
+        } else {
+            uint32_t d = ic->u.call.domain ? el_domain_of(el, ic->u.call.domain, el->gdef_env, ic->u.call.domain->span)
+                                           : m->default_domain;
+            if (d != IR_NONE) {
+                hz = m->domains[d].hz ? m->domains[d].hz : elb_sig_hz(el, m->domains[d].clock);
+                where = m->domains[d].name && m->domains[d].name[0] ? m->domains[d].name
+                                                                    : m->sigs[m->domains[d].clock].name;
+            }
+        }
+        if (hz)
+            return elb_hz_value(el, hz);
+        if (where) {
+            const char *parent = el->mod->vm ? el->mod->vm->display : m->name;
+            el_error(el, ic->span, "the nominal frequency of `%s` is unknown in `%s` (needed by `%s` for `clock_hz(%s)`)",
+                     where, parent, it->name.name, pn);
+            el_help(el, "give `%s` a generic `ClkHz: uint = clock_hz(%s)` (or its clock port `#[clock(hz: N)]`) so the "
+                        "frequency is passed down, or give `%s` its frequency generic explicitly",
+                    parent, where, it->name.name);
+        } else {
+            el_error(el, ic->span, "`%s` needs a clock for `clock_hz(%s)`, but the instance has none", it->name.name,
+                     pn);
+        }
+        return val_error();
+    }
+    el_error(el, at, "the nominal frequency of clock `%s` of `%s` is unknown here", pn, it->name.name);
+    el_help(el, "instantiate `%s` under a clock with a known frequency (`#[clock(hz: N)]` on the top's clock port), "
+                "or give its frequency generic explicitly",
+            it->name.name);
+    return val_error();
+}
+
+Value el_clock_hz(Elab *el, Expr *call, Env *env)
+{
+    Expr *a;
+    Value v;
+    uint64_t hz = 0;
+    IrModule *m;
+    if (call->u.call.nargs != 1 || call->u.call.args[0].name.name) {
+        el_error(el, call->span, "`clock_hz` takes one clock or domain: `clock_hz(clk)`");
+        return val_error();
+    }
+    a = call->u.call.args[0].value;
+    if (el->gdef_item)
+        return elb_clock_hz_default(el, el->gdef_item, a, call->span);
+    if (!el->mod || !el->mod->ir) {
+        el_error(el, call->span, "`clock_hz` reads a clock of the module being elaborated");
+        el_help(el, "use it inside a module or in a module's generic default: `ClkHz: uint = clock_hz(clk)`");
+        return val_error();
+    }
+    m = el->mod->ir;
+    v = elab_eval(el, a, env, NULL);
+    if (v.kind == VAL_ERROR)
+        return v;
+    if (v.kind == VAL_DOMAIN) {
+        IrDomain *d = &m->domains[v.u.dom->idx];
+        hz = d->hz ? d->hz : elb_sig_hz(el, d->clock);
+    } else if (v.kind == VAL_HW && v.ty && v.ty->kind == TY_CLOCK) {
+        hz = v.u.e->kind == IRE_SIG ? elb_sig_hz(el, v.u.e->sig) : 0;
+    } else {
+        el_error(el, a->span, "`clock_hz` needs a clock or a domain, found %s",
+                 v.ty ? ty_str(v.ty) : val_kind_name((ValKind)v.kind));
+        return val_error();
+    }
+    if (!hz) {
+        const char *self = el->mod->vm ? el->mod->vm->display : m->name;
+        el_error(el, call->span, "the nominal frequency of `%s` is unknown in `%s`", el_text(a), self);
+        el_help(el, "give the clock port `#[clock(hz: N)]`, or declare a generic `ClkHz: uint = clock_hz(%s)` so "
+                    "each instantiation passes it in",
+                el_text(a));
+        return val_error();
+    }
+    return elb_hz_value(el, hz);
 }
 
 /* ------------------------------------------------------- unsafe_cross -- */
@@ -2279,6 +2498,21 @@ static void elb_finish(Elab *el, ModCtx *mc)
         rp->body.stmts[0]->rhs = f.result;
     }
     elb_check_mem_ports(el, mc);
+    /* inputs left open that declare a default (`in clear: bool = false`) */
+    for (i = 0; i < mc->pendings.len; i++) {
+        PendingIn *pi = &mc->pendings.data[i];
+        ValInst *vi = pi->inst;
+        if (pi->assigned || !vi)
+            continue;
+        for (k = 0; k < vi->mi->nports; k++) {
+            ModPort *pp = &vi->mi->ports[k];
+            if (pp->has_default && strcmp(pp->name, pi->port) == 0) {
+                ir_add_assign(el->design, m, ir_lv_sig(m, pi->sig), el_to_ir(el, &pp->deflt, vi->loc), vi->loc);
+                pi->assigned = 1;
+                break;
+            }
+        }
+    }
     /* unconnected instance inputs */
     for (i = 0; i < mc->pendings.len; i++) {
         PendingIn *pi = &mc->pendings.data[i];
@@ -2345,6 +2579,109 @@ static int elb_name_taken(Elab *el, const char *nm)
     return map_has(&el->modtypes, MAP_PTR(nm) ^ 2u);
 }
 
+/* a port declared `clock`, `clock<..>`, `reset` or `reset<..>` */
+static int elb_port_is_clock_or_reset(const Stmt *s)
+{
+    const Type *t = s->u.port.type;
+    const char *n;
+    if (!t || t->kind != TYPE_PATH || t->u.path.nsegs != 1)
+        return 0;
+    n = t->u.path.segs[0].name.name;
+    return n && (strcmp(n, "clock") == 0 || strcmp(n, "reset") == 0);
+}
+
+/* the implicit default domain of a module with one clock port */
+static void elb_default_domain_setup(Elab *el, ModCtx *mc, Stmt **body, uint32_t nbody)
+{
+    if (mc->clock_ports.len == 1) {
+        uint32_t ck = mc->clock_ports.data[0];
+        uint32_t rs = mc->reset_ports.len == 1 ? mc->reset_ports.data[0] : IR_NONE;
+        uint32_t d = ir_add_domain(el->design, mc->ir, "", ck, rs, elb_clock_hz(el, ck, body, nbody));
+        mc->ir->default_domain = d;
+    }
+}
+
+/* #[probe] (std::debug, spec §12.2): the probed signals of a module body
+ * (ports, `let`, `var`, `reg` at module level) become the struct type
+ * `Probes` (one field per signal, named after it, in declaration order) and
+ * the module-level value `probes` of that type, so a debug core takes them
+ * all at once: `Ila<Probes>(probes: probes, ..)`. The two declarations are
+ * generated as Tern text and appended to the body. */
+static int elb_probe_body(Elab *el, Item *it, Stmt **body, uint32_t n, Stmt ***out, uint32_t *nout)
+{
+    StrBuf fields = {0}, inits = {0}, text = {0};
+    uint32_t i, count = 0, src;
+    const char *name;
+    AstFile *af;
+    for (i = 0; i < n; i++) {
+        Stmt *s = body[i];
+        Attr *a = elb_find_attr(&s->attrs, "probe");
+        const char *sn = NULL;
+        if (s->kind == STMT_PORT)
+            sn = s->u.port.name.name;
+        else if (s->kind == STMT_VAR)
+            sn = s->u.var.name.name;
+        else if (s->kind == STMT_REG)
+            sn = s->u.reg.name.name;
+        else if (s->kind == STMT_LET && s->u.let.pat->kind == PAT_BIND)
+            sn = s->u.let.pat->u.bind.name;
+        if (!a)
+            continue;
+        if (a->nargs)
+            el_error(el, a->span, "#[probe] takes no arguments");
+        if (!sn) {
+            el_error(el, a->span, "#[probe] marks a port or a module-level `let`, `var` or `reg` signal");
+            continue;
+        }
+        sb_printf(&fields, "%s%s: typeof(%s)", count ? ", " : "", sn, sn);
+        sb_printf(&inits, "%s%s: %s", count ? ", " : "", sn, sn);
+        count++;
+    }
+    if (!count) {
+        sb_free(&fields);
+        sb_free(&inits);
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        Stmt *s = body[i];
+        const char *dn = s->kind == STMT_PORT ? s->u.port.name.name
+                       : s->kind == STMT_VAR ? s->u.var.name.name
+                       : s->kind == STMT_REG ? s->u.reg.name.name
+                       : s->kind == STMT_LET && s->u.let.pat->kind == PAT_BIND ? s->u.let.pat->u.bind.name
+                       : s->kind == STMT_ITEM ? s->u.item->name.name
+                       : NULL;
+        if (dn && (strcmp(dn, "Probes") == 0 || strcmp(dn, "probes") == 0)) {
+            el_error(el, s->span, "`%s` is declared by #[probe] in this module", dn);
+            el_help(el, "#[probe] defines the type `Probes` and the value `probes`; rename this declaration");
+            sb_free(&fields);
+            sb_free(&inits);
+            return -1;
+        }
+    }
+    sb_printf(&text, "module %s {\n    type Probes = struct { %s }\n    let probes = Probes { %s }\n}\n",
+              it->name.name, sb_cstr(&fields), sb_cstr(&inits));
+    sb_free(&fields);
+    sb_free(&inits);
+    name = arena_printf(&el->arena, "<#[probe] signals of %s>", it->name.name);
+    src = src_find(name);
+    if (src)
+        src_update(src, text.data, text.len);
+    else
+        src = src_add(name, text.data, text.len);
+    sb_free(&text);
+    af = parse_file(&el->S->arena, src);
+    if (af->nerrors || af->nitems != 1 || af->items[0]->kind != ITEM_MODULE) {
+        el_error(el, it->name.span, "internal error: the #[probe] declarations of `%s` do not parse", it->name.name);
+        return -1;
+    }
+    *out = ANEWN(&el->arena, Stmt *, n + af->items[0]->u.module.nbody);
+    if (n)
+        memcpy(*out, body, n * sizeof(Stmt *));
+    memcpy(*out + n, af->items[0]->u.module.body, af->items[0]->u.module.nbody * sizeof(Stmt *));
+    *nout = n + af->items[0]->u.module.nbody;
+    return 1;
+}
+
 ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
 {
     uint64_t v;
@@ -2359,6 +2696,7 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
     uint32_t nbody, i;
     Env *scope;
     int errs0 = diag_error_count();
+    int has_probes = 0;
     if (map_get(&el->modules, MAP_PTR(vm->cache_key), &v)) {
         mi = (ModInfo *)(uintptr_t)v;
         if (mi->state == 1) {
@@ -2437,20 +2775,37 @@ ModInfo *elab_module(Elab *el, ValModule *vm, Span at)
             mi->failed = 1;
         }
     }
+    if (it->kind == ITEM_MODULE) {
+        /* #[probe] signals: `Probes` and `probes` */
+        Stmt **all = NULL;
+        uint32_t nall = 0;
+        int r = elb_probe_body(el, it, body, nbody, &all, &nall);
+        if (r > 0) {
+            body = all;
+            nbody = nall;
+            has_probes = 1;
+        } else if (r < 0) {
+            mi->failed = 1;
+        }
+    }
     elb_module_attrs(el, &mc);
     elb_params(el, &mc);
     if (!mc.is_extern)
         elb_bind_decls(el, body, nbody, scope);
-    /* ports first: they define the default domain */
-    for (i = 0; i < nbody; i++)
-        if (body[i]->kind == STMT_PORT)
-            elb_declare_port(el, body[i], scope);
-    if (mc.clock_ports.len == 1) {
-        uint32_t ck = mc.clock_ports.data[0];
-        uint32_t rs = mc.reset_ports.len == 1 ? mc.reset_ports.data[0] : IR_NONE;
-        uint32_t d = ir_add_domain(el->design, mi->ir, "", ck, rs, elb_clock_hz(el, ck, body, nbody));
-        mi->ir->default_domain = d;
+    /* ports first: they define the default domain. With #[probe] a port
+     * type may name `Probes`, whose fields can be registers that need the
+     * domain: then the clock and reset ports go first. */
+    if (has_probes) {
+        for (i = 0; i < nbody; i++)
+            if (body[i]->kind == STMT_PORT && elb_port_is_clock_or_reset(body[i]))
+                elb_declare_port(el, body[i], scope);
+        elb_default_domain_setup(el, &mc, body, nbody);
     }
+    for (i = 0; i < nbody; i++)
+        if (body[i]->kind == STMT_PORT && (!has_probes || !elb_port_is_clock_or_reset(body[i])))
+            elb_declare_port(el, body[i], scope);
+    if (!has_probes)
+        elb_default_domain_setup(el, &mc, body, nbody);
     mi->nclocks = (uint32_t)mc.clock_ports.len;
     if (mc.is_extern) {
         for (i = 0; i < nbody; i++)

@@ -1,0 +1,61 @@
+// `clock_hz(clk)` (spec §7.5): the nominal frequency recorded by
+// `#[clock(hz: N)]`, read at elaboration. In a generic default it is the
+// frequency of the clock the instantiation connects to the port (by name,
+// `@ dom` or the parent's default domain), and the generic then carries it
+// into the module, so instances under different clocks are distinct
+// modules (`Ticker<10, 100>`, `Ticker<10, 40>`).
+
+/// One tick every `ClkHz / Hz` cycles.
+module Ticker<Hz: uint, ClkHz: uint = clock_hz(clk)>
+where ClkHz % Hz == 0
+{
+    in clk: clock
+    in rst: reset
+    out tick: bool
+    const DIV: uint = ClkHz / Hz
+    reg cnt: uint<clog2(DIV)> = 0
+    on clk {
+        cnt = if cnt == DIV - 1 { 0 } else { cnt +% 1 }
+    }
+    tick = cnt == 0
+}
+
+/// Declaring `ClkHz = clock_hz(clk)` makes the frequency known inside, so
+/// its own instances inherit it.
+module Blinker<ClkHz: uint = clock_hz(clk)> {
+    in clk: clock
+    in rst: reset
+    out led: bool
+    out hz: uint<32>
+    let t = Ticker<4>()
+    led = t.tick
+    hz = clock_hz(clk)
+}
+
+#[top]
+module Top {
+    #[clock(hz: 100)]
+    in clk: clock
+    in rst: reset
+    #[clock(hz: 40)]
+    in clk2: clock
+    domain sys = (clk, rst)
+    domain slow = (clk2, rst)
+    out a: bool
+    out b: bool
+    out c: bool
+    out d: bool
+    out e: uint<32>
+    out f: uint<32>
+    let t1 = Ticker<10>() @ sys
+    let t2 = Ticker<10>(clk: clk2, rst: rst)
+    let t3 = Ticker<10>() @ slow
+    let bl = Blinker() @ sys
+    let t4 = Ticker<5, ClkHz: 1000>() @ sys
+    a = t1.tick and t4.tick
+    b = t3.tick
+    c = bl.led
+    d = t2.tick
+    e = bl.hz
+    f = clock_hz(slow) + clock_hz(clk2)
+}
