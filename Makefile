@@ -4,6 +4,7 @@
 #   make test             build and run the unit tests and the golden tests
 #                         (including `tern test std`, about 3 s)
 #   make test-std         only `tern test std`
+#   make test-docs        only the ```tern snippets of README.md and docs/guide/
 #   make unity            one-command build: $(CC) ... -o tern src/unity.c
 #   make check-warnings   -Werror builds of everything as C99 and as C11
 #   make fuzz             libFuzzer parser harness build/fuzz_parser (clang;
@@ -451,6 +452,11 @@ UNIT_TESTS = \
 tests/run: tests/run.c $(TEST_DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS)
 
+# Extracts the ```tern code blocks of README.md and docs/guide/*.md and runs
+# `tern check` (and `tern test` for ```tern,test) on each one.
+build/doc_snippets: tests/doc_snippets.c $(TEST_DEPS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/doc_snippets.c $(LDLIBS)
+
 build/test_base: tests/unit/test_base.c $(TEST_DEPS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_base.c $(LDLIBS)
 
@@ -478,11 +484,16 @@ build/test_lsp: tests/unit/test_lsp.c $(TEST_DEPS) $(SYNTAX_SRCS) $(IR_SRCS) $(S
 build/test_elab: tests/unit/test_elab.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_elab.c $(LDLIBS)
 
-test: $(BIN) tests/run $(UNIT_TESTS)
+test: $(BIN) tests/run build/doc_snippets $(UNIT_TESTS)
 	for t in $(UNIT_TESTS); do ./$$t || exit 1; done
 	./$(BIN) parse std
 	./$(BIN) fmt --check std
 	./tests/run --tern ./$(BIN)
+	./build/doc_snippets --tern ./$(BIN)
+
+# the documentation snippets only
+test-docs: $(BIN) build/doc_snippets
+	./build/doc_snippets --tern ./$(BIN)
 
 # `tern test std` (also run by tests/run as part of `make test`)
 test-std: $(BIN)
@@ -509,6 +520,7 @@ check-warnings:
 	  $(MAKE) STD=$$s OBJ=build/obj-$$s BIN=build/tern-$$s EXTRA=-Werror build/tern-$$s || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/unity-$$s src/unity.c || exit 1; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/run-$$s tests/run.c || exit 1; \
+	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/doc_snippets-$$s tests/doc_snippets.c || exit 1; \
 	  for t in $(UNIT_TESTS); do n=`basename $$t`; \
 	    $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/$$n-$$s tests/unit/$$n.c || exit 1; done; \
 	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/embed-$$s tools/embed.c || exit 1; \
@@ -523,4 +535,4 @@ clean:
 	rm -rf build tests/out
 	rm -f tern tern.exe tools/embed tools/embed.exe tests/run tests/run.exe
 
-.PHONY: all test test-std unity check-warnings fuzz install clean FORCE
+.PHONY: all test test-std test-docs unity check-warnings fuzz install clean FORCE
