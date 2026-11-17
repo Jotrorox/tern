@@ -987,7 +987,8 @@ static void drv_tc_access(DrvTc *t, Expr *e, int method)
         if (!name)
             break;
         if (is_method) {
-            static const char *const root[] = {"reset", "step", "step_until", "settle", "run", "dump", "cycle",
+            static const char *const root[] = {"reset", "step", "step_until", "expect_eventually",
+                                               "settle", "run", "dump", "cycle",
                                                "time_ns", NULL};
             uint32_t k;
             if (p.len)
@@ -997,7 +998,8 @@ static void drv_tc_access(DrvTc *t, Expr *e, int method)
                     break;
             if (!root[k]) {
                 diag_error(f->u.field.name.span, "`%s` has no method `%s`", mi->display, name);
-                diag_help("a simulation handle has reset(), step(n), step_until(cond, max: n), settle(), "
+                diag_help("a simulation handle has reset(), step(n), step_until(cond, max: n), "
+                          "expect_eventually(cond, max: n), settle(), "
                           "run(ns: n), dump(file), cycle() and time_ns()");
             }
             break;

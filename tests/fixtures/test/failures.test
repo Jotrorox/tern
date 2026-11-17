@@ -1,4 +1,4 @@
-running 5 tests
+running 6 tests
 test expect continues after a failure ... FAILED
     failures.tern:31:5: expect failed at cycle 5: dut.count == want
         dut.count = 3
@@ -21,6 +21,10 @@ test only inputs and test ports can be driven ... FAILED
     failures.tern:56:5: error: `Counter` has no signal `cuont`
 test values that do not fit ... FAILED
     failures.tern:61:13: error: literal 300 does not fit in uint<8> (0..=255)
+test expect_eventually records the failure and continues ... FAILED
+    failures.tern:68:18: expect_eventually failed at cycle 6: `dut.count == 3` did not hold within 4 cycles
+    log: waited 4 cycles
+    log: reached after 3 cycles
 
-FAILED: 0 passed, 5 failed
+FAILED: 0 passed, 6 failed
 replay a failing test with: tern test --seed 1 "<name>"

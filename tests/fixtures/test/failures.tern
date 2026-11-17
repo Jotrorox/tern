@@ -60,3 +60,14 @@ test "values that do not fit" {
     let dut = sim Adder()
     dut.a = 300
 }
+
+test "expect_eventually records the failure and continues" {
+    let dut = sim Counter()
+    dut.reset()
+    dut.en = false
+    let waited = dut.expect_eventually(dut.count == 3, max: 4)
+    log("waited {} cycles", waited)
+    dut.en = true
+    let got = dut.expect_eventually(dut.count == 3, max: 10)
+    log("reached after {} cycles", got)
+}
