@@ -260,44 +260,47 @@ module Board top
   6: in push_valid (push.valid): bool @0
   7: in push_data (push.data): uint<8> @0
   8: out push_ready (push.ready): bool @0 flipped
-  9: in d: uint<8> @0
-  10: in x: sint<6> @0
-  11: out full: bool @0
-  12: out q: uint<8> @0
-  13: out sum: uint<9> @0
-  14: out sum_fast: uint<9> @0
-  15: out par: bool @0
-  16: out sat: sint<6> @0
-  17: out level: uint<7> @0
-  18: wire top_s_valid (top.s.valid): bool @0
-  19: wire top_s_data (top.s.data): uint<8> @0
-  20: wire top_s_ready (top.s.ready): bool @0
-  21: wire top_push_valid (top.push.valid): bool @0
-  22: wire top_push_data (top.push.data): uint<8> @0
-  23: wire top_push_ready (top.push.ready): bool @0
-  24: wire top_full (top.full): bool @0
-  25: wire top_total (top.total): uint<6> @0
-  26: wire two_s_valid (two.s.valid): bool @0
-  27: wire two_s_data (two.s.data): uint<8> @0
-  28: wire two_s_ready (two.s.ready): bool @0
-  29: wire two_level (two.level): uint<7> @0
-  30: wire pipe_d (pipe.d): uint<8> @0
-  31: wire pipe_q (pipe.q): uint<8> @0
-  32: wire ripple_a (ripple.a): uint<8>
-  33: wire ripple_b (ripple.b): uint<8>
-  34: wire ripple_y (ripple.y): uint<9>
-  35: wire fast_a (fast.a): uint<8>
-  36: wire fast_b (fast.b): uint<8>
-  37: wire fast_y (fast.y): uint<9>
+  9: in push2_valid (push2.valid): bool @0
+  10: in push2_data (push2.data): uint<8> @0
+  11: out push2_ready (push2.ready): bool @0 flipped
+  12: in d: uint<8> @0
+  13: in x: sint<6> @0
+  14: out full: bool @0
+  15: out q: uint<8> @0
+  16: out sum: uint<9> @0
+  17: out sum_fast: uint<9> @0
+  18: out par: bool @0
+  19: out sat: sint<6> @0
+  20: out level: uint<7> @0
+  21: wire top_s_valid (top.s.valid): bool @0
+  22: wire top_s_data (top.s.data): uint<8> @0
+  23: wire top_s_ready (top.s.ready): bool @0
+  24: wire top_push_valid (top.push.valid): bool @0
+  25: wire top_push_data (top.push.data): uint<8> @0
+  26: wire top_push_ready (top.push.ready): bool @0
+  27: wire top_full (top.full): bool @0
+  28: wire top_total (top.total): uint<6> @0
+  29: wire two_s_valid (two.s.valid): bool @0
+  30: wire two_s_data (two.s.data): uint<8> @0
+  31: wire two_s_ready (two.s.ready): bool @0
+  32: wire two_level (two.level): uint<7> @0
+  33: wire pipe_d (pipe.d): uint<8> @0
+  34: wire pipe_q (pipe.q): uint<8> @0
+  35: wire ripple_a (ripple.a): uint<8>
+  36: wire ripple_b (ripple.b): uint<8>
+  37: wire ripple_y (ripple.y): uint<9>
+  38: wire fast_a (fast.a): uint<8>
+  39: wire fast_b (fast.b): uint<8>
+  40: wire fast_y (fast.y): uint<9>
   assign top_s_valid = s_valid
   assign top_s_data = s_data
   assign s_ready = top_s_ready
   assign top_push_valid = push_valid
   assign top_push_data = push_data
   assign push_ready = top_push_ready
-  assign two_s_valid = s_valid
-  assign two_s_data = s_data
-  assign s_ready = two_s_ready
+  assign two_s_valid = push2_valid
+  assign two_s_data = push2_data
+  assign push2_ready = two_s_ready
   assign level = two_level
   assign full = top_full
   assign pipe_d = d

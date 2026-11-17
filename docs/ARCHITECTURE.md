@@ -45,10 +45,10 @@ spaces — the real syntax is ASCII).
 | `src/base/` | `common.[ch] arena.[ch] str.[ch] map.[ch] vec.h bignum.[ch] json.[ch] utf8.[ch] diag.[ch] args.[ch]` | utilities |
 | `src/os/` | `os.h os_posix.c os_win32.c os_common.c` | the only OS-touching code (`os_common.c` is the portable half — paths, helpers — and includes no OS header) |
 | `src/syntax/` | `token.h lexer.[ch] ast.h parser.[ch] ast_dump.c` | lexer, Pratt/recursive-descent parser, AST (`ast.h` is the contract; concrete grammar in `docs/grammar.md`) |
-| `src/sema/` | `resolve.c types.c domains.c` (+ `sema.h`) | name binding, type/width rules, clock domains |
-| `src/elab/` | `value.[ch] consteval.c elab.c mono.c` (+ `elab.h`) | const interpreter, generics, unrolling, AST→IR |
+| `src/sema/` | `resolve.c types.c info.c syninfo.c` (+ `sema.h`) | name binding, type/width rules, semantic info for tooling |
+| `src/elab/` | `value.[ch] consteval.c elab.c mono.c regfile.c` (+ `elab.h`) | const interpreter, generics, unrolling, AST→IR, generated RegisterFile bodies |
 | `src/ir/` | `ir.h ir_build.c ir_json.c` | typed IR (contract below) and JSON form |
-| `src/check/` | `drivers.c assign.c cdc.c unused.c` | multiple/missing drivers, no-latch proof, CDC report, unused |
+| `src/check/` | `check.c` | multiple/missing drivers, no-latch proof, clock-domain mixing |
 | `src/emit/` | `sv.c constraints.c regmap.c` | SystemVerilog/Verilog-2005, .xdc/.sdc, regmap .h/.svd/.md |
 | `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
 | `src/backend/` | `verilator.c formal.c synth.c` | scripts for external tools |
@@ -235,7 +235,74 @@ comments. Key points:
   `IRE_MEMREAD` inside the domain's clocked process.
 * Match on enums/ints with constant patterns becomes `IRST_CASE`; matches with
   bindings/tuples/wildcards are lowered to `if` chains; match/if *expressions*
-  become `IRE_MUX` chains.
+  become `IRE_MUX` chains. A statement `match` in a `comb` block may leave
+  values out (§6.2); its `IRST_CASE` then ends in an empty default arm.
+* Dynamic indices may be out of range when an array length is not a power of
+  two (`[u8; 3]` with a `uint<2>` index): reads give 0 and writes are skipped
+  (2-state). `IRE_INDEX` holds `args[0].width / width` elements; an indexed
+  `IrLvalue` names its element count in `len` (JSON `"len"`), so the
+  simulator, the emitter and the verifier agree even when the array shares
+  its signal with other struct fields.
+
+## Front end: elaboration details and IR checks
+
+Beyond the parts described in `elab.h`, `sema.h` and `check.h`:
+
+* **Type-level paths** (§9.4): `T::WIDTH`, `T::MAX`, `T::MIN` work on every
+  type expression. Paths on types that are not names — `typeof(x)::WIDTH`,
+  `[u8; 4]::WIDTH` — are `EXPR_QPATH` nodes (`u.qpath.type` + the member
+  path), parsed as a postfix `::` after an expression that reads as a type.
+  Struct and bundle bodies may hold associated `const` and `fn` items
+  (`Flags::NONE`, in `struct_def.fns` / `bundle.fns`).
+* **Places** (`elab.h`): besides signal, aggregate and local places there is
+  `PL_DYN` — the element of an array of bundles chosen by a signal index.
+  Reading it gives a mux per field (an `IRE_INDEX` into the concatenation of
+  the elements), assigning it emits an `IRST_CASE` decode over the elements;
+  only inside `comb`/`on` blocks.
+* **`return` under conditions on signals**: inside an inlined fn,
+  `Elab.fn_path` is the condition of the arm being run (relative to the fn's
+  entry) and `fn_ret_cond`/`fn_ret_val` accumulate the returns seen so far;
+  the result is a mux over the return points, earlier ones first, falling
+  back to the tail value. Fns have no other side effects, so the code after
+  a conditional return simply keeps running for the other paths.
+* **Generic inference for modules**: a module instantiated without `<..>`
+  gets type and width generics from the types of its connected inputs
+  (`Crc32(in: words)`, §12.3); the rest keep their defaults.
+* **std::bus::RegisterFile** (`src/elab/regfile.c`, §10.3): elaborating
+  `RegisterFile<Map, Bus>` appends a generated body to the declared one: the
+  generated Tern source (registered as `<RegisterFile<..>>`) instantiates
+  the front-end for `Bus` (Axi4LiteRegPort / ApbRegPort / WishboneRegPort
+  from std/bus/regfile.tern) and implements the decode, storage and
+  read-back. A regmap used as a type is its `Map::Regs` bundle (the type's
+  `def` is the regmap item, so `Map::Status` etc. resolve on it). Ports, one
+  per field of `Map::Regs`: `rw`/`wo` registers are outputs, `ro` inputs,
+  `wo T -> Stream<T>` output streams (one beat per write; a write while the
+  previous beat is pending answers `err`), `w1c` registers are outputs plus
+  an input `<name>_set`, `rw1s` registers outputs plus `<name>_clr`. Offsets
+  are word-aligned byte offsets; registers wider than the bus take
+  consecutive words; fields keep their `@` bit positions on the bus; `= v`
+  gives a reset value; unmapped offsets answer `err`.
+* **Memory ports** (§10.1): a `mem` read through more than two ports (distinct
+  `IRE_MEMREAD`s) is an error unless it is `#[ram(distributed)]`.
+* **Duplicate declarations** of a name in one module scope are errors.
+* **Semantic info without elaboration** (`src/sema/syninfo.c`): after
+  elaborating, the driver calls `sema_info_syntactic(S)`, which walks every
+  user file with lexical scopes and records declarations (with their declared
+  types as written), and the definitions of name uses. Elaborated records win,
+  so this only fills in code that was never elaborated (generic modules
+  without instances). `sema_info_*` is otherwise unchanged.
+* **IR checks** (`src/check/check.c`, run by `tern check` when elaboration
+  succeeded): multiple drivers (two blocks, or a block and a continuous
+  assignment, or continuous assignments to shared bits) and undriven
+  outputs/vars (§6.1); full assignment of every var/output a `comb` block
+  assigns, reported with the first path that misses it ("`alu_out` may be
+  unassigned when `op == Nop`", §6.2); clock-domain mixing (§5.6, §8.2):
+  wires, vars and outputs take the domain of what drives them, a clocked
+  process may only read its own domain, and an expression may not mix two
+  ("pix-domain signal `line` used in sys-domain logic; cross with std::cdc").
+  Domains over the same clock (or a clock derived by a cast) are one domain;
+  `#[cdc(..)]`, `#[clock_gate]` and `#[clock_gen]` modules and `unsafe_cross`
+  wires are exempt.
 
 ## Simulator contract (`src/sim/sim.h`, defined by the simulator)
 
@@ -290,6 +357,17 @@ directory and the bare file name as argument:
   `tern test --diag-format=short foo.tern` (stdout)
 * `foo.tern` + `foo.fmt` — expected canonical formatting (docs/style.md):
   `tern fmt --stdout foo.tern` (stdout)
+* `foo.tern` + `foo.ir` — expected elaborated IR: `tern ir foo.tern`
+
+`tests/fixtures/spec/` holds every code example of the spec, completed where
+the spec elides parts, as `.ir` goldens (the designs) and `.err` goldens
+(`spec/errors/`, the diagnostics the spec quotes); `spec/cfg/` is a project
+with `[features]` for `cfg::name`. `build/test_elab` (`tests/unit/test_elab.c`)
+elaborates the designs in `tests/fixtures/elab/` with `tern ir --json`, reads
+them back with `ir_from_json` and drives them in the simulator: register-file
+bus transactions on AXI4-Lite, APB and Wishbone, out-of-range indices,
+indices into arrays of bundles, `return` in branches, and hover output for
+code that was never elaborated.
 
 So these commands must accept a single `.tern` file outside a project, and
 `build` must support `--stdout` (all emitted modules to stdout). Output and

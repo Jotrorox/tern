@@ -4932,9 +4932,24 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
     CeArmRun *arms;
     Value r = val_void(el->S);
     int exhaustive;
+    /* A statement match in a comb block may leave values out (§6.2): the
+     * paths without an arm assign nothing, and the full-assignment check
+     * (src/check) reports a var or output left unassigned on them ("`x`
+     * may be unassigned when `op == Nop`"). Elsewhere a match must be
+     * exhaustive. */
+    int stmt_comb = !want_value && el->blk && !el->blk->clocked && !el->in_fn;
+    int covered = 1;
     if (subj.kind == VAL_ERROR)
         return subj;
-    if (subj.ty)
+    if (subj.ty && stmt_comb && subj.kind == VAL_HW) {
+        int q = el->quiet, qe = el->quiet_errors;
+        el->quiet = 1;
+        el->quiet_errors = 0;
+        ce_check_exhaustive(el, e, subj.ty, env);
+        covered = el->quiet_errors == 0;
+        el->quiet = q;
+        el->quiet_errors = qe;
+    } else if (subj.ty)
         ce_check_exhaustive(el, e, subj.ty, env);
     else if (subj.kind == VAL_TUPLE) {
         /* tuple of mixed values: build its type for the check */
@@ -5001,9 +5016,9 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
             }
             ce_run_arm(el, &arms[a], arm->body, NULL, arm->pat, subj, env, expect, want_value);
         }
-        exhaustive = 1;
+        exhaustive = covered;
         if (simple) {
-            IrCaseArm *ca = (IrCaseArm *)xcalloc(n ? n : 1, sizeof(IrCaseArm));
+            IrCaseArm *ca = (IrCaseArm *)xcalloc(n + 1, sizeof(IrCaseArm));
             uint32_t k = 0;
             for (a = 0; a < n; a++) {
                 if (defs[a]) {
@@ -5019,6 +5034,8 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
             }
             for (; a + 1 < n; a++)
                 ir_stmts_finish(&el->arena, &arms[a + 1].stmts);
+            if (!covered && (k == 0 || ca[k - 1].nvals != 0))
+                k++; /* the values without an arm: an empty default (calloc'ed) */
             ce_emit(el, ir_stmt_case(el->design->arena, el_to_ir(el, &subj, e->span), k, ca, e->span));
             free(ca);
         } else if (el->blk && ce_arms_have_stmts(arms, n)) {
@@ -5213,6 +5230,10 @@ Place *el_place_of(Elab *el, Expr *e, Env *env)
         return v.place;
     if (v.kind == VAL_INST) {
         el_error(el, e->span, "cannot assign to instance `%s`", el_text(e));
+        return NULL;
+    }
+    if (v.kind == VAL_MEM) {
+        el_error(el, e->span, "a memory has no whole-value assignment; write one entry: `%s[addr] = ..`", el_text(e));
         return NULL;
     }
     {

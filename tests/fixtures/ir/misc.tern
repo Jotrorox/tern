@@ -39,6 +39,8 @@ module Top {
     in poke: bool
 
     status = Ctrl::Status { busy: regs.ctrl.enable, err: regs.ctrl.mode == .Turbo }
+    regs.status = status
+    regs.fifo.ready = true
     let pll = pll_wrapper<MULT: 8>(refclk: clk, rst: arst)
     locked = pll.locked and poke
     crossed = unsafe_cross(other)

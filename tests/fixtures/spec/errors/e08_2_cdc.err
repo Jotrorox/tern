@@ -1,0 +1,2 @@
+e08_2_cdc.tern:20:5: error: pix-domain signal `line` used in sys-domain logic; cross with std::cdc
+e08_2_cdc.tern:23:9: error: pix-domain signal `line` used in sys-domain logic; cross with std::cdc

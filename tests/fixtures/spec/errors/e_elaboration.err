@@ -1,0 +1,16 @@
+e_elaboration.tern:15:21: error: width mismatch: `tick + 1` is uint<5>, `tick` is uint<4>
+e_elaboration.tern:17:13: error: index 16 out of range for [uint<8>; 16]
+e_elaboration.tern:18:15: error: index uint<5> is too wide for 16 elements: it may be out of range
+e_elaboration.tern:19:13: error: bool is not an integer: `+` on bool
+e_elaboration.tern:20:13: error: cannot mix uint<8> and sint<8> in `+`
+e_elaboration.tern:21:13: error: division by a signal: `u` is not a compile-time constant
+e_elaboration.tern:22:17: error: width mismatch: `wide` is uint<16>, `y` is uint<8>
+e_elaboration.tern:23:13: error: reset `rst` cannot be read as data
+e_elaboration.tern:29:5: error: register `x` needs a domain: module `TwoClocks` has 2 clock ports
+e_elaboration.tern:61:14: error: a memory has no whole-value assignment; write one entry: `buf[addr] = ..`
+e_elaboration.tern:47:11: error: `while` condition depends on a signal: `while` only runs at compile time
+e_elaboration.tern:57:9: error: mem `buf` has 3 read ports; the target supports 2
+e_elaboration.tern:67:13: error: tri-state port `pad` on a module that is not #[top]
+e_elaboration.tern:76:5: error: static assertion failed: arithmetic is broken
+e_elaboration.tern:80:13: error: `where` constraint `Depth.is_pow2()` of `Fifo<6>` is not satisfied
+e_elaboration.tern:79:5: error: instance `l` of `Leaf` has unconnected input `d`

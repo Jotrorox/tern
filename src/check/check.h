@@ -3,8 +3,10 @@
  * CDC report and unused signals. `tern check`, `tern build` and the LSP
  * call check_design() after elaboration (src/driver.h).
  *
- * This file is the hook; the passes are implemented in src/check/
- * (drivers.c, assign.c, cdc.c, unused.c). Diagnostics go through diag.h,
+ * The passes are implemented in check.c: drivers (multiple / missing),
+ * full assignment in comb blocks (no latches) and clock-domain mixing; the
+ * unused-signal report and the CDC listing are not written yet. Diagnostics
+ * go through diag.h,
  * with IrSignal.loc / IrStmt.loc spans; warnings become errors under
  * --strict (diag_set_strict, already applied by the command).
  *

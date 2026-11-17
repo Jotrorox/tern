@@ -1,0 +1,26 @@
+// §8.2: "mixing two domains in one expression is an error: pix-domain
+// signal `line` used in sys-domain logic; cross with std::cdc." §5.6: a
+// register of one domain read in logic clocked by another.
+module Top {
+    in sys_clk: clock
+    in sys_rst: reset<async, low>
+    in pix_clk: clock
+    in d: u8
+    out mixed: bool
+    out count_q: u8
+
+    domain sys = (sys_clk, sys_rst)
+    domain pix = (pix_clk)
+
+    reg line: u8 = 0 @ pix
+    reg count: u8 = 0 @ sys
+    reg frame: bool = false @ sys
+    on pix { line = d }
+    let busy = count != 0 // sys domain, inferred
+    mixed = busy and line == 0 // both domains in one expression
+    on sys {
+        count = count +% 1
+        frame = line == 0 // pix register read in sys logic
+    }
+    count_q = count
+}

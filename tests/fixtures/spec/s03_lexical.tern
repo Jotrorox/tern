@@ -1,0 +1,49 @@
+// §3 Lexical structure: literals (3.2), keywords and contextual words (3.3),
+// operators and precedence (3.4). Statements end at the end of a line; a
+// semicolon separates two statements on one line.
+const W: uint = 12
+
+#[top]
+module Lexical {
+    in a: u8
+    in b: u8
+    in s: s8
+    in c: bool
+    in d: bool
+    in sel: uint<2>
+    out lits: uint<16>
+    out logical: bool
+    out syn: bool
+    out ops: u8
+    out shifts: s8
+    out prec: uint<17>
+    out member: bool
+
+    // 3.2 literals
+    let dec = 1_000_000
+    let hex = 0xFF
+    let bin = 0b1010_0011
+    let oct = 0o17
+    let typed = 42u8
+    let neg = -3s12
+    let wide = 0xFFu<W>
+    let all_zero: u16 = all0
+    let all_one: u16 = all1
+    lits = all_one ^ all_zero ^ (wide as uint<16>) ^ ((neg as bit<12>) as uint<16>) ^ (typed + hex + bin + oct) as uint<16>
+    static_assert(dec == 1000000)
+
+    // 3.3: and/or/not/xor and their symbol synonyms; always/never/... are
+    // contextual (ordinary identifiers outside their constructs)
+    let always = c
+    let until = d
+    logical = (always and not until) or (c xor d)
+    syn = (c and !d) or (c != d)
+    let x = 1; let y = 2 // two statements on one line
+    static_assert(x + y == 3)
+
+    // 3.4 operators
+    ops = ((-a) as u8) ^ ~b ^ ((&a) as uint<1>) ^ ((|b) as uint<1>) ^ ((^a) as uint<1>) ^ (a * b) as u8 ^ (a +% b) ^ (a -% b) ^ (a & b) ^ (a | b)
+    shifts = (s << 1) ^ (s >> 2) ^ (s >>> 3)
+    prec = a + b * 2 as u8 // * binds tighter than +, `as` tightest
+    member = sel in [0, 2] and a ++ b == 0x1234
+}

@@ -1,0 +1,21 @@
+// §6.1: "Each signal has exactly one driver block. Driving a var from two
+// comb blocks, or a reg from two on blocks, is a compile error ("multiple
+// drivers"), as is leaving an out port or a var undriven."
+module Drivers {
+    in clk: clock
+    in a: u8
+    out y: u8
+    out z: u8
+    out undriven: u8
+
+    var v: u8
+    var unused: u8
+    reg r: u8 = 0
+    comb { v = a }
+    comb { v = a +% 1 }
+    on clk { r = a }
+    on clk { r = 0 }
+    y = v
+    comb { y = r }
+    z = r
+}
