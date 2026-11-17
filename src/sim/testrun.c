@@ -52,7 +52,8 @@ struct TrCtx {
     int cover_noted;          /* the coverage note for a verilator model was printed */
 };
 
-static const ValOpaqueOps tr_ops;
+/* not const: MSVC warns about a const tentative definition (C4132) */
+static ValOpaqueOps tr_ops;
 static Value tr_read_bundle(struct TrSim *s, const char *path, Ty *t);
 
 /* ------------------------------------------------------------ helpers -- */
@@ -880,7 +881,7 @@ static void tr_op_to_string(void *obj, StrBuf *out)
     }
 }
 
-static const ValOpaqueOps tr_ops = {
+static ValOpaqueOps tr_ops = {
     "simulation handle", tr_op_get_field, tr_op_set_field, tr_op_index, tr_op_set_index, tr_op_call,
     tr_op_to_string,
 };

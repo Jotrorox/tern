@@ -666,7 +666,8 @@ static void chk_mod_build(ChkMod *cm)
         free(cnt);
     }
     /* ranges: sorted, consecutive ranges of one node merged */
-    qsort(b.ranges.data, b.ranges.len, sizeof(ChkRange), chk_cmp_range);
+    if (b.ranges.len > 1) /* qsort(NULL, 0, ...) is undefined */
+        qsort(b.ranges.data, b.ranges.len, sizeof(ChkRange), chk_cmp_range);
     for (j = 0; j < b.ranges.len; j++) {
         ChkRange *r = &b.ranges.data[j];
         if (cm->ranges.len) {

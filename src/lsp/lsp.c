@@ -400,8 +400,7 @@ static void lsp_analyze(LspServer *srv, LspGroup *g)
     g->dr = driver_open(&o);
     if (g->dr && !driver_parse_errors(g->dr)) {
         g->design = driver_elaborate_all(g->dr, NULL, &g->ir);
-        if (diag_error_count() == 0)
-            check_design(g->design, &co);
+        check_design(g->design, &co); /* skips the modules that failed (as tern check) */
     }
     diag_flush();
     diag_set_sink(lsp_quiet_sink, srv);

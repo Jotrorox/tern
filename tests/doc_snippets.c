@@ -133,8 +133,8 @@ static void ds_extract(DsState *st, const char *md, DsJobs *jobs)
 
     while (i < len) {
         size_t j = i, n;
-        const char *info;
-        size_t info_len, ticks;
+        const char *info = NULL;
+        size_t info_len = 0, ticks;
         while (j < len && data[j] != '\n')
             j++;
         n = j - i;

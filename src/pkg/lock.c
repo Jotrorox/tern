@@ -1130,7 +1130,8 @@ int pkg_resolve(const TernManifest *m, const PkgResolveOpts *o, const PkgProvide
         }
         vec_push(out->pkgs, pk);
     }
-    qsort(out->pkgs.data, out->pkgs.len, sizeof(PkgLocked), lock_cmp_name);
+    if (out->pkgs.len > 1)
+        qsort(out->pkgs.data, out->pkgs.len, sizeof(PkgLocked), lock_cmp_name);
     if (o && o->prev)
         out->vendored = o->prev->vendored;
     rc = 0;
