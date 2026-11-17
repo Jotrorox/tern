@@ -160,8 +160,8 @@ extern_mod = "extern" "module" name "(" string ")" [ generics ] [ where ] "{" { 
 generics   = "<" [ generic { "," generic } [","] ] ">" ;
 generic    = name ":" ( "type" [ "=" type ] | type [ "=" expr ] ) ;
 where      = "where" expr { "," expr } ;
-bundle     = "bundle" name [ generics ] "{" { attrs ( [ "flip" ] name ":" type | [ "pub" ] fn ) SEP } "}" ;
-struct     = "struct" name [ generics ] "{" { field SEP } "}" ;
+bundle     = "bundle" name [ generics ] "{" { attrs ( [ "flip" ] name ":" type | [ "pub" ] ( const | fn ) ) SEP } "}" ;
+struct     = "struct" name [ generics ] "{" { attrs ( field | [ "pub" ] ( const | fn ) ) SEP } "}" ;
 field      = attrs name ":" type ;
 enum       = "enum" name [ generics ] "{" { attrs name [ "{" { field SEP } "}" ] SEP } "}" ;
 const      = "const" name [ ":" type ] "=" expr ;
@@ -195,6 +195,11 @@ Notes:
 * Regmap fields write bit ranges as `@[hi:lo]` or `@[lo:hi]`, stored as
   written. `= value` gives a reset value; this is an extension used by the
   `RegisterFile` documentation.
+* Struct and bundle bodies may contain associated `const` and `fn` items
+  (`Flags::NONE`; an extension the spec's §6.2 example needs), stored in
+  `struct_def.fns` / `bundle.fns`. `::` after an expression that reads as a
+  type but is not a path (`typeof(x)`, `[T; N]`, an anonymous struct or a
+  tuple type) starts an `EXPR_QPATH` (§9.4).
 * A bundle may contain `fn` items. Inside them, `self` is an ordinary
   identifier.
 * A doc comment may come before or after the attributes of a declaration.
@@ -269,7 +274,8 @@ if_expr    = "if" expr block [ "else" ( if_expr | block ) ] ;
 match_expr = "match" expr "{" { pattern "=>" ( block | stmt ) SEP } "}" ;
 postfix    = primary { "." word [ generic_args ] | "[" expr [ ":" expr ] "]"
                      | "(" [ arg { "," arg } [","] ] ")" [ "@" postfix ]
-                     | "as" type | path "{" field_inits "}" } ;
+                     | "as" type | path "{" field_inits "}"
+                     | "::" path } ;   (* typeof(x)::WIDTH, [u8; 4]::WIDTH: after a non-path type *)
 arg        = [ name ":" ] expr ;                      (* push: x, in: rx.out, max: 1000 *)
 field_inits= { name [ ":" expr ] SEP } [ ".." ] ;
 path       = name [ generic_args ] { "::" word [ generic_args ] } ;
