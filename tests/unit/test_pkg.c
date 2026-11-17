@@ -499,8 +499,6 @@ static const FakePkg tp_fake[] = {
     {"needs2", "1.0.0", "stream = \">=2.0\"\n", 0},
 };
 
-static int tp_fetches;
-
 static int tp_fake_registry(void *user, const char *name, Arena *a, PkgAvailList *out)
 {
     size_t i;
@@ -542,7 +540,6 @@ static int tp_fake_fetch(void *user, PkgNode *node, Arena *a)
     char *dir;
     size_t i;
     TERN_UNUSED(user);
-    tp_fetches++;
     if (node->kind == PKG_SRC_PATH) {
         node->root = node->url;
         return 0;

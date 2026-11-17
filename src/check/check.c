@@ -471,6 +471,12 @@ static int chk_cmp_range(const void *pa, const void *pb)
         return a->node < b->node ? -1 : 1;
     if (a->hi != b->hi)
         return a->hi < b->hi ? -1 : 1;
+    /* full order (qsort is not stable): the earliest source location is
+     * the one a merged range reports */
+    if (a->loc.file != b->loc.file)
+        return a->loc.file < b->loc.file ? -1 : 1;
+    if (a->loc.off != b->loc.off)
+        return a->loc.off < b->loc.off ? -1 : 1;
     return 0;
 }
 
