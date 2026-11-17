@@ -2,7 +2,7 @@ running 1 test
 test count and wrap ... ok
 
 coverage:
-  coverage.tern: lines 7/7 (100%), branches 4/5 (80%)
+  coverage.tern: lines 9/9 (100%), branches 4/5 (80%)
     branches not taken: 18:9 arm 3
   cover:
     property wraps (coverage.tern:34:5): 1 hit

@@ -52,7 +52,8 @@
  *     the history restarts (reads 0) while the domain is in reset, so a
  *     property never compares with values sampled during reset.
  *   - Coverage: every block entry (process bodies, then/else branches, case
- *     arms) is counted; sim_coverage() lists statements, branches, arms and
+ *     arms) and every continuous assignment (`let`, `x = e`; it runs at
+ *     each settle) is counted; sim_coverage() lists statements, branches, arms and
  *     cover properties keyed by span, summed over instances.
  */
 #ifndef TERN_SIM_H

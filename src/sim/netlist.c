@@ -139,6 +139,7 @@ typedef struct NlNode {
     const IrExpr *rhs;
     const IrProcess *proc;
     uint32_t split;           /* proc split per target (false loops): flat target + 1, else 0 */
+    const IrAssign *asg;      /* a continuous assignment of the module (line coverage), or NULL */
     Span loc;
 } NlNode;
 
@@ -183,6 +184,7 @@ static void nl_collect_nodes(SimModel *m, NlBuild *b)
             n.lhs = mod->assigns[i].lhs;
             n.rhs = mod->assigns[i].rhs;
             n.loc = mod->assigns[i].loc;
+            n.asg = &mod->assigns[i];
             nl_add_node(b, &n);
         }
         for (i = 0; i < mod->nprocs; i++) {
@@ -1210,6 +1212,26 @@ static uint32_t nl_cov_block(NlComp *c, const IrBlock *b, int kind, Span loc, ui
     return ctr;
 }
 
+/* coverage counter of a continuous assignment (shared by all instances) */
+static uint32_t nl_cov_assign(NlComp *c, const IrAssign *a)
+{
+    SimModel *m = c->m;
+    uint64_t got;
+    uint32_t ctr;
+    SimCovRaw r;
+    if (map_get(&c->cov_map, MAP_PTR(a), &got))
+        return (uint32_t)got - 1;
+    ctr = m->ncov++;
+    map_put(&c->cov_map, MAP_PTR(a), (uint64_t)ctr + 1);
+    memset(&r, 0, sizeof r);
+    r.counter = ctr;
+    r.mon = IR_NONE;
+    r.kind = SIM_COV_STMT;
+    r.loc = a->loc;
+    vec_push(m->covraw, r);
+    return ctr;
+}
+
 static void nl_stmt(NlComp *c, const IrStmt *s);
 
 static void nl_block(NlComp *c, const IrBlock *b, int kind, Span loc, uint32_t arm)
@@ -1585,6 +1607,12 @@ static void nl_compile(SimModel *m, NlBuild *b, NlComp *c)
             nl_block(c, &n->proc->body, -1, n->loc, 0);
         } else {
             c->inst = n->rhs_inst;
+            if (n->asg && n->asg->loc.file) {
+                /* a continuous assignment (`let`, `x = e`) is a line that
+                 * runs whenever its module is simulated */
+                SimInsn *ci = nl_emit(c, SOP_COV, 0);
+                ci->p = nl_cov_assign(c, n->asg);
+            }
             nl_assign(c, n->lhs_inst, &n->lhs, n->rhs_inst, n->rhs);
         }
     }

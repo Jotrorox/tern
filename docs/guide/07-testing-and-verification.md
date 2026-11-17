@@ -229,8 +229,10 @@ take down the run.
 
 ## Coverage
 
-`tern test --cover` reports line coverage, branch coverage per `if` and per
-`match` arm, and `cover property` hits. Full match-arm coverage is possible by
+`tern test --cover` reports line coverage (statements in blocks, plus
+continuous assignments and `let`s, which run whenever their module is
+simulated), branch coverage per `if` and per `match` arm, and
+`cover property` hits. Full match-arm coverage is possible by
 construction, because every arm must exist:
 
 ```
