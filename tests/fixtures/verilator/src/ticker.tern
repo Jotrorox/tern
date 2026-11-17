@@ -1,0 +1,45 @@
+package vltest
+
+/// The SystemVerilog counter of rtl/up_counter.sv.
+pub extern module up_counter("rtl/up_counter.sv") <WIDTH: uint = 8> {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out count: uint<WIDTH>
+}
+
+/// Counts enabled cycles with the SystemVerilog counter, flags multiples
+/// of four and keeps the counts in a memory indexed by their low bits.
+#[top]
+pub module Ticker {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out count: u8
+    out quad: bool
+
+    reg last: u8 = 0
+    mem hist: [u8; 4]
+
+    let c = up_counter<8>(en)
+    count = c.count
+    quad = c.count[1:0] == 0
+    on clk {
+        last = c.count
+        hist[c.count[1:0]] = c.count
+    }
+}
+
+/// A plain Tern module (no extern module): runs on either backend.
+pub module Acc<W: uint> {
+    in clk: clock
+    in rst: reset
+    in add: uint<W>
+    out sum: uint<W>
+
+    reg acc: uint<W> = 0
+    sum = acc
+    on clk {
+        acc = acc +% add
+    }
+}

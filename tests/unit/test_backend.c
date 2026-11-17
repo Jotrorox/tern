@@ -33,6 +33,7 @@
 #include "../../src/backend/formal.c"
 #include "../../src/backend/synth.c"
 #include "../../src/backend/verilator.c"
+#include "../../src/backend/vlharness.c"
 #include "../../src/os/os.h"
 
 /* ------------------------------------------------------------ framework */
@@ -1099,6 +1100,33 @@ static void tb_param_equiv(void)
     free(cwd);
 }
 
+/* ------------------------------------------ the Verilator test harness */
+
+/* vls_harness_source() against tests/fixtures/verilator/tb_main.cpp
+ * (UPDATE=1 rewrites it); the protocol itself is tested in test_sim.c and,
+ * with Verilator installed, end to end by `make test-verilator`. */
+static void tb_harness(void)
+{
+    const char *path = "tests/fixtures/verilator/tb_main.cpp";
+    const char *h = vls_harness_source();
+    char *up = os_getenv("UPDATE"), *text;
+    if (up && *up && strcmp(up, "0") != 0) {
+        TB_CHECK(os_write_file(path, h, strlen(h)) == 0);
+        free(up);
+        return;
+    }
+    free(up);
+    text = tb_read(path);
+    TB_CHECK(text && strcmp(text, h) == 0);
+    if (text && strcmp(text, h) != 0)
+        fprintf(stderr, "test_backend: %s differs from vls_harness_source() (UPDATE=1 rewrites it)\n", path);
+    /* every protocol request is handled */
+    TB_CHECK(strstr(h, "op == \"P\"") && strstr(h, "op == \"G\"") && strstr(h, "op == \"M\"") &&
+             strstr(h, "op == \"S\"") && strstr(h, "op == \"N\"") && strstr(h, "op == \"X\"") &&
+             strstr(h, "op == \"D\"") && strstr(h, "vpi_handle_by_name"));
+    free(text);
+}
+
 int main(void)
 {
     tb_iverilog = os_find_program("iverilog");
@@ -1114,6 +1142,7 @@ int main(void)
     tb_synth_reports();
     tb_compile_goldens();
     tb_param_equiv();
+    tb_harness();
     arena_release(&tb_arena);
     printf("test_backend: %d checks, %d failed, %d skipped%s\n", tb_checks, tb_fails, tb_skips,
            tb_iverilog ? "" : " (no iverilog)");

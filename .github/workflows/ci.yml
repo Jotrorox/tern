@@ -46,6 +46,15 @@ jobs:
         run: make EXTRA=-Werror test
       - name: Lint and synthesize the emitted fixtures
         run: tests/lint_emitted.sh
+      # spec 13.4: an extern SystemVerilog module (tests/fixtures/verilator),
+      # once with --backend verilator and once picked automatically, and a
+      # std package on Verilator
+      - name: tern test --backend verilator
+        run: |
+          set -e
+          (cd tests/fixtures/verilator && ../../../tern test --backend verilator && ../../../tern test)
+          mkdir -p build/ci-verilator && cd build/ci-verilator
+          ../../tern test --backend verilator ../../std/timer
       # SymbiYosys has no Ubuntu package, so `tern prove` only generates its
       # files here; Yosys checks that it reads the generated formal checkers.
       - name: tern build / synth / prove on a sample project

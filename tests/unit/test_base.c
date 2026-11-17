@@ -1129,6 +1129,42 @@ static void test_processes(void)
     TB_CHECK(done == 4);
     TB_CHECK(os_proc_wait_any(procs, 4, 10) == -1);
 
+    /* interactive child: request / response lines over pipes */
+    {
+        OsSpawnOpts io;
+        OsProc *p;
+        char *line, *lines_argv[3];
+        lines_argv[0] = self;
+        lines_argv[1] = (char *)"--lines";
+        lines_argv[2] = NULL;
+        memset(&io, 0, sizeof io);
+        io.interactive = 1;
+        io.merge_stderr = 1;
+        p = os_spawn(lines_argv, &io, NULL);
+        TB_CHECK(p != NULL);
+        if (p) {
+            TB_CHECK(os_proc_write(p, "ping\n", 5) == 0);
+            line = os_proc_read_line(p, 5000);
+            TB_CHECK(line && strcmp(line, "@ping") == 0);
+            free(line);
+            TB_CHECK(os_proc_write(p, "a b\nc\n", 6) == 0);
+            line = os_proc_read_line(p, 5000);
+            TB_CHECK(line && strcmp(line, "@a b") == 0);
+            free(line);
+            line = os_proc_read_line(p, 5000);
+            TB_CHECK(line && strcmp(line, "@c") == 0);
+            free(line);
+            TB_CHECK(os_proc_read_line(p, 20) == NULL); /* nothing pending: timeout */
+            os_proc_close_stdin(p);                     /* the child sees end of input */
+            line = os_proc_read_line(p, 5000);
+            TB_CHECK(line && strcmp(line, "@eof") == 0);
+            free(line);
+            TB_CHECK(os_proc_read_line(p, 5000) == NULL);
+            TB_CHECK(os_proc_wait(p) == 0 && os_proc_exit_code(p) == 0);
+            os_proc_free(p);
+        }
+    }
+
     /* cwd option */
     {
         char *tmp = os_temp_dir();
@@ -1150,6 +1186,18 @@ static void test_processes(void)
 /* Child-process modes used by test_processes. */
 static int tb_child_mode(const char *mode)
 {
+    if (strcmp(mode, "--lines") == 0) {
+        char buf[1024];
+        while (fgets(buf, sizeof buf, stdin)) {
+            size_t n = strlen(buf);
+            while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+                buf[--n] = 0;
+            printf("@%s\n", buf);
+            fflush(stdout);
+        }
+        printf("@eof\n");
+        return 0;
+    }
     if (strcmp(mode, "--cat") == 0) {
         char buf[65536];
         size_t n;

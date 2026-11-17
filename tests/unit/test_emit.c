@@ -1883,6 +1883,31 @@ static void te_design(const TeDesign *td)
 
 /* ------------------------------------------------------------ unit tests */
 
+/* sv_emit_wrapper: the port-less test wrapper of the Verilator backend
+ * (golden tests/fixtures/emit/wrapper/: the design's files plus tern_tb.sv,
+ * compiled together with iverilog) */
+static void te_test_wrapper(void)
+{
+    static const TeDesign wd = {"wrapper", te_types, 0, 0, 0, 0, NULL};
+    SvOutput out;
+    SvOptions o;
+    StrBuf w = {0};
+    te_new_design();
+    te_types();
+    sv_options_init(&o);
+    o.constraints = 0;
+    memset(&out, 0, sizeof out);
+    TE_CHECK(emit_design(D, &o, &out) == 0);
+    sv_emit_wrapper(D, &o, "tern_tb", &w);
+    TE_CHECK(strstr(sb_cstr(&w), "module tern_tb") != NULL);
+    TE_CHECK(strstr(sb_cstr(&w), " dut (") != NULL);
+    sv_output_add(&out, "tern_tb.sv", SV_FILE_MODULE, &w);
+    te_golden("wrapper", &out);
+    te_compile_check(&wd, "sv", &out, 0);
+    sv_output_free(&out);
+    sb_free(&w);
+}
+
 static void te_test_names(void)
 {
     TE_CHECK(sv_is_keyword("bit"));
@@ -2041,6 +2066,7 @@ int main(void)
     for (i = 0; i < TERN_ARRAY_LEN(te_designs); i++)
         te_design(&te_designs[i]);
     te_test_asic();
+    te_test_wrapper();
     te_test_options();
     te_test_cmd();
     TE_CHECK(te_errors == 0);

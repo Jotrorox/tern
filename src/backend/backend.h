@@ -151,6 +151,10 @@ int bk_params_prepare(struct Driver *dr, IrDesign *d, const SvOptions *o);
  * order.  from[i] must not end in '/'. */
 void bk_rewrite_paths(SvOutput *out, const char *const *from, const char *const *to, size_t n);
 
+/* The source file of an extern module's `path`: absolute, relative to the
+ * project root, or relative to the declaring file (loc).  Heap, or NULL. */
+char *bk_find_extern_source(const char *path, const char *root, Span loc);
+
 /* HDL files of an output in compile order (the package, extern module
  * sources, then the emitted modules children-first); names only. */
 void bk_hdl_files(const SvOutput *out, BkPathVec *files);
@@ -160,6 +164,17 @@ int bk_is_extern_file(const SvOutput *out, const char *name);
 const char *bk_build_top_name(BkBuild *b);
 
 /* ============================================================== verilator */
+
+/* `tern test --backend verilator` (vlsim.c): a SimModel of design d (its
+ * top) backed by a Verilator model built under <root>/build/verilator/<top>/
+ * and reused while the emitted sources are unchanged.  NULL after a
+ * diag_error (verilator missing, build failure). */
+struct SimModel;
+struct SimModel *vls_sim_new(const char *root, const IrDesign *d, uint64_t seed);
+/* TestRunOptions.remote: vls_sim_new under the project root (or the cwd) */
+struct SimModel *vls_test_model(void *user, struct Driver *dr, const IrDesign *d, uint64_t seed);
+int vls_available(void);                 /* verilator on PATH */
+const char *vls_harness_source(void);    /* tb_main.cpp, the generic harness */
 
 /* `verilator --lint-only` over the HDL files in dir.  Returns 0 clean,
  * 1 lint errors, -1 verilator not installed (a message was printed). */

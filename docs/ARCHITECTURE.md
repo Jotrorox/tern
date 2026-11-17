@@ -50,8 +50,8 @@ spaces — the real syntax is ASCII).
 | `src/ir/` | `ir.h ir_build.c ir_json.c` | typed IR (contract below) and JSON form |
 | `src/check/` | `check.c` | multiple/missing drivers, no-latch proof, clock-domain mixing |
 | `src/emit/` | `sv.c svparam.c constraints.c regmap.c` (+ private `svparam.h`) | SystemVerilog/Verilog-2005 (parameterized modules: `svparam.c`), .xdc/.sdc, regmap .h/.svd/.md |
-| `src/sim/` | `bitvec.c netlist.c eval.c testrun.c vcd.c` (+ `sim.h`, private `sim_impl.h`) | cycle-based simulator and `test` interpreter |
-| `src/backend/` | `target.c build.c params.c verilator.c vcdread.c formal.c prove.c synth.c cmd_synth.c` (+ `backend.h`) | `tern build`, `tern prove`, `tern synth`: targets, emitted-file output, SymbiYosys / Yosys / Vivado / Quartus scripts and result parsers |
+| `src/sim/` | `bitvec.c netlist.c eval.c vcd.c remote.c testrun.c cmd_test.c cmd_sim.c` (+ `sim.h`, `testrun.h`, private `sim_impl.h`) | cycle-based simulator, remote (Verilator) models, `test` interpreter |
+| `src/backend/` | `target.c build.c params.c vlsim.c vlharness.c verilator.c vcdread.c formal.c prove.c synth.c cmd_synth.c` (+ `backend.h`) | `tern build`, `tern prove`, `tern synth`: targets, emitted-file output, SymbiYosys / Yosys / Vivado / Quartus scripts and result parsers |
 | `src/pkg/` | `toml.c manifest.c lock.c git.c cmd_pkg.c` (+ `pkg.h`) | tern.toml, tern.lock, semver, dependency resolution, git; `tern new/add/update/vendor/publish` (docs/packages.md, docs/registry.md) |
 | `src/lsp/` | `rpc.c lsp.c lsp_nav.c` (+ `lsp.h`, private `lsp_impl.h`) | JSON-RPC language server over stdio (`tern lsp`, docs/editors.md) |
 | `src/tools/` | `fmt.c doc.c import.c remap.c` | formatter, HTML docs, `tern import` (SV → extern), `tern remap` (docs/migration.md) |
@@ -194,7 +194,9 @@ The headers are the reference (each starts with a usage comment); summary:
   `os_read_stdin`/`os_stdin_wait` (unbuffered stdin with a timeout, for the
   LSP), and processes:
   `os_spawn(argv, &OsSpawnOpts{cwd, stdin_data/stdin_len, stdin_null,
-  capture_stdout, capture_stderr, merge_stderr}, &err)`, `os_proc_wait`,
+  capture_stdout, capture_stderr, merge_stderr, interactive}, &err)`
+  (`interactive`: request/response children driven with `os_proc_write`,
+  `os_proc_read_line(p, timeout_ms)` and `os_proc_close_stdin`), `os_proc_wait`,
   `os_proc_wait_any(procs, n, timeout_ms)` (pumps all captured output while
   waiting; used by the parallel test runner), `os_proc_exit_code/stdout/stderr/
   kill/free`, and the one-shot `os_run`.
@@ -466,6 +468,32 @@ and `lsp_nav.c` (definition, hover, references, symbols, completion,
   (`testcov_*`). The report format is fixed by the goldens in
   `tests/fixtures/test/` (a fixture's first line `// args: --cover` adds
   arguments). Timing is printed only on a terminal.
+* **Verilator backend** (spec §13.4; `--backend verilator`, and by default
+  for designs that contain an extern module when `verilator` is on PATH;
+  `TestRunOptions.backend/remote`). The interpreter is unchanged: a handle's
+  `SimModel` is built by `sim_new_remote` (`src/sim/remote.c`), which runs
+  `sim_build` for the metadata (paths, types, domains, writability) and
+  forwards the value operations (`SimRemoteOps` in `sim_impl.h`; hooks at
+  the top of `sim_poke/peek/settle/step/run_ns/reset/vcd_open`) as text
+  lines to a harness process; cycles and time are counted locally with
+  the built-in clock algorithm. Protocol: `C`/`R` declare clocks and
+  resets, `I` init, `P path hex`, `G path`, `M path addr`, `E` settle,
+  `S clock n`, `N ns`, `X clocks...` (resets on, 2 cycles each, off),
+  `D file.vcd`, `Q`; answers start with `@` (`@ok`, `@v hex`, `@err msg`,
+  `@stop` after a failed assertion, reported once through the fail handler
+  with the Tern line found from the emitted file's line markers).
+  `src/backend/vlsim.c` emits the design (assertions on, `TERN_NO_SVA`) plus
+  extern sources and `tern_tb.sv` (`sv_emit_wrapper`: a port-less module
+  with a variable per top port, because Verilator's VPI cannot write top
+  ports) into `build/verilator/<top>/`, adds the fixed harness
+  `tb_main.cpp` (`src/backend/vlharness.c`; VPI `vpi_handle_by_name` on
+  `TOP.tern_tb.<port>` / `TOP.tern_tb.dut.<inst>.<sig>`, hex strings), runs
+  `verilator --cc --exe --build --vpi --public-flat-rw --assert --trace`
+  into `obj_<hash of sources and flags>/` (built in a private directory and
+  renamed, so parallel workers do not collide; stale models are removed)
+  and talks to the binary over `os_spawn` pipes (`OsSpawnOpts.interactive`,
+  `os_proc_write`, `os_proc_read_line`). Properties and coverage stay
+  built-in only (`--cover` prints a note). `tern sim --backend` works too.
 * `tern sim` is a session (`testrun_session_*`) with the design bound to
   `dut`; command lines are rewritten to Tern statements and parsed as a test
   body.
@@ -529,7 +557,13 @@ Usage: `tests/run [-v] [-j N] [--tern path] [--no-std] [<filter>...]`.
 
 `make test` also checks that std is canonically formatted
 (`tern fmt --check std`, docs/style.md) and runs `tern test --diag-format=short std` from the repository
-root and requires exit status 0 (`make test-std` runs only that). A fixture
+root and requires exit status 0 (`make test-std` runs only that). `make
+test-verilator` (part of `make test`, skipped without Verilator) runs
+`tern test --backend verilator` and plain `tern test` in
+`tests/fixtures/verilator/` (an extern SystemVerilog counter, a Tern wrapper
+and tests); the protocol is unit-tested against a fake harness in
+`test_sim.c`, the harness text against `tests/fixtures/verilator/tb_main.cpp`
+in `test_backend.c`, the wrapper in `tests/fixtures/emit/wrapper/`. A fixture
 whose first line is `// args: <a> <b>` gets those arguments before its file
 name (`// args: --cover`).
 

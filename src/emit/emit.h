@@ -135,6 +135,12 @@ void rmap_emit_header(const IrRegmap *r, StrBuf *out);
 void rmap_emit_svd(const IrRegmap *r, StrBuf *out);
 void rmap_emit_markdown(const IrRegmap *r, StrBuf *out);
 
+/* A port-less SystemVerilog module `name` with one variable per port of
+ * d->top (same names and types) and the top instantiated as `dut` with
+ * those variables: the Verilator test harness (`tern test --backend
+ * verilator`) drives and reads them through VPI. */
+void sv_emit_wrapper(const IrDesign *d, const SvOptions *o, const char *name, StrBuf *out);
+
 /* ------------------------------------------- parameterized modules -- */
 
 /* Spec §13.3: value generics become SystemVerilog parameters where that is

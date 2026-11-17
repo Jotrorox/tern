@@ -61,7 +61,7 @@ static void bk_merge(SvOutput *dst, SvOutput *src)
 
 /* the source of an extern module's file: absolute, relative to the project
  * root (or the current directory), or relative to the declaring file */
-static char *bk_find_extern(const char *path, const char *root, Span loc)
+char *bk_find_extern_source(const char *path, const char *root, Span loc)
 {
     char *p;
     const SourceFile *sf;
@@ -102,7 +102,7 @@ static int bk_add_externs(BkBuild *b)
             base = os_path_basename(m->extern_file);
             if (sv_output_find(&b->out, base))
                 continue;
-            src = bk_find_extern(m->extern_file, b->root, m->loc);
+            src = bk_find_extern_source(m->extern_file, b->root, m->loc);
             if (!src || os_read_file(src, &text, &len) != 0) {
                 diag_error(m->loc, "cannot find the source of extern module `%s`: \"%s\"", m->name, m->extern_file);
                 diag_help("extern paths are relative to the project root (or to the declaring file)");

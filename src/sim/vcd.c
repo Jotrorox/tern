@@ -55,6 +55,8 @@ int sim_vcd_open(SimModel *m, const char *path)
     StrBuf sb = {0};
     uint32_t i, n = 0;
     char id[8];
+    if (m->rops)
+        return m->rops->vcd_open(m, path);
     sim_vcd_close(m);
     m->vcd = fopen(path, "wb");
     if (!m->vcd)

@@ -61,8 +61,9 @@ static const MainCmd main_cmds[] = {
      "                      path is given without -o)\n"
      "  --text              print a terminal rendering (the offline reference)\n"
      "  --open              open the generated index.html in a browser\n"},
-    {"test", cmd_test, "Verification", "[<paths>] [<filter>...] [--waves] [--seed <n>] [--cover] [-j <n>] [--list]",
-     "run test blocks on the built-in simulator",
+    {"test", cmd_test, "Verification",
+     "[<paths>] [<filter>...] [--backend builtin|verilator] [--waves] [--seed <n>] [--cover] [-j <n>] [--list]",
+     "run test blocks on the built-in simulator (or Verilator)",
      "  <paths>             files or directories (default: the project's src/ and tests/)\n"
      "  <filter>            run only tests whose name contains <filter>\n"
      "  --waves             keep a VCD of each failing test in build/waves/\n"
@@ -70,7 +71,14 @@ static const MainCmd main_cmds[] = {
      "  --cover             report line, branch (if / match arm) and cover property coverage\n"
      "  -j <n>              number of parallel worker processes (default: CPU count)\n"
      "  --list              list the tests instead of running them\n"
-     "  --const-eval-limit <n>  interpreter step limit per test (default 5*10^7)\n"},
+     "  --const-eval-limit <n>  interpreter step limit per test (default 5*10^7)\n"
+     "  --backend <b>       simulator behind `sim M<..>()`: builtin, or verilator (the\n"
+     "                      design is emitted with its extern modules' sources into\n"
+     "                      build/verilator/<top>/ and compiled once with `verilator\n"
+     "                      --build`; tests run one at a time; immediate assertions are\n"
+     "                      checked by Verilator, properties and --cover are not).\n"
+     "                      Default: builtin, except that designs containing an extern\n"
+     "                      module use verilator when it is installed\n"},
     {"sim", cmd_sim, "Verification", "<top> [--vcd <file>] [<script>] [<paths>]",
      "interactive stimulus REPL or a stimulus script against a top",
      "  <top>               module to simulate, e.g. Top or 'Fifo<u8, 4>' (default: the #[top])\n"
@@ -79,6 +87,7 @@ static const MainCmd main_cmds[] = {
      "                      status 1)\n"
      "  --vcd <file>        record a VCD waveform\n"
      "  --seed <n>          seed of rand<T>() and of power-on register values\n"
+     "  --backend <b>       builtin or verilator (as for tern test)\n"
      "commands (the design is `dut`; paths are relative to it):\n"
      "  poke <path> <expr>  drive an input (also: <path> = <expr>)\n"
      "  peek <path>...      print signals (also: <path>)\n"

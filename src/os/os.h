@@ -122,6 +122,10 @@ typedef struct OsSpawnOpts {
     int capture_stdout;       /* collect into a buffer (else inherit) */
     int capture_stderr;
     int merge_stderr;         /* child's stderr goes wherever its stdout goes */
+    int interactive;          /* stdin and stdout are pipes driven with os_proc_write /
+                                 os_proc_read_line (stdin_data, stdin_null and
+                                 capture_stdout are ignored; merge_stderr sends stderr
+                                 into the same pipe) */
 } OsSpawnOpts;
 
 /* Start argv[0] (searched in PATH when it has no directory part) with the
@@ -141,6 +145,15 @@ int os_proc_wait(OsProc *p);
  * -1 on timeout / when no entry is left to wait for. The returned process
  * is reaped: its exit code and captured output are available. */
 int os_proc_wait_any(OsProc **procs, size_t n, int timeout_ms);
+
+/* Interactive children (OsSpawnOpts.interactive): writes all of data to the
+ * child's stdin (0, or -1 when the child is gone); reads one line of its
+ * stdout without the line end (heap string), waiting at most timeout_ms
+ * (< 0: forever) -- NULL at the end of its output, on timeout or error;
+ * closes its stdin (the child sees end of input). */
+int os_proc_write(OsProc *p, const char *data, size_t len);
+char *os_proc_read_line(OsProc *p, int timeout_ms);
+void os_proc_close_stdin(OsProc *p);
 
 int os_proc_done(const OsProc *p);
 /* Exit status: the exit code, or 128+signal for a signal death (POSIX). */

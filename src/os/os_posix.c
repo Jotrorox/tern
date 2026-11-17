@@ -460,6 +460,8 @@ struct OsProc {
     char *in_data;
     size_t in_len, in_off;
     OspBuf out, err;
+    int interactive;             /* fd_in / fd_out are driven by os_proc_write / read_line */
+    size_t out_off;              /* interactive: consumed bytes of out */
 };
 
 static void osp_close(int *fd)
@@ -567,8 +569,8 @@ OsProc *os_spawn(char *const argv[], const OsSpawnOpts *opts, char **err_out)
         signal(SIGPIPE, SIG_IGN);
         sigpipe_ignored = 1;
     }
-    if ((opts->stdin_data && osp_pipe(pin) != 0) ||
-        (opts->capture_stdout && osp_pipe(pout) != 0) ||
+    if (((opts->stdin_data || opts->interactive) && osp_pipe(pin) != 0) ||
+        ((opts->capture_stdout || opts->interactive) && osp_pipe(pout) != 0) ||
         (opts->capture_stderr && !opts->merge_stderr && osp_pipe(perr) != 0) ||
         osp_pipe(pexec) != 0) {
         if (err_out)
@@ -647,7 +649,8 @@ OsProc *os_spawn(char *const argv[], const OsSpawnOpts *opts, char **err_out)
     p->fd_in = pin[1];
     p->fd_out = pout[0];
     p->fd_err = perr[0];
-    if (p->fd_in >= 0) {
+    p->interactive = opts->interactive;
+    if (p->fd_in >= 0 && !p->interactive) {
         if (opts->stdin_len) {
             int fl = fcntl(p->fd_in, F_GETFL);
             if (fl >= 0)
@@ -841,6 +844,74 @@ void os_proc_kill(OsProc *p)
 {
     if (!p->done)
         kill(p->pid, SIGKILL);
+}
+
+int os_proc_write(OsProc *p, const char *data, size_t len)
+{
+    size_t off = 0;
+    if (!p || p->fd_in < 0)
+        return -1;
+    while (off < len) {
+        ssize_t w = write(p->fd_in, data + off, len - off);
+        if (w < 0 && errno == EINTR)
+            continue;
+        if (w <= 0) {
+            osp_close(&p->fd_in);
+            return -1;
+        }
+        off += (size_t)w;
+    }
+    return 0;
+}
+
+char *os_proc_read_line(OsProc *p, int timeout_ms)
+{
+    uint64_t deadline = timeout_ms >= 0 ? os_time_ns() + (uint64_t)timeout_ms * 1000000u : 0;
+    if (!p)
+        return NULL;
+    for (;;) {
+        char *nl = p->out.data && p->out.len > p->out_off
+                       ? (char *)memchr(p->out.data + p->out_off, '\n', p->out.len - p->out_off)
+                       : NULL;
+        struct pollfd pf;
+        int pt = -1, rc;
+        if (nl || (p->fd_out < 0 && p->out.len > p->out_off)) {
+            size_t end = nl ? (size_t)(nl - p->out.data) : p->out.len;
+            size_t n = end - p->out_off;
+            char *line;
+            if (n && p->out.data[p->out_off + n - 1] == '\r')
+                n--;
+            line = xstrndup(p->out.data + p->out_off, n);
+            p->out_off = nl ? end + 1 : end;
+            if (p->out_off == p->out.len) {
+                p->out.len = 0;
+                p->out_off = 0;
+            }
+            return line;
+        }
+        if (p->fd_out < 0)
+            return NULL;
+        if (timeout_ms >= 0) {
+            uint64_t now = os_time_ns();
+            if (now >= deadline)
+                return NULL;
+            pt = (int)((deadline - now) / 1000000u) + 1;
+        }
+        pf.fd = p->fd_out;
+        pf.events = POLLIN;
+        pf.revents = 0;
+        rc = poll(&pf, 1, pt);
+        if (rc < 0 && errno != EINTR)
+            return NULL;
+        if (rc > 0)
+            osp_read_into(&p->fd_out, &p->out);
+    }
+}
+
+void os_proc_close_stdin(OsProc *p)
+{
+    if (p)
+        osp_close(&p->fd_in);
 }
 
 void os_proc_free(OsProc *p)

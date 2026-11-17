@@ -189,6 +189,34 @@ void sim_coverage_reset(SimModel *m);
 int sim_vcd_open(SimModel *m, const char *path);
 void sim_vcd_close(SimModel *m);
 
+/* ------------------------------------------------------------ remote -- */
+
+/* A model whose values live in another simulator (remote.c; the Verilator
+ * harness of src/backend/vlsim.c).  Built from the IR like sim_new, so the
+ * handles and metadata are identical; pokes, peeks, settle, step, run_ns,
+ * reset and sim_vcd_open become requests of a line protocol (remote.c),
+ * and cycles / time are counted locally with the same clock algorithm.
+ * Design assertions are the remote's business: when it stops the
+ * simulation (a failed assertion) the fail handler gets one SIM_FAIL_ASSERT
+ * with its output; properties, coverage and sim_mem_poke are not
+ * available.  Extern modules are fine (no black-box warning). */
+typedef struct SimRemoteIo {
+    void *user;
+    int (*write)(void *user, const char *line);    /* one request line (with a newline); 0 or -1 */
+    char *(*read_line)(void *user);                /* one line (heap) or NULL when gone */
+    const char *(*path)(void *user, const SimModel *m, int h); /* remote name of a handle */
+    void (*close)(void *user);                     /* after `Q` (may be NULL) */
+    /* the Tern location of a remote failure message ("Fifo.sv:42: ..."), or
+     * 0 (may be NULL) */
+    int (*locate)(void *user, const char *msg, Span *out);
+} SimRemoteIo;
+
+SimModel *sim_new_remote(const IrDesign *d, const IrModule *top, uint64_t seed, const SimRemoteIo *io);
+int sim_is_remote(const SimModel *m);
+/* protocol values: hex digits, most significant first, ceil(width/4) of them */
+void sim_remote_hex(const IrBits *b, uint32_t width, struct StrBuf *out);
+int sim_remote_unhex(const char *s, IrBits *out);   /* out->width set; x/z read as 0; 0 if malformed */
+
 /* ============================================================ bitvec == */
 /* Little-endian uint64_t limb arrays of `w` bits (IR_LIMBS(w) limbs; bits >=
  * w are zero on input and kept zero on output).  Unless noted, the result d

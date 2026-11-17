@@ -49,6 +49,7 @@ struct TrCtx {
     uint32_t nsims;
     VEC(TrSim *) sims;
     TrSim *last;              /* most recent handle: its cycle is printed */
+    int cover_noted;          /* the coverage note for a verilator model was printed */
 };
 
 static const ValOpaqueOps tr_ops;
@@ -908,7 +909,7 @@ static void tr_sim_free(TrSim *s)
 {
     TrCtx *c = s->ctx;
     if (s->m) {
-        if (c->cov && c->opt->cover) {
+        if (c->cov && c->opt->cover && !sim_is_remote(s->m)) {
             const SimCovPoint *pts;
             size_t n = sim_coverage(s->m, &pts), i;
             for (i = 0; i < n; i++) {
@@ -971,7 +972,34 @@ static TrSim *tr_sim_new(TrCtx *c, Item *item, FileUnit *file, const ElabArgs *a
             map_put(&s->irty, v, MAP_PTR(t));
     }
     seed = c->opt->seed ^ hash_u64(++c->nsims);
-    s->m = sim_new(s->d, s->mi->ir, seed);
+    {
+        /* built-in simulator, or a Verilator model (spec 13.4) */
+        const IrModule *ext = NULL;
+        uint32_t i;
+        for (i = 0; i < s->d->nmodules && !ext; i++)
+            if (s->d->modules[i]->is_extern)
+                ext = s->d->modules[i];
+        if (c->opt->backend == TR_BACKEND_VERILATOR || (c->opt->backend == TR_BACKEND_AUTO && ext)) {
+            if (!c->opt->remote) {
+                if (ext)
+                    el_error(c->el, at, "`%s` contains extern module `%s`: needs --backend verilator (verilator not found)",
+                             s->display, ext->tern_name ? ext->tern_name : ext->name);
+                else
+                    el_error(c->el, at, "cannot simulate `%s` on verilator: verilator not found", s->display);
+                el_help(c->el, "install Verilator (https://verilator.org) and put it on PATH");
+                tr_sim_free(s);
+                return NULL;
+            }
+            s->m = c->opt->remote(c->opt->remote_user, c->dr, s->d, seed);
+            if (s->m && c->opt->cover && c->opt->backend != TR_BACKEND_VERILATOR && !c->cover_noted) {
+                c->cover_noted = 1;
+                sb_printf(c->out, "    note: `%s` runs on verilator: coverage is collected by the built-in simulator only\n",
+                          s->display);
+            }
+        } else {
+            s->m = sim_new(s->d, s->mi->ir, seed);
+        }
+    }
     tr_flush_diags();
     if (!s->m) {
         tr_sim_free(s);
@@ -1015,8 +1043,9 @@ static int tr_hook_sim(Elab *el, Expr *e, Env *env, Value *out)
     vm = elab_eval_module(el, call, env);
     if (!vm)
         return 1;
-    if (vm->item->kind != ITEM_MODULE) {
-        el_error(el, call->span, "cannot simulate extern module `%s`", vm->display);
+    if (vm->item->kind != ITEM_MODULE && c->opt->backend == TR_BACKEND_BUILTIN) {
+        el_error(el, call->span, "cannot simulate extern module `%s` on the built-in simulator", vm->display);
+        el_help(el, "extern modules run on verilator: tern test --backend verilator");
         return 1;
     }
     s = tr_sim_new(c, vm->item, vm->file, &vm->args, call->span);

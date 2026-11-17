@@ -27,6 +27,7 @@
 #include "../cmds.h"
 #include "../os/os.h"
 #include "testrun.h"
+#include "../backend/backend.h"
 
 typedef struct SimCmd {
     Driver *dr;
@@ -259,7 +260,16 @@ int cmd_sim(int argc, char **argv)
             ;
         else if (args_opt(&ap, "features", &val))
             o.features = val;
-        else if (args_positional(&ap)) {
+        else if (args_opt(&ap, "backend", &val)) {
+            if (strcmp(val, "builtin") == 0)
+                to.backend = TR_BACKEND_BUILTIN;
+            else if (strcmp(val, "verilator") == 0)
+                to.backend = TR_BACKEND_VERILATOR;
+            else {
+                fprintf(stderr, "tern sim: error: unknown backend `%s` (builtin or verilator)\n", val);
+                ap.errors++;
+            }
+        } else if (args_positional(&ap)) {
             if (!top && !os_is_dir(ap.arg) && strcmp(os_path_ext(ap.arg), ".tern") != 0)
                 top = ap.arg;
             else if (os_is_dir(ap.arg) || strcmp(os_path_ext(ap.arg), ".tern") == 0)
@@ -272,6 +282,12 @@ int cmd_sim(int argc, char **argv)
             }
         } else
             args_unknown(&ap);
+    }
+    if (!ap.errors && to.backend != TR_BACKEND_BUILTIN && vls_available())
+        to.remote = vls_test_model;
+    if (!ap.errors && to.backend == TR_BACKEND_VERILATOR && !to.remote) {
+        fprintf(stderr, "tern sim: error: --backend verilator needs Verilator on PATH (https://verilator.org)\n");
+        ap.errors++;
     }
     if (ap.errors) {
         vec_free(paths);

@@ -313,10 +313,13 @@ SvNames *sv_names_new(const IrDesign *d)
     n->d = d;
     for (i = 0; i < d->ntypes; i++)
         svn_register_type(n, d->types[i]);
-    /* modules: externs keep their names; everything else is made legal and unique */
+    /* modules: externs keep their declared names (an extern module with
+     * generics is one SV module, parameterized with #(...)); everything
+     * else is made legal and unique */
     for (i = 0; i < d->nmodules; i++)
         if (d->modules[i]->is_extern)
-            map_put(&n->modused, MAP_PTR(intern_cstr(d->modules[i]->name)), 1);
+            map_put(&n->modused,
+                    MAP_PTR(intern_cstr(d->modules[i]->tern_name ? d->modules[i]->tern_name : d->modules[i]->name)), 1);
     sb_printf(&b, "%s_types_pkg", d->top ? d->top->name : "tern");
     n->pkg = svn_claim(&n->modused, svn_sanitize(sb_cstr(&b)));
     sb_free(&b);
@@ -370,7 +373,7 @@ static SvModNames *svn_mod(SvNames *n, const IrModule *m)
     map_put(&n->modidx, MAP_PTR(m), MAP_PTR(mn));
     vec_push(n->mods, mn);
     if (m->is_extern) {
-        mn->name = intern_cstr(m->name);
+        mn->name = intern_cstr(m->tern_name ? m->tern_name : m->name);
         for (i = 0; i < m->nsigs; i++)
             mn->sig[i] = intern_cstr(m->sigs[i].name);
         for (i = 0; i < m->nparams; i++)
@@ -3173,6 +3176,34 @@ static int sv_simple_conn(const IrExpr *e)
            (e->kind == IRE_SLICE && sv_slice_base(e, &lo) != IR_NONE);
 }
 
+/* ` #(.P(v), ...)` of an extern module instance (nothing without generics) */
+static void sv_extern_params(const SvModNames *cn, const IrModule *cm, StrBuf *head)
+{
+    uint32_t i;
+    if (!cm->nparams)
+        return;
+    sb_puts(head, " #(");
+    for (i = 0; i < cm->nparams; i++) {
+        const IrParam *pp = &cm->params[i];
+        if (i)
+            sb_puts(head, ", ");
+        sb_printf(head, ".%s(", cn->param[i]);
+        if (pp->value.width <= 64 && !pp->is_signed)
+            sb_printf(head, "%llu", (unsigned long long)ir_bits_low64(&pp->value));
+        else if (pp->value.width <= 64)
+            sb_printf(head, "%lld",
+                      (long long)(pp->value.width == 64 ? ir_bits_low64(&pp->value)
+                                                         : (ir_bits_get(&pp->value, pp->value.width - 1)
+                                                                ? ir_bits_low64(&pp->value) |
+                                                                      (~UINT64_C(0) << pp->value.width)
+                                                                : ir_bits_low64(&pp->value))));
+        else
+            ir_bits_print(&pp->value, head);
+        sb_putc(head, ')');
+    }
+    sb_putc(head, ')');
+}
+
 static void sv_instance(SvGen *g, uint32_t ii, StrBuf *out)
 {
     const IrInstance *in = &g->m->insts[ii];
@@ -3237,28 +3268,8 @@ static void sv_instance(SvGen *g, uint32_t ii, StrBuf *out)
             sb_printf(&head, "    %s", cn->name);
         }
     }
-    if (cm->is_extern && cm->nparams) {
-        sb_puts(&head, " #(");
-        for (i = 0; i < cm->nparams; i++) {
-            const IrParam *pp = &cm->params[i];
-            if (i)
-                sb_puts(&head, ", ");
-            sb_printf(&head, ".%s(", cn->param[i]);
-            if (pp->value.width <= 64 && !pp->is_signed)
-                sb_printf(&head, "%llu", (unsigned long long)ir_bits_low64(&pp->value));
-            else if (pp->value.width <= 64)
-                sb_printf(&head, "%lld",
-                          (long long)(pp->value.width == 64 ? ir_bits_low64(&pp->value)
-                                                             : (ir_bits_get(&pp->value, pp->value.width - 1)
-                                                                    ? ir_bits_low64(&pp->value) |
-                                                                          (~UINT64_C(0) << pp->value.width)
-                                                                    : ir_bits_low64(&pp->value))));
-            else
-                ir_bits_print(&pp->value, &head);
-            sb_putc(&head, ')');
-        }
-        sb_putc(&head, ')');
-    }
+    if (cm->is_extern)
+        sv_extern_params(cn, cm, &head);
     sb_printf(&head, " %s (", g->mn->inst[ii]);
     sb_append(out, head.data, head.len);
     sv_mark(g, in->loc, out);
@@ -4407,4 +4418,77 @@ void sv_params_free(IrDesign *d)
     arena_release(&plan->arena);
     free(plan);
     d->sv_params = NULL;
+}
+
+/* ============================================================ wrapper == */
+
+void sv_emit_wrapper(const IrDesign *d, const SvOptions *o, const char *name, StrBuf *out)
+{
+    SvCtx c;
+    SvGen g;
+    SvOptions def;
+    const IrModule *m = d->top;
+    uint32_t i;
+    size_t tw = 0, nw = 0;
+    StrBuf t = {0};
+    if (!o) {
+        sv_options_init(&def);
+        o = &def;
+    }
+    memset(&c, 0, sizeof c);
+    memset(&g, 0, sizeof g);
+    c.d = d;
+    c.o = o;
+    c.n = sv_names_new(d);
+    c.pkg = o->types_pkg ? o->types_pkg : sv_names_types_pkg(c.n);
+    c.v2005 = o->std == SV_STD_V2005;
+    g.c = &c;
+    g.m = m;
+    g.mn = svn_mod(c.n, m);
+    for (i = 0; i < m->nports; i++)
+        sv_use_type(&g, m->sigs[m->ports[i]].type);
+    sb_printf(out, "// %s.sv: test wrapper of %s, generated by tern. Do not edit.\n", name, g.mn->name);
+    sb_puts(out, "// The inputs are driven through VPI.\n// verilator lint_off UNDRIVEN\n");
+    sb_printf(out, "module %s", name);
+    if (!c.v2005 && map_len(&g.types))
+        sb_printf(out, "\n    import %s::*;\n", c.pkg);
+    sb_puts(out, ";\n");
+    for (i = 0; i < m->nports; i++) {
+        sb_reset(&t);
+        sv_decl_type(&g, m->sigs[m->ports[i]].type, &t);
+        while (t.len && t.data[t.len - 1] == ' ')
+            sb_truncate(&t, t.len - 1);
+        if (t.len > tw)
+            tw = t.len;
+        if (strlen(g.mn->sig[m->ports[i]]) > nw)
+            nw = strlen(g.mn->sig[m->ports[i]]);
+    }
+    for (i = 0; i < m->nports; i++) {
+        uint32_t p = m->ports[i];
+        sb_reset(&t);
+        if (c.v2005)
+            sb_puts(&t, m->sigs[p].kind == IRS_IN ? "reg " : "wire ");
+        sv_decl_type(&g, m->sigs[p].type, &t);
+        while (t.len && t.data[t.len - 1] == ' ')
+            sb_truncate(&t, t.len - 1);
+        sb_puts(out, "    ");
+        sb_append(out, t.data ? t.data : "", t.len);
+        sb_indent(out, (int)(tw + (c.v2005 ? 5 : 0) - t.len));
+        sb_printf(out, " %s;\n", g.mn->sig[p]);
+    }
+    sb_printf(out, "\n    %s", g.mn->name);
+    if (m->is_extern)
+        sv_extern_params(g.mn, m, out);
+    sb_puts(out, " dut (\n");
+    for (i = 0; i < m->nports; i++) {
+        const char *pn = g.mn->sig[m->ports[i]];
+        sb_printf(out, "        .%s", pn);
+        sb_indent(out, (int)(nw - strlen(pn)));
+        sb_printf(out, " (%s)%s\n", pn, i + 1 < m->nports ? "," : "");
+    }
+    sb_puts(out, "    );\n\nendmodule\n");
+    sb_free(&t);
+    map_free(&g.types);
+    sv_names_free(c.n);
+    arena_release(&c.scratch);
 }

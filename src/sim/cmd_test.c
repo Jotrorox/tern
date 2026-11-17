@@ -18,7 +18,13 @@
  * A worker that dies is reported for the test it was running; the rest of
  * its chunk is retried in a new worker. Each test's seed is derived from
  * --seed (default 1) and its name, so results do not depend on scheduling
- * and a failure replays with `tern test --seed <n> "<name>"`. */
+ * and a failure replays with `tern test --seed <n> "<name>"`.
+ *
+ * --backend builtin|verilator (spec 13.4) picks the simulator behind `sim
+ * M<..>()`; without it, designs that contain an extern module run on
+ * Verilator when it is installed (src/backend/vlsim.c) and are an error
+ * otherwise. With --backend verilator the tests run one at a time in this
+ * process. */
 #include "../base/common.h"
 #include "../base/args.h"
 #include "../base/str.h"
@@ -28,6 +34,7 @@
 #include "../cmds.h"
 #include "../os/os.h"
 #include "testrun.h"
+#include "../backend/backend.h"
 
 #define TEST_DEFAULT_SEED 1u
 
@@ -53,6 +60,9 @@ typedef struct TestCmd {
     uint64_t limit;
     const char *features;
     const char *worker;       /* --worker index list */
+    const char *backend;      /* --backend as given, or NULL */
+    TestRunBackend be;
+    int have_verilator;
     TestStrVec paths;
     TestStrVec filters;
     TestJobVec tests;
@@ -97,6 +107,8 @@ static void test_run_one(TestCmd *t, Driver *dr, TestJob *j, StrBuf *report)
     o.cover = t->cover;
     o.step_limit = t->limit;
     o.waves_path = j->waves;
+    o.backend = t->be;
+    o.remote = t->be != TR_BACKEND_BUILTIN && t->have_verilator ? vls_test_model : NULL;
     j->passed = testrun_run(dr, &j->di, &o, &t->cov, report);
     j->done = 1;
 }
@@ -221,6 +233,10 @@ static OsProc *test_spawn(TestCmd *t, const TestChunk *ch, char **err)
         vec_push(argv, (char *)"--cover");
     if (t->waves)
         vec_push(argv, (char *)"--waves");
+    if (t->backend) {
+        vec_push(argv, (char *)"--backend");
+        vec_push(argv, (char *)t->backend);
+    }
     if (t->features) {
         vec_push(argv, (char *)"--features");
         vec_push(argv, (char *)t->features);
@@ -455,8 +471,13 @@ int cmd_test(int argc, char **argv)
         else if (args_opt(&ap, "worker", &val))
             t.worker = val;
         else if (args_opt(&ap, "backend", &val)) {
-            if (strcmp(val, "builtin") != 0) {
-                fprintf(stderr, "tern test: error: backend `%s` is not supported (only `builtin`)\n", val);
+            t.backend = val;
+            if (strcmp(val, "builtin") == 0)
+                t.be = TR_BACKEND_BUILTIN;
+            else if (strcmp(val, "verilator") == 0)
+                t.be = TR_BACKEND_VERILATOR;
+            else {
+                fprintf(stderr, "tern test: error: unknown backend `%s` (builtin or verilator)\n", val);
                 ap.errors++;
             }
         } else if (args_positional(&ap)) {
@@ -467,12 +488,24 @@ int cmd_test(int argc, char **argv)
         } else
             args_unknown(&ap);
     }
+    t.have_verilator = t.be != TR_BACKEND_BUILTIN && vls_available();
+    if (!ap.errors && t.be == TR_BACKEND_VERILATOR && !t.have_verilator) {
+        fprintf(stderr, "tern test: error: --backend verilator needs Verilator on PATH (https://verilator.org)\n");
+        ap.errors++;
+    }
     if (ap.errors) {
         vec_free(t.paths);
         vec_free(t.filters);
         return TERN_EXIT_USAGE;
     }
     t.jobs = jobs ? (int)TERN_MIN(jobs, 256) : os_cpu_count();
+    /* Verilator models are separate processes (and compile once): one test at a time */
+    if (t.be == TR_BACKEND_VERILATOR) {
+        t.jobs = 1;
+        if (t.cover && !t.worker)
+            fprintf(stderr, "tern test: note: --cover counts only the built-in simulator; with --backend verilator "
+                            "no coverage is collected\n");
+    }
     t.color = !t.worker && os_color_enabled(1);
     o.paths = t.paths.data;
     o.npaths = t.paths.len;

@@ -280,10 +280,26 @@ waveforms stay readable.
 
 ## Designs with extern modules
 
-The built-in simulator cannot run the inside of an `extern module`. The spec
-runs such tests through a Verilator backend (`tern test --backend
-verilator`). That backend is not available in this release: `tern test`
-accepts only `--backend builtin`. Test the Tern parts of a mixed design on
-their own, or simulate the emitted SystemVerilog in your existing flow.
+The built-in simulator cannot run the inside of an `extern module`, so a test
+whose design contains one runs on [Verilator](https://verilator.org)
+instead, automatically when `verilator` is on `PATH` (otherwise the test
+fails with "needs --backend verilator (verilator not found)"). The test
+itself does not change:
+
+```
+tern test                        # extern designs on Verilator, the rest built-in
+tern test --backend verilator    # every design on Verilator
+tern test --backend builtin      # never (extern modules read as black boxes)
+```
+
+Tern emits the design with the extern modules' sources into
+`build/verilator/<top>/` and compiles it once with `verilator --build`; later
+runs reuse the model until the emitted sources change. Pokes, peeks, steps,
+`reset()`, `run(ns: ..)` and `dump(..)`/`--waves` behave as on the built-in
+simulator (same clocks, the same two reset cycles). A failing immediate
+assertion of the design stops the test with Verilator's message and the Tern
+line; properties and `--cover` are only available on the built-in
+simulator. With `--backend verilator` tests run one at a time. Verilator is
+also the faster choice for large designs.
 
 Next: [The standard library](08-standard-library.md).

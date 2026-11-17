@@ -618,6 +618,11 @@ struct OsProc {
     size_t out_len;
     char *err;
     size_t err_len;
+    /* interactive children: our ends of the stdin / stdout pipes */
+    HANDLE pin, pout;
+    char *ibuf;
+    size_t ilen, ioff, icap;
+    int ieof;
 };
 
 /* A delete-on-close temporary file, not inheritable. */
@@ -707,6 +712,7 @@ OsProc *os_spawn(char *const argv[], const OsSpawnOpts *opts, char **err_out)
     HANDLE hin = NULL, hout = NULL, herr = NULL;          /* given to the child */
     HANDLE own_in = NULL, own_out = NULL, own_err = NULL; /* temp files we keep */
     HANDLE dup_in = NULL, dup_out = NULL, dup_err = NULL; /* duplicated std handles */
+    HANDLE par_in = NULL, par_out = NULL;                 /* interactive: our pipe ends */
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     BOOL ok;
@@ -742,7 +748,16 @@ OsProc *os_spawn(char *const argv[], const OsSpawnOpts *opts, char **err_out)
     }
 
     /* stdin */
-    if (opts->stdin_data) {
+    if (opts->interactive) {
+        HANDLE rd = NULL, wr = NULL;
+        if (!CreatePipe(&rd, &wr, NULL, 0)) {
+            rd = INVALID_HANDLE_VALUE;
+            wr = NULL;
+        }
+        own_in = rd;
+        par_in = wr;
+        hin = own_in;
+    } else if (opts->stdin_data) {
         own_in = osw_temp_file();
         if (own_in != INVALID_HANDLE_VALUE) {
             LARGE_INTEGER zero;
@@ -767,7 +782,16 @@ OsProc *os_spawn(char *const argv[], const OsSpawnOpts *opts, char **err_out)
         hin = dup_in = osw_dup_inheritable(GetStdHandle(STD_INPUT_HANDLE));
     }
     /* stdout */
-    if (opts->capture_stdout) {
+    if (opts->interactive) {
+        HANDLE rd = NULL, wr = NULL;
+        if (!CreatePipe(&rd, &wr, NULL, 0)) {
+            rd = NULL;
+            wr = INVALID_HANDLE_VALUE;
+        }
+        own_out = wr;
+        par_out = rd;
+        hout = own_out;
+    } else if (opts->capture_stdout) {
         own_out = osw_temp_file();
         hout = own_out;
     } else {
@@ -837,12 +861,24 @@ cleanup_fail:
             CloseHandle(own_out);
         if (own_err && own_err != INVALID_HANDLE_VALUE)
             CloseHandle(own_err);
+        if (par_in)
+            CloseHandle(par_in);
+        if (par_out)
+            CloseHandle(par_out);
         return NULL;
     }
     CloseHandle(pi.hThread);
     p = (OsProc *)xcalloc(1, sizeof(OsProc));
     p->hproc = pi.hProcess;
-    p->hout = own_out;
+    if (opts->interactive) {
+        /* the child holds the write end of its stdout: close ours so that
+         * reads see the end of its output */
+        CloseHandle(own_out);
+        p->pin = par_in;
+        p->pout = par_out;
+    } else {
+        p->hout = own_out;
+    }
     p->herr = own_err;
     return p;
 }
@@ -957,10 +993,82 @@ void os_proc_kill(OsProc *p)
         TerminateProcess(p->hproc, 137);
 }
 
+int os_proc_write(OsProc *p, const char *data, size_t len)
+{
+    size_t off = 0;
+    if (!p || !p->pin)
+        return -1;
+    while (off < len) {
+        DWORD put = 0, chunk = (DWORD)(len - off > 0x10000u ? 0x10000u : len - off);
+        if (!WriteFile(p->pin, data + off, chunk, &put, NULL) || put == 0) {
+            CloseHandle(p->pin);
+            p->pin = NULL;
+            return -1;
+        }
+        off += put;
+    }
+    return 0;
+}
+
+char *os_proc_read_line(OsProc *p, int timeout_ms)
+{
+    uint64_t deadline = timeout_ms >= 0 ? os_time_ns() + (uint64_t)timeout_ms * 1000000u : 0;
+    if (!p)
+        return NULL;
+    for (;;) {
+        char *nl = p->ibuf && p->ilen > p->ioff ? (char *)memchr(p->ibuf + p->ioff, '\n', p->ilen - p->ioff) : NULL;
+        DWORD avail = 0;
+        if (nl || (p->ieof && p->ilen > p->ioff)) {
+            size_t end = nl ? (size_t)(nl - p->ibuf) : p->ilen;
+            size_t n = end - p->ioff;
+            char *line;
+            if (n && p->ibuf[p->ioff + n - 1] == '\r')
+                n--;
+            line = xstrndup(p->ibuf + p->ioff, n);
+            p->ioff = nl ? end + 1 : end;
+            if (p->ioff == p->ilen)
+                p->ilen = p->ioff = 0;
+            return line;
+        }
+        if (p->ieof || !p->pout)
+            return NULL;
+        if (!PeekNamedPipe(p->pout, NULL, 0, NULL, &avail, NULL)) {
+            p->ieof = 1;
+            continue;
+        }
+        if (avail) {
+            DWORD got = 0;
+            if (p->ilen + avail + 1 > p->icap) {
+                p->icap = (p->ilen + avail + 1) * 2;
+                p->ibuf = (char *)xrealloc(p->ibuf, p->icap);
+            }
+            if (!ReadFile(p->pout, p->ibuf + p->ilen, avail, &got, NULL) || got == 0)
+                p->ieof = 1;
+            p->ilen += got;
+            continue;
+        }
+        if (timeout_ms >= 0 && os_time_ns() >= deadline)
+            return NULL;
+        Sleep(1);
+    }
+}
+
+void os_proc_close_stdin(OsProc *p)
+{
+    if (p && p->pin) {
+        CloseHandle(p->pin);
+        p->pin = NULL;
+    }
+}
+
 void os_proc_free(OsProc *p)
 {
     if (!p)
         return;
+    os_proc_close_stdin(p);
+    if (p->pout)
+        CloseHandle(p->pout);
+    free(p->ibuf);
     if (!p->done) {
         TerminateProcess(p->hproc, 137);
         WaitForSingleObject(p->hproc, INFINITE);

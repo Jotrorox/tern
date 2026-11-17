@@ -85,9 +85,10 @@ module Top {
 }
 ```
 
-`tern build` copies `rtl/uart_tx.sv` next to the emitted files. The built-in
-simulator cannot run the inside of an extern module, so test the Tern side on
-its own until the leaf is converted.
+`tern build` copies `rtl/uart_tx.sv` next to the emitted files. Tests of a
+design with an extern module run on Verilator (`tern test` picks it when it
+is installed; [chapter 7](07-testing-and-verification.md#designs-with-extern-modules)),
+so the mixed design is tested as a whole while leaves are converted.
 
 When a synthesis or lint tool complains about the emitted code,
 `tern remap` translates its log back to Tern source lines
