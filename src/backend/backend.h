@@ -1,8 +1,10 @@
 /* backend.h — the commands that turn a design into files for, and results
- * from, external tools (spec §13.2): `tern build` (build.c), `tern prove`
- * (formal.c, with the VCD reader in vcdread.c), `tern synth` (synth.c) and
- * the Verilator lint helper (verilator.c).  docs/backend.md describes the
- * generated files and the external tools.
+ * from, external tools (spec §13.2): `tern build` (build.c, targets in
+ * target.c), `tern prove` (prove.c; generator, sby log parser and
+ * counterexample -> test in formal.c, VCD reader in vcdread.c), `tern
+ * synth` (cmd_synth.c; scripts and report parsers in synth.c) and the
+ * Verilator lint helper (verilator.c).  docs/ARCHITECTURE.md ("Back ends")
+ * describes the generated files and the external tools.
  *
  *     // build: elaborate, check, emit (shared by build / synth)
  *     BkBuildOptions bo; BkBuild b;
@@ -55,7 +57,7 @@ typedef enum BkFamily {
 typedef enum BkTool { BK_TOOL_NONE, BK_TOOL_YOSYS, BK_TOOL_VIVADO, BK_TOOL_QUARTUS } BkTool;
 
 /* A resolved build target: [target.<name>] of tern.toml with defaults.
- * Recognized keys besides device/top/backend/std (docs/backend.md):
+ * Recognized keys besides device/top/backend/std (docs/ARCHITECTURE.md, "Back ends"):
  *   vendor = "xilinx" | "intel" | "lattice" | "ice40" | "ecp5" | "gowin" | "asic" | "generic"
  *   kind = "fpga" | "asic"                (default: asic for vendor "asic")
  *   constraints = "xdc,sdc" | "none" | ["xdc"]   (default: by family)

@@ -223,19 +223,25 @@ $(OBJ)/sim_vcd.o: src/sim/vcd.c $(HDRS) $(OBJ)/.dir
 
 # --- backend/
 BACKEND_SRCS = \
+	src/backend/target.c \
 	src/backend/build.c \
 	src/backend/verilator.c \
 	src/backend/vcdread.c \
 	src/backend/formal.c \
 	src/backend/prove.c \
-	src/backend/synth.c
+	src/backend/synth.c \
+	src/backend/cmd_synth.c
 BACKEND_OBJS = \
+	$(OBJ)/backend_target.o \
 	$(OBJ)/backend_build.o \
 	$(OBJ)/backend_verilator.o \
 	$(OBJ)/backend_vcdread.o \
 	$(OBJ)/backend_formal.o \
 	$(OBJ)/backend_prove.o \
-	$(OBJ)/backend_synth.o
+	$(OBJ)/backend_synth.o \
+	$(OBJ)/backend_cmd_synth.o
+$(OBJ)/backend_target.o: src/backend/target.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/target.c -o $@
 $(OBJ)/backend_build.o: src/backend/build.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/build.c -o $@
 $(OBJ)/backend_verilator.o: src/backend/verilator.c $(HDRS) $(OBJ)/.dir
@@ -248,6 +254,8 @@ $(OBJ)/backend_prove.o: src/backend/prove.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/prove.c -o $@
 $(OBJ)/backend_synth.o: src/backend/synth.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/backend/synth.c -o $@
+$(OBJ)/backend_cmd_synth.o: src/backend/cmd_synth.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/backend/cmd_synth.c -o $@
 
 # --- pkg/
 PKG_SRCS = \
@@ -388,7 +396,8 @@ UNIT_TESTS = \
 	build/test_pkg \
 	build/test_tools \
 	build/test_fmt \
-	build/test_emit
+	build/test_emit \
+	build/test_backend
 
 tests/run: tests/run.c $(TEST_DEPS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS)
@@ -407,6 +416,9 @@ build/test_tools: tests/unit/test_tools.c $(TEST_DEPS) $(TOOLS_SRCS) $(OBJ)/.dir
 
 build/test_fmt: tests/unit/test_fmt.c $(TEST_DEPS) $(SYNTAX_SRCS) $(TOOLS_SRCS) src/std_embed.c $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_fmt.c $(LDLIBS)
+
+build/test_backend: tests/unit/test_backend.c $(TEST_DEPS) $(IR_SRCS) $(EMIT_SRCS) $(BACKEND_SRCS) src/pkg/toml.c $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_backend.c $(LDLIBS)
 
 build/test_emit: tests/unit/test_emit.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(EMIT_SRCS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_emit.c $(LDLIBS)

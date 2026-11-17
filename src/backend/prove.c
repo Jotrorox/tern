@@ -137,6 +137,21 @@ static const IrModule *pv_find_module(Driver *dr, const char *name, Arena *ira, 
     uint32_t g, i;
     int defaults = 1;
     IrDesign *d;
+    if (!it) {
+        /* not a user item: a module the design instantiates (std::fifo::Fifo
+         * imported with `use`), by source name or emitted name */
+        const char *iname = intern_cstr(name);
+        int errs = diag_error_count();
+        d = driver_elaborate_top(dr, NULL, ira);
+        *dout = d;
+        if (d && diag_error_count() == errs)
+            for (i = 0; i < d->nmodules; i++)
+                if (!d->modules[i]->is_extern &&
+                    (strcmp(d->modules[i]->tern_name, iname) == 0 || strcmp(d->modules[i]->name, name) == 0))
+                    return d->modules[i];
+        if (diag_error_count() != errs)
+            return NULL;
+    }
     if (!it || it->kind != ITEM_MODULE) {
         diag_error(span_none(), "cannot find module `%s`%s", name,
                    it && it->kind == ITEM_EXTERN ? " (extern modules are black boxes and cannot be proven)" : "");

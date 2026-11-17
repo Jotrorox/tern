@@ -1,0 +1,12 @@
+Info: Packing constants..
+Info: Placed 12 cells based on constraints.
+Info: Max frequency for clock 'clk$SB_IO_IN_$glb_clk': 140.11 MHz (PASS at 12.00 MHz)
+
+Info: Max delay <async>                          -> posedge clk$SB_IO_IN_$glb_clk: 1.67 ns
+Info: Routing..
+Info: Critical path report for clock 'clk$SB_IO_IN_$glb_clk' (posedge -> posedge):
+Info: curr total
+Info:  1.4  1.4  Source count_SB_DFFR_Q_D_SB_LUT4_O.O
+Info: Max frequency for clock 'clk$SB_IO_IN_$glb_clk': 98.52 MHz (PASS at 12.00 MHz)
+
+Info: Program finished normally.

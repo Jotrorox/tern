@@ -3,7 +3,7 @@
  *
  * The command itself is in prove.c.
  *
- * Files in build/formal/<Module>/ (docs/backend.md):
+ * Files in build/formal/<Module>/ (docs/ARCHITECTURE.md, "Back ends"):
  *   <Mod>.v ...           the module and everything below it as Verilog-2005
  *                         (what open-source Yosys reads best), each with a
  *                         checker block under `ifdef FORMAL` appended:
@@ -1154,7 +1154,8 @@ static int fv_find_loc(const char *s, char *file, size_t fcap, uint32_t *line)
         uint32_t l = 0;
         if (!tern_is_digit((unsigned char)*q))
             continue;
-        while (b > s && !tern_is_space((unsigned char)b[-1]) && b[-1] != '(' && b[-1] != '/' && b[-1] != '\'')
+        while (b > s && !tern_is_space((unsigned char)b[-1]) && b[-1] != '(' && b[-1] != '/' && b[-1] != '\'' &&
+               b[-1] != '$')
             b--;
         while (tern_is_digit((unsigned char)*q))
             l = l * 10 + (uint32_t)(*q++ - '0');
@@ -1238,6 +1239,8 @@ FvStatus fv_parse_sby_log(FvPlan *plan, const char *task, const char *log)
                 size_t k;
                 int dup = 0;
                 c->status = FV_FAIL;
+                if (strstr(line, "Assert failed in"))
+                    c->trace = NULL; /* the trace file named next */
                 if (fv_find_step(line, &step))
                     c->step = step;
                 else if (have_step)
@@ -1256,10 +1259,9 @@ FvStatus fv_parse_sby_log(FvPlan *plan, const char *task, const char *log)
             FvCheck *c = fv_check_at(plan, file, ln);
             if (c) {
                 c->status = FV_REACHED;
+                c->trace = NULL; /* the trace file named next */
                 if (fv_find_step(line, &step))
                     c->step = step;
-                if (trace)
-                    c->trace = trace;
                 vec_push(failed, c); /* the next trace file belongs to it */
             }
         }
