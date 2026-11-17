@@ -44,8 +44,11 @@ test "fifo preserves order" {
 * `dut.reset()` asserts reset for two cycles. `dut.step(n = 1)` advances
   `n` cycles of the default domain. `dut.settle()` evaluates combinational
   logic without a clock edge. `dut.step_until(cond, max: 1000)` steps until
-  `cond` holds, returns the number of cycles it took, and fails at `max`.
-  `dut.cycle()` is the current cycle number.
+  `cond` holds, returns the number of cycles it took, and fails at `max`
+  (stopping the test). `dut.expect_eventually(cond, max: 20)` (std::sim's
+  `expect_eventually`) waits the same way but records the failure like
+  `expect` and lets the test go on. `dut.cycle()` is the current cycle
+  number.
 * `expect cond` records a failure and continues. `assert cond` stops the
   test. Both print the expression with the values of its operands and the
   cycle number.
