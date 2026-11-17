@@ -1,0 +1,29 @@
+// A reg of a bundle type without flip fields is one register per field
+// (spec §8.1); a bundle literal gives the reset values.
+module Pipe {
+    in clk: clock
+    in rst: reset
+    in a: Valid<u8>
+    out y: Valid<u8>
+    reg q: Valid<u8> = Valid { valid: false, data: 0 }
+    reg r: Valid<u8>
+    on clk {
+        q = a
+        r.valid = q.valid
+        if q.valid { r.data = q.data +% 1 }
+    }
+    y = r
+}
+
+test "bundle registers" {
+    let dut = sim Pipe()
+    dut.reset()
+    dut.a = Valid { valid: true, data: 4 }
+    dut.step()
+    expect dut.q.valid and dut.q.data == 4
+    dut.a.valid = false
+    dut.step()
+    expect dut.y.valid and dut.y.data == 5
+    dut.step()
+    expect !dut.y.valid
+}
