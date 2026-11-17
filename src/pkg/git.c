@@ -538,6 +538,9 @@ static int git_prov_fetch(void *user, PkgNode *node, Arena *a)
         node->root = node->url;
         return 0;
     }
+    if (!node->commit && ctx->hint_commit && tag && ctx->hint_tag && node->url && ctx->hint_url &&
+        strcmp(node->url, ctx->hint_url) == 0 && strcmp(tag, ctx->hint_tag) == 0)
+        node->commit = arena_strdup(a, ctx->hint_commit);
     if (node->commit) {
         char *cd = pkg_cache_dir(node->name, node->commit);
         if (os_is_dir(cd)) {

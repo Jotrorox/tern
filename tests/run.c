@@ -16,6 +16,8 @@
  *     foo.ir      tern ir --diag-format=short foo.tern             (stdout: elaborated IR)
  *     foo.unused  tern check --unused --diag-format=short foo.tern (stderr)
  *     foo.cdc     tern check --cdc-report --diag-format=short foo.tern (stdout: CDC report)
+ *     foo.sim     tern sim --diag-format=short foo.tern (stdout, then stderr; give the top and
+ *                 a stimulus script with `// args: Top foo.stim`)
  *
  * Output and expectation are compared after normalization (CRLF -> LF,
  * trailing whitespace and trailing blank lines removed). A fixture whose
@@ -43,7 +45,7 @@
 typedef struct RunKind {
     const char *ext;
     const char *args[4];   /* tern arguments before the file name */
-    int use_stderr;        /* compare stderr instead of stdout */
+    int use_stderr;        /* compare stderr instead of stdout; 2: stdout, then stderr */
 } RunKind;
 
 static const RunKind run_kinds[] = {
@@ -55,6 +57,7 @@ static const RunKind run_kinds[] = {
     {".ir", {"ir", "--diag-format=short", NULL, NULL}, 0},
     {".unused", {"check", "--unused", "--diag-format=short", NULL}, 1},
     {".cdc", {"check", "--cdc-report", "--diag-format=short", NULL}, 0},
+    {".sim", {"sim", "--diag-format=short", NULL, NULL}, 2},
 };
 
 typedef struct RunJob {
@@ -422,9 +425,20 @@ static void run_finish(RunState *st, RunJob *j)
         return;
     }
     {
-        const char *raw = j->kind->use_stderr ? err : out;
-        size_t raw_len = j->kind->use_stderr ? err_len : out_len;
-        char *actual = run_normalize(raw, raw_len);
+        const char *raw = j->kind->use_stderr == 1 ? err : out;
+        size_t raw_len = j->kind->use_stderr == 1 ? err_len : out_len;
+        StrBuf both = {0};
+        char *actual;
+        if (j->kind->use_stderr == 2) {
+            /* stdout, then stderr (deterministic, unlike interleaving) */
+            sb_append(&both, out ? out : "", out_len);
+            sb_puts(&both, "---- stderr ----\n");
+            sb_append(&both, err ? err : "", err_len);
+            raw = sb_cstr(&both);
+            raw_len = both.len;
+        }
+        actual = run_normalize(raw, raw_len);
+        sb_free(&both);
         char *exp_raw = NULL, *expected;
         size_t exp_len = 0;
         int same;

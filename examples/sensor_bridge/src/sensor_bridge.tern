@@ -1,0 +1,98 @@
+package sensor_bridge
+
+// Two clock domains. An ADC delivers 12-bit samples on its own 25 MHz clock;
+// the system side runs at 100 MHz and averages them. Every crossing goes
+// through a std::cdc primitive, and `tern check --cdc-report` lists them:
+//
+//     samples   adc -> sys   AsyncFifo             the data path
+//     capture   sys -> adc   Sync2                 a quasi-static enable level
+//     dropped   adc -> sys   GrayCounter + Sync2   a counter read in the other domain
+//     resets    ext -> both  ResetSync             asynchronous assert, synchronous release
+
+use std::cdc::{AsyncFifo, GrayCounter, ResetSync, Sync2}
+use std::dsp::MovingAverage
+use std::math::{max, ungray}
+
+/// One ADC conversion.
+pub type Sample = uint<12>
+
+/// Bridges ADC samples into the system clock domain and averages them.
+///
+/// * While `capture` is high, every `adc_valid` sample is pushed into an
+///   asynchronous FIFO; samples arriving while it is full are dropped and
+///   counted in `dropped`.
+/// * The system side pops one sample per cycle, keeps the running average
+///   of the last `Window` samples on `avg`, the largest sample since reset
+///   on `peak` and the number of samples received on `count`.
+#[top]
+pub module SensorBridge<Window: uint = 4, Depth: uint = 16>
+where Window.is_pow2(), Depth.is_pow2()
+{
+    /// System clock.
+    #[clock(hz: 100_000_000)]
+    in sys_clk: clock
+    /// ADC sample clock.
+    #[clock(hz: 25_000_000)]
+    in adc_clk: clock
+    /// Board reset (asynchronous, active high).
+    in ext_rst: reset<async>
+
+    let sys_rs = ResetSync(clk: sys_clk, rst_in: ext_rst)
+    let adc_rs = ResetSync(clk: adc_clk, rst_in: ext_rst)
+    domain sys = (sys_clk, sys_rs.rst_out as reset)
+    domain adc = (adc_clk, adc_rs.rst_out as reset)
+
+    /// Enable sampling (system side, changes rarely).
+    in capture: bool @ sys
+    /// Sample strobe from the converter.
+    in adc_valid: bool @ adc
+    /// Sample value, valid with `adc_valid`.
+    in adc_data: Sample @ adc
+
+    /// Average of the last `Window` samples.
+    out avg: Valid<Sample> @ sys
+    /// Largest sample since reset.
+    out peak: Sample @ sys
+    /// Samples received.
+    out count: u16 @ sys
+    /// Samples dropped because the FIFO was full.
+    out dropped: u16 @ sys
+
+    // ---- adc domain: capture ----
+    reg capture_q: bool = false @ sys
+    on sys { capture_q = capture }
+    let capture_adc = Sync2(src: sys.clock, dst: adc.clock, d: capture_q)
+
+    let fifo = AsyncFifo<Sample, Depth>(
+        push: Stream { valid: adc_valid and capture_adc.q, data: adc_data },
+        src: adc.clock,
+        src_rst: adc.reset,
+        dst: sys.clock,
+        dst_rst: sys.reset,
+    )
+    // drops are counted in the adc domain; the Gray-coded count crosses
+    let lost = GrayCounter<16>(en: adc_valid and capture_adc.q and !fifo.push.ready) @ adc
+    let lost_sys = Sync2<bit<16>>(src: adc.clock, dst: sys.clock, d: lost.gray)
+
+    // ---- sys domain: statistics ----
+    fifo.pop.ready = true
+    let sample = Valid { valid: fifo.pop.valid, data: fifo.pop.data }
+    let mavg = MovingAverage<Sample, Window, Signed: false>(in: sample) @ sys
+
+    reg peak_q: Sample = 0 @ sys
+    reg count_q: u16 = 0 @ sys
+    on sys {
+        if sample.valid {
+            peak_q = max(peak_q, sample.data)
+            count_q = count_q +% 1
+        }
+    }
+
+    avg = mavg.out
+    peak = peak_q
+    count = count_q
+    dropped = ungray(lost_sys.q)
+
+    /// The peak never decreases.
+    property peak_monotonic { always peak_q >= past(peak_q) }
+}

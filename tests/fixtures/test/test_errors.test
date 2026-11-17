@@ -1,0 +1,54 @@
+running 7 tests
+test step on two domains ... FAILED
+    test_errors.tern:18:5: error: `AsyncFifo<uint<8>, 4>` has 2 clocks and no default domain: step() does not know which
+       |
+    18 |     dut.step()
+       |     ^^^^^^^^^^
+       = help: step one clock (`dut.src.step()`, `dut.dst.step()`), or advance all of them with `dut.run(ns: ..)`
+      in: test "step on two domains"
+
+test missing type generic ... FAILED
+    test_errors.tern:22:19: error: missing generic argument `T` for `Fifo`
+       |
+    22 |     let dut = sim Fifo()
+       |                   ^^^^
+       = help: give it a type: `Fifo<T: u8, ..>`
+      in: test "missing type generic"
+
+test expect non-bool ... FAILED
+    test_errors.tern:29:12: error: assertion condition must be bool, found uint<8>
+       |
+    29 |     expect dut.y
+       |            ^^^^^
+       = help: compare it: `dut.y != 0`
+      in: test "expect non-bool"
+
+test read internal ... FAILED
+    test_errors.tern:37:16: error: `M` has no signal `rr`
+       |
+    37 |     expect dut.rr == 5
+       |                ^^
+       = help: did you mean `r`?
+      in: test "read internal"
+
+test write internal ... FAILED
+    test_errors.tern:42:5: error: cannot drive internal signal `r` from a test
+       |
+    42 |     dut.r = 5
+       |     ^^^^^^^^^
+       = help: a signal a test must drive is exposed with #[test_port]
+      in: test "write internal"
+
+test wrong field ... FAILED
+    test_errors.tern:48:5: error: `Fifo<uint<8>, 4, 3>` has no signal `push.vaild`
+       |
+    48 |     dut.push.vaild = true
+       |     ^^^^^^^^^^^^^^^^^^^^^
+       = help: did you mean `push.valid`?
+      in: test "wrong field"
+
+test step_until times out ... FAILED
+    test_errors.tern:54:5: step_until failed at cycle 7: `dut.y == 9` did not hold within 5 cycles
+
+FAILED: 0 passed, 7 failed
+replay a failing test with: tern test --seed 1 "<name>"

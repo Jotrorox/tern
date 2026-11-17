@@ -35,6 +35,7 @@ typedef struct SimCmd {
     Arena ast;                /* ASTs of the executed lines */
     int interactive;
     uint32_t lineno;
+    const char *srcname;      /* script path or "<stdin>" (diagnostic locations) */
 } SimCmd;
 
 static void simc_help(void)
@@ -83,18 +84,22 @@ static void simc_flush_report(SimCmd *c)
     fflush(stdout);
 }
 
-/* runs Tern statements; returns 1 on success */
-static int simc_exec(SimCmd *c, const char *code)
+/* runs Tern statements; returns 1 on success. `label` (or NULL) is printed
+ * before the value of a trailing expression (`peek`), only when it runs. */
+static int simc_exec(SimCmd *c, const char *code, const char *label)
 {
     StrBuf src = {0};
     StrBuf out = {0};
-    uint32_t id;
+    uint32_t id, i;
     AstFile *f;
     int ok;
-    char name[64];
-    snprintf(name, sizeof name, "<line %u>", (unsigned)c->lineno);
-    sb_printf(&src, "test \"\" {\n%s\n}\n", code);
-    id = src_add(name, src.data, src.len);
+    /* The statements are wrapped in a test body; the wrapper's newlines put
+     * them on their line of the script, so diagnostics read `stim.txt:7:1`. */
+    sb_puts(&src, c->lineno > 1 ? "test \"\" {" : "test \"\" { ");
+    for (i = 1; i < c->lineno; i++)
+        sb_putc(&src, '\n');
+    sb_printf(&src, "%s\n}\n", code);
+    id = src_add(c->lineno ? c->srcname : "<command line>", src.data, src.len);
     sb_free(&src);
     f = parse_file(&c->ast, id);
     diag_flush();
@@ -104,8 +109,11 @@ static int simc_exec(SimCmd *c, const char *code)
     }
     ok = testrun_session_exec(c->ts, f->items[0]->u.test.body, &out);
     simc_flush_report(c);
-    if (out.len)
+    if (out.len) {
+        if (label)
+            printf("%s = ", label);
         fputs(sb_cstr(&out), stdout);
+    }
     sb_free(&out);
     if (!ok)
         testrun_session_clear(c->ts);
@@ -195,10 +203,8 @@ static int simc_line(SimCmd *c, char *line)
                     e++;
                 if (*e)
                     *e++ = 0;
-                printf("%s = ", q);
-                fflush(stdout);
                 sb_printf(&one, "dut.%s", q);
-                if (!simc_exec(c, sb_cstr(&one)))
+                if (!simc_exec(c, sb_cstr(&one), q))
                     ok = 0;
                 sb_free(&one);
                 q = e;
@@ -207,9 +213,10 @@ static int simc_line(SimCmd *c, char *line)
             }
             return ok;
         } else if (word_path && !*rest) {
-            printf("%s = ", word);
-            fflush(stdout);
             sb_printf(&code, "dut.%s", word);
+            r = simc_exec(c, sb_cstr(&code), word);
+            sb_free(&code);
+            return r;
         } else if (word_path && rest[0] == '=' && rest[1] != '=') {
             sb_printf(&code, "dut.%s %s", word, rest);
         } else {
@@ -217,7 +224,7 @@ static int simc_line(SimCmd *c, char *line)
         }
 #undef SIMC_IS
     }
-    r = simc_exec(c, sb_cstr(&code));
+    r = simc_exec(c, sb_cstr(&code), NULL);
     sb_free(&code);
     return r;
 }
@@ -324,12 +331,13 @@ int cmd_sim(int argc, char **argv)
     to.seed = testrun_test_seed(seed, "tern sim");
     c.ts = testrun_session_new(c.dr, scope, &to, &c.report);
     c.interactive = !script_text && os_isatty(0);
+    c.srcname = script ? script : "<stdin>";
     {
         StrBuf init = {0};
         int ok;
         sb_printf(&init, "let dut = sim %s()", top);
         c.lineno = 0;
-        ok = simc_exec(&c, sb_cstr(&init));
+        ok = simc_exec(&c, sb_cstr(&init), NULL);
         sb_free(&init);
         if (ok && vcd) {
             StrBuf d = {0};
@@ -367,6 +375,7 @@ int cmd_sim(int argc, char **argv)
     } else {
         char buf[4096];
         for (;;) {
+            int r;
             if (c.interactive) {
                 fputs("tern> ", stdout);
                 fflush(stdout);
@@ -374,8 +383,15 @@ int cmd_sim(int argc, char **argv)
             if (!fgets(buf, sizeof buf, stdin))
                 break;
             c.lineno++;
-            if (simc_line(&c, buf) < 0)
+            r = simc_line(&c, buf);
+            if (r < 0)
                 break;
+            if (r == 0 && !c.interactive) {
+                /* piped stdin behaves like a script: stop, exit status 1 */
+                fprintf(stderr, "tern sim: <stdin>:%u: stopped at this line\n", (unsigned)c.lineno);
+                rc = TERN_EXIT_FAIL;
+                break;
+            }
         }
         if (c.interactive)
             putchar('\n');

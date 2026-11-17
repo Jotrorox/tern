@@ -4,6 +4,7 @@
 #   make test             build and run the unit tests and the golden tests
 #                         (including `tern test std`, about 3 s)
 #   make test-std         only `tern test std`
+#   make examples         check, test and build the projects in examples/ (part of `make test`)
 #   make unity            one-command build: $(CC) ... -o tern src/unity.c
 #   make check-warnings   -Werror builds of everything as C99 and as C11
 #   make fuzz             libFuzzer parser harness build/fuzz_parser (clang;
@@ -483,6 +484,29 @@ test: $(BIN) tests/run $(UNIT_TESTS)
 	./$(BIN) parse std
 	./$(BIN) fmt --check std
 	./tests/run --tern ./$(BIN)
+	$(MAKE) examples
+
+# The example projects (about a second): tern check, test, build (SV and
+# Verilog-2005) and fmt --check in each; with iverilog on PATH, also their
+# sim/tb_*.sv benches against the emitted RTL. Output only on failure.
+EXAMPLES = uart_loopback sensor_bridge smoother
+examples: $(BIN)
+	@for e in $(EXAMPLES); do \
+	  d=examples/$$e; t=../../$(BIN); \
+	  out=`cd $$d && $$t check --diag-format=short 2>&1 >/dev/null && \
+	    $$t test --diag-format=short 2>&1 && $$t build -q 2>&1 && \
+	    $$t build -q --target v2005 2>&1 && $$t fmt --check 2>&1` || \
+	    { echo "$$out"; echo "$$d: FAILED"; exit 1; }; \
+	  if command -v iverilog >/dev/null 2>&1; then \
+	    for tb in $$d/sim/tb_*.sv; do \
+	      [ -f "$$tb" ] || continue; \
+	      out=`cd $$d && { iverilog -g2012 -o build/tb.vvp -c build/default/*.f sim/\`basename $$tb\` \
+	        2>build/iverilog.log && vvp -n build/tb.vvp 2>&1 || cat build/iverilog.log; }`; \
+	      case "$$out" in *PASS*) ;; *) echo "$$out"; echo "$$tb: FAILED"; exit 1;; esac; \
+	    done; \
+	  fi; \
+	  echo "examples/$$e: ok"; \
+	done
 
 # `tern test std` (also run by tests/run as part of `make test`)
 test-std: $(BIN)
@@ -523,4 +547,4 @@ clean:
 	rm -rf build tests/out
 	rm -f tern tern.exe tools/embed tools/embed.exe tests/run tests/run.exe
 
-.PHONY: all test test-std unity check-warnings fuzz install clean FORCE
+.PHONY: all test test-std examples unity check-warnings fuzz install clean FORCE

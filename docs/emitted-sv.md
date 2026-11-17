@@ -25,6 +25,7 @@ constructs** beyond standard attributes.
 | `<Module>_<mem>.hex` | `$readmemh` contents of an initialized memory |
 | `<Module>_<mem>.mif`, `.coe` | the same contents for Intel / Xilinx flows (`SV_MEMINIT_MIF`, `SV_MEMINIT_COE`) |
 | `<top>.xdc`, `<top>.sdc` | clocks, CDC constraints, CDC report (`src/emit/constraints.c`) |
+| `<top>.f` | written by `tern build` to disk (not with `--stdout`): the package and module files in compile order, as paths relative to the directory `tern build` ran in (`iverilog -g2012 -c build/default/Top.f`) |
 | `<Map>.h`, `<Map>.svd`, `<Map>.md` | per register map (`src/emit/regmap.c`) |
 
 Order: package, modules (children before parents), memory files,

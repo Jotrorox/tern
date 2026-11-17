@@ -67,6 +67,8 @@ typedef struct BlkCtx {
 /* consteval.c */
 void el_error(Elab *el, Span at, const char *fmt, ...) TERN_PRINTF(3, 4);
 void el_help(Elab *el, const char *fmt, ...) TERN_PRINTF(2, 3);
+/* the candidate closest to `name` (edit distance, as for "did you mean"), or NULL */
+const char *el_closest(const char *name, const char *const *cands, size_t n);
 void el_note(Elab *el, Span at, const char *fmt, ...) TERN_PRINTF(3, 4);
 void el_warning(Elab *el, Span at, const char *fmt, ...) TERN_PRINTF(3, 4);
 int el_step(Elab *el, Span at);

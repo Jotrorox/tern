@@ -282,10 +282,13 @@ static void lex_line_comment(Lexer *lx)
             lex_error(lx, start + bad, 1, "invalid UTF-8 in comment");
     }
     if (doc) {
-        size_t t = start + 3;
+        size_t t = start + 3, te = end;
         lex_comment(lx, COMMENT_DOC, start, end - start);
         if (t < end && lx->s[t] == ' ')
             t++;
+        /* trailing whitespace is not doc text (tern fmt removes it) */
+        while (te > t && (lx->s[te - 1] == ' ' || lx->s[te - 1] == '\t'))
+            te--;
         if (!lx->doc_pending) {
             lx->doc_pending = 1;
             lx->doc_start = start;
@@ -293,7 +296,7 @@ static void lex_line_comment(Lexer *lx)
         } else {
             sb_putc(&lx->doc_text, '\n');
         }
-        sb_append(&lx->doc_text, lx->s + t, end - t);
+        sb_append(&lx->doc_text, lx->s + t, te - t);
         lx->doc_end = end;
     } else {
         lex_comment(lx, COMMENT_LINE, start, end - start);

@@ -118,7 +118,7 @@ static void test_print_ready(TestCmd *t)
         if (j->report && *j->report)
             fputs(j->report, stdout);
         if (!j->passed && j->waves && os_is_file(j->waves))
-            printf("    waveform: %s\n", j->waves);
+            printf("    waveform: %s\n", diag_path_display(j->waves));
     }
     fflush(stdout);
 }
@@ -510,7 +510,7 @@ int cmd_test(int argc, char **argv)
     if (t.list) {
         for (i = 0; i < t.tests.len; i++) {
             const TestJob *j = &t.tests.data[i];
-            printf("%s:%u: %s\n", j->di.file->ast->path, (unsigned)j->di.item->span.line,
+            printf("%s:%u: %s\n", diag_path_display(j->di.file->ast->path), (unsigned)j->di.item->span.line,
                    j->di.item->u.test.name ? j->di.item->u.test.name : "");
         }
         goto done;

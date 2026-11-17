@@ -73,7 +73,7 @@ uint64_t testrun_test_seed(uint64_t base, const char *name)
 static void tr_loc(Span sp, StrBuf *out)
 {
     const SourceFile *f = src_get(sp.file);
-    sb_printf(out, "%s:%u:%u", f ? f->path : "<unknown>", (unsigned)sp.line, (unsigned)sp.col);
+    sb_printf(out, "%s:%u:%u", f ? diag_path_display(f->path) : "<unknown>", (unsigned)sp.line, (unsigned)sp.col);
 }
 
 /* source text of a span with whitespace runs collapsed */
@@ -512,10 +512,33 @@ static void tr_step(TrSim *s, uint32_t dom, uint64_t n)
 static int tr_domain_or_error(TrSim *s, int dom, Span at)
 {
     if (dom < 0) {
-        dom = sim_default_domain(s->m);
+        const SimModel *m = s->m;
+        dom = sim_default_domain(m);
         if (dom < 0) {
             el_error(s->ctx->el, at, "`%s` has no clock domain to step", s->display);
             el_help(s->ctx->el, "use settle() to evaluate combinational logic");
+        } else if (m->top->default_domain == IR_NONE) {
+            /* several clocks and no default domain: say which to step */
+            StrBuf names = {0};
+            uint32_t k, j, nclk = 0;
+            for (k = 0; k < m->topdoms.len; k++) {
+                uint32_t ck = m->topdoms.data[k].clock;
+                for (j = 0; j < k && m->topdoms.data[j].clock != ck; j++)
+                    ;
+                if (j < k)
+                    continue; /* domains over the same clock step together */
+                nclk++;
+                sb_printf(&names, "%s`dut.%s.step()`", names.len ? ", " : "",
+                          sim_signal_name(m, (int)m->clocks.data[ck].sig));
+            }
+            if (nclk > 1) {
+                el_error(s->ctx->el, at, "`%s` has %u clocks and no default domain: step() does not know which",
+                         s->display, (unsigned)nclk);
+                el_help(s->ctx->el, "step one clock (%s), or advance all of them with `dut.run(ns: ..)`",
+                        sb_cstr(&names));
+                dom = -1;
+            }
+            sb_free(&names);
         }
     }
     return dom;
@@ -1695,7 +1718,7 @@ void testcov_report(TestCov *c, StrBuf *out)
                 any_cover = 1;
         }
         if (lines || br) {
-            sb_printf(out, "  %s: lines ", file);
+            sb_printf(out, "  %s: lines ", diag_path_display(file));
             tr_pct(out, lines_hit, lines);
             sb_puts(out, ", branches ");
             tr_pct(out, br_hit, br);
@@ -1719,8 +1742,9 @@ void testcov_report(TestCov *c, StrBuf *out)
                 sb_printf(out, "    property %s", p->name ? p->name : "_");
             else
                 sb_puts(out, "    cover");
-            sb_printf(out, " (%s:%u:%u): %llu hit%s%s\n", p->file, (unsigned)p->line, (unsigned)p->col,
-                      (unsigned long long)p->count, p->count == 1 ? "" : "s", p->count ? "" : "  <- never hit");
+            sb_printf(out, " (%s:%u:%u): %llu hit%s%s\n", diag_path_display(p->file), (unsigned)p->line,
+                      (unsigned)p->col, (unsigned long long)p->count, p->count == 1 ? "" : "s",
+                      p->count ? "" : "  <- never hit");
         }
     }
 }

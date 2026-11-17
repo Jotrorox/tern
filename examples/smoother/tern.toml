@@ -1,0 +1,13 @@
+[package]
+name = "smoother"
+version = "0.1.0"
+description = "Pipelined binomial smoothing filter with a gain table, a run-control FSM and a CRC signature"
+license = "MIT"
+
+[target.default]
+top = "Smoother"
+std = "sv"
+
+[target.v2005]
+top = "Smoother"
+std = "verilog2005"

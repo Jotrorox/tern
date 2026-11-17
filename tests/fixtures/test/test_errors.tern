@@ -1,0 +1,55 @@
+// args: --diag-format=human
+// errors inside test blocks: wrong domain, generics, types and signal names
+use std::fifo::{Fifo, AsyncFifo}
+
+module M {
+    in clk: clock
+    in rst: reset
+    in a: u8
+    out y: u8
+    reg r: u8 = 0
+    on clk { r = a }
+    y = r
+}
+
+test "step on two domains" {
+    let dut = sim AsyncFifo<u8, 4>()
+    dut.reset()
+    dut.step()
+}
+
+test "missing type generic" {
+    let dut = sim Fifo()
+    dut.reset()
+}
+
+test "expect non-bool" {
+    let dut = sim M()
+    dut.reset()
+    expect dut.y
+}
+
+test "read internal" {
+    let dut = sim M()
+    dut.reset()
+    dut.a = 5
+    dut.step()
+    expect dut.rr == 5
+}
+
+test "write internal" {
+    let dut = sim M()
+    dut.r = 5
+}
+
+test "wrong field" {
+    let dut = sim Fifo<u8, 4>()
+    dut.reset()
+    dut.push.vaild = true
+}
+
+test "step_until times out" {
+    let dut = sim M()
+    dut.reset()
+    dut.step_until(dut.y == 9, max: 5)
+}

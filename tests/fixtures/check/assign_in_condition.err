@@ -1,0 +1,6 @@
+assign_in_condition.tern:9:14: error: expected `{`, found `=`
+  |
+9 |         if a = b { v = true }
+  |              ^
+  = help: compare with `==`; `=` is an assignment, not an expression
+

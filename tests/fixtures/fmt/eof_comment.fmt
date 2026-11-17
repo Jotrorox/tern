@@ -1,0 +1,9 @@
+/// A doc comment with trailing spaces
+/// on two lines	
+module M {
+    in a: bool
+    out y: bool
+    y = a
+}
+
+// a file that ends inside a comment with trailing spaces

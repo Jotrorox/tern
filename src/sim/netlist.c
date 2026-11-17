@@ -6,7 +6,9 @@
  *      (a top clock input or a derived clock) -> edge groups
  *   3. classify state (targets of clocked processes) and lay out values
  *      (state grouped per edge group so hold/commit are two memcpys)
- *   4. order the combinational nodes topologically (loops are errors)
+ *   4. order the combinational nodes topologically (loops are errors; a
+ *      comb process caught in a loop is first split into one node per
+ *      target, since a block-level loop need not be a signal-level one)
  *   5. compile everything to SimInsn (comb segment, one segment per domain,
  *      one property segment per group), relocate, initialize values.
  */
@@ -124,6 +126,7 @@ typedef struct NlNode {
     IrLvalue lhs;
     const IrExpr *rhs;
     const IrProcess *proc;
+    uint32_t split;           /* proc split per target (false loops): flat target + 1, else 0 */
     Span loc;
 } NlNode;
 
@@ -545,7 +548,148 @@ static void nl_report_loop(SimModel *m, NlBuild *b, const uint32_t *cyc_nodes, c
     sb_free(&sb);
 }
 
+/* Split processes: a comb process that writes several signals is one node,
+ * so `a = x; c = b` with `b` computed from `a` elsewhere looks like a loop
+ * at process granularity although no signal depends on itself. Such
+ * processes (those left over by a failed sort) become one node per target;
+ * the node of target T reads what T's assignments read (right-hand sides,
+ * indices, enclosing conditions), following the block's other targets that
+ * those read. Every node of a split process runs the whole body; the
+ * values of T are right from T's node on (see nl_compile). */
+
+typedef struct NlSlice {
+    SimModel *m;
+    uint32_t inst;
+    Map *rel;                 /* flat targets the node computes */
+    VEC(const IrExpr *) conds;
+    NlBuild tmp;              /* reads collected (node field unused) */
+} NlSlice;
+
+static void nl_slice_block(NlSlice *s, const IrBlock *blk)
+{
+    uint32_t i, j, k;
+    for (i = 0; i < blk->n; i++) {
+        const IrStmt *st = blk->stmts[i];
+        switch (st->kind) {
+        case IRST_ASSIGN:
+            if (map_has(s->rel, nl_flat(s->m, s->inst, st->lhs.sig))) {
+                nl_reads_expr(s->m, &s->tmp, 0, s->inst, st->rhs);
+                nl_reads_expr(s->m, &s->tmp, 0, s->inst, st->lhs.index);
+                for (k = 0; k < s->conds.len; k++)
+                    nl_reads_expr(s->m, &s->tmp, 0, s->inst, s->conds.data[k]);
+            }
+            break;
+        case IRST_IF:
+            vec_push(s->conds, st->cond);
+            nl_slice_block(s, &st->then_b);
+            nl_slice_block(s, &st->else_b);
+            s->conds.len--;
+            break;
+        case IRST_CASE:
+            vec_push(s->conds, st->subject);
+            for (j = 0; j < st->narms; j++)
+                nl_slice_block(s, &st->arms[j].body);
+            s->conds.len--;
+            break;
+        default: break;
+        }
+    }
+}
+
+static void nl_collect_target(SimModel *m, uint32_t inst, const IrLvalue *lv, void *user)
+{
+    uint32_t f = nl_flat(m, inst, lv->sig);
+    Map *own = (Map *)user;
+    if (!map_has(own, f))
+        map_put(own, f, (uint64_t)map_len(own));
+}
+
+static void nl_rw_split(SimModel *m, NlBuild *b, uint32_t node, const NlNode *n)
+{
+    NlSlice s;
+    Map own = {0}, rel = {0};
+    uint32_t target = n->split - 1, i;
+    int changed = 1;
+    memset(&s, 0, sizeof s);
+    s.m = m;
+    s.inst = n->lhs_inst;
+    s.rel = &rel;
+    nl_walk_targets(m, n->lhs_inst, &n->proc->body, nl_collect_target, &own);
+    map_put(&rel, target, 1);
+    while (changed) {
+        changed = 0;
+        s.tmp.reads.len = 0;
+        nl_slice_block(&s, &n->proc->body);
+        for (i = 0; i < s.tmp.reads.len; i++) {
+            uint32_t sig = s.tmp.reads.data[i].sig;
+            if (map_has(&own, sig) && !map_has(&rel, sig)) {
+                map_put(&rel, sig, 1);
+                changed = 1;
+            }
+        }
+    }
+    for (i = 0; i < s.tmp.reads.len; i++) {
+        NlRange r = s.tmp.reads.data[i];
+        if (!map_has(&own, r.sig))
+            nl_range(b, 0, node, r.sig, r.lo, r.w);
+    }
+    nl_range(b, 1, node, target, 0, m->sigs.data[target].width);
+    vec_free(s.conds);
+    vec_free(s.tmp.reads);
+    vec_free(s.tmp.writes);
+    map_free(&own);
+    map_free(&rel);
+}
+
+/* replaces the unsorted multi-target processes by one node per target;
+ * returns how many were split */
+static uint32_t nl_split_procs(SimModel *m, NlBuild *b, const unsigned char *stuck)
+{
+    VEC(NlNode) nodes = {0};
+    uint32_t i, nsplit = 0;
+    for (i = 0; i < b->nodes.len; i++) {
+        const NlNode *n = &b->nodes.data[i];
+        Map own = {0};
+        if (stuck[i] && n->is_proc && !n->split) {
+            nl_walk_targets(m, n->lhs_inst, &n->proc->body, nl_collect_target, &own);
+            if (map_len(&own) >= 2) {
+                size_t it = 0;
+                uint64_t k, v;
+                while (map_next(&own, &it, &k, &v)) {
+                    NlNode c = *n;
+                    c.split = (uint32_t)k + 1;
+                    vec_push(nodes, c);
+                }
+                nsplit++;
+                map_free(&own);
+                continue;
+            }
+            map_free(&own);
+        }
+        vec_push(nodes, *n);
+    }
+    vec_free(b->nodes);
+    b->nodes.data = nodes.data;
+    b->nodes.len = nodes.len;
+    b->nodes.cap = nodes.cap;
+    return nsplit;
+}
+
+static int nl_order_try(SimModel *m, NlBuild *b, int report, unsigned char **stuck_out);
+
 static int nl_order(SimModel *m, NlBuild *b)
+{
+    unsigned char *stuck = NULL;
+    if (nl_order_try(m, b, 0, &stuck))
+        return 1;
+    /* split what can be split; the retry sorts again and reports a loop
+     * that remains (a true one, at signal granularity) */
+    nl_split_procs(m, b, stuck);
+    free(stuck);
+    return nl_order_try(m, b, 1, NULL);
+}
+
+static int nl_order_try(SimModel *m, NlBuild *b, int report, unsigned char **stuck_out)
 {
     uint32_t nn = (uint32_t)b->nodes.len, nsig = (uint32_t)m->sigs.len, i, k;
     uint32_t *wstart, *wlist, *indeg, *estart, *queue, qh = 0, qt = 0, nord = 0;
@@ -553,9 +697,15 @@ static int nl_order(SimModel *m, NlBuild *b)
     NlEdge *sorted;
     int ok = 1;
 
+    b->reads.len = 0;
+    b->writes.len = 0;
+    free(b->order);
+    b->order = NULL;
     for (i = 0; i < nn; i++) {
         const NlNode *n = &b->nodes.data[i];
-        if (n->is_proc) {
+        if (n->is_proc && n->split) {
+            nl_rw_split(m, b, i, n);
+        } else if (n->is_proc) {
             nl_rw_block(m, b, i, n->lhs_inst, &n->proc->body);
         } else {
             uint32_t f = nl_flat(m, n->lhs_inst, n->lhs.sig);
@@ -625,7 +775,15 @@ static int nl_order(SimModel *m, NlBuild *b)
             if (--indeg[sorted[k].to] == 0)
                 queue[qt++] = sorted[k].to;
     }
-    if (nord < nn) {
+    if (nord < nn && !report) {
+        /* the caller may split the processes among the remaining nodes */
+        ok = 0;
+        if (stuck_out) {
+            *stuck_out = (unsigned char *)xcalloc(nn ? nn : 1, 1);
+            for (i = 0; i < nn; i++)
+                (*stuck_out)[i] = indeg[i] != 0;
+        }
+    } else if (nord < nn) {
         /* find one cycle among the remaining nodes (iterative DFS) */
         unsigned char *color = (unsigned char *)xcalloc(nn, 1);
         uint32_t *stk = (uint32_t *)xmalloc(sizeof(uint32_t) * nn);
@@ -708,6 +866,7 @@ typedef struct NlComp {
     VEC(uint64_t) consts;
     Map const_map;
     Map cov_map;              /* IrBlock* / IrStmt* -> counter + 1 */
+    int quiet;                /* no coverage counts or assertions (early runs of a split process) */
 } NlComp;
 
 static uint64_t nl_mask(uint32_t w)
@@ -1047,8 +1206,10 @@ static void nl_block(NlComp *c, const IrBlock *b, int kind, Span loc, uint32_t a
     SimInsn *in;
     if (b->n == 0 && kind < 0)
         return;
-    in = nl_emit(c, SOP_COV, 0);
-    in->p = nl_cov_block(c, b, kind, loc, arm);
+    if (!c->quiet) {
+        in = nl_emit(c, SOP_COV, 0);
+        in->p = nl_cov_block(c, b, kind, loc, arm);
+    }
     for (i = 0; i < b->n; i++)
         nl_stmt(c, b->stmts[i]);
 }
@@ -1243,8 +1404,11 @@ static void nl_stmt(NlComp *c, const IrStmt *s)
         break;
     }
     case IRST_ASSERT: {
-        uint32_t cond = nl_expr(c, s->cond, IR_NONE);
+        uint32_t cond;
         SimAssert as;
+        if (c->quiet)
+            break;
+        cond = nl_expr(c, s->cond, IR_NONE);
         memset(&as, 0, sizeof as);
         as.kind = s->akind;
         as.msg = s->msg;
@@ -1384,7 +1548,22 @@ static void nl_compile(SimModel *m, NlBuild *b, NlComp *c)
     c->fd = IR_NONE;
     for (i = 0; i < b->nodes.len; i++) {
         const NlNode *n = &b->nodes.data[b->order[i]];
-        if (n->is_proc) {
+        if (n->is_proc && n->split) {
+            /* a split process runs once per target node (consecutive runs
+             * once); only its last run counts coverage and checks assertions */
+            uint32_t j2, later = 0;
+            const NlNode *nx = i + 1 < b->nodes.len ? &b->nodes.data[b->order[i + 1]] : NULL;
+            if (nx && nx->split && nx->proc == n->proc && nx->lhs_inst == n->lhs_inst)
+                continue;
+            for (j2 = i + 1; j2 < b->nodes.len && !later; j2++) {
+                const NlNode *o = &b->nodes.data[b->order[j2]];
+                later = o->split && o->proc == n->proc && o->lhs_inst == n->lhs_inst;
+            }
+            c->inst = n->lhs_inst;
+            c->quiet = later;
+            nl_block(c, &n->proc->body, -1, n->loc, 0);
+            c->quiet = 0;
+        } else if (n->is_proc) {
             c->inst = n->lhs_inst;
             nl_block(c, &n->proc->body, -1, n->loc, 0);
         } else {

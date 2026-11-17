@@ -349,6 +349,8 @@ int cmd_add(int argc, char **argv)
 {
     ArgParser ap;
     const char *tag = NULL, *rev = NULL, *branch = NULL, *path = NULL, *git = NULL, *name_opt = NULL;
+    char *git_owned = NULL;   /* git URL made from a local directory */
+    char *hint_tag = NULL, *hint_commit = NULL;
     VEC(const char *) specs = {0};
     CpkgProject p;
     PkgGitProvider g;
@@ -376,6 +378,22 @@ int cmd_add(int argc, char **argv)
     if (!git && !path && specs.len == 1 && cpkg_is_url(specs.data[0])) {
         git = specs.data[0];
         specs.len = 0;
+    } else if (!git && !path && specs.len == 1 && os_is_dir(specs.data[0])) {
+        /* a local directory: a git dependency on its repository (and tags) */
+        char *abs = os_path_abs(specs.data[0]), *dotgit = os_path_join(abs, ".git");
+        if (os_exists(dotgit)) {
+            StrBuf u = {0};
+            sb_puts(&u, abs[0] == '/' ? "file://" : "file:///");
+            sb_puts(&u, abs);
+            git_owned = sb_take(&u);
+            git = git_owned;
+            specs.len = 0;
+        } else {
+            args_error(&ap, "`%s` is a directory but not a git repository; for a path dependency use "
+                            "`tern add --path %s`", specs.data[0], specs.data[0]);
+        }
+        free(dotgit);
+        free(abs);
     }
     if ((tag != NULL) + (rev != NULL) + (branch != NULL) > 1)
         args_error(&ap, "use only one of --tag, --rev and --branch");
@@ -391,10 +409,12 @@ int cmd_add(int argc, char **argv)
         args_error(&ap, "invalid package name `%s`", name_opt);
     if (ap.errors) {
         vec_free(specs);
+        free(git_owned);
         return TERN_EXIT_USAGE;
     }
     if (cpkg_open(&p) != 0) {
         vec_free(specs);
+        free(git_owned);
         cpkg_close(&p);
         return TERN_EXIT_FAIL;
     }
@@ -503,6 +523,14 @@ int cmd_add(int argc, char **argv)
             free(tmpname);
             arena_release(&a);
             goto out;
+        }
+        /* the resolver below fetches the same commit again: point it at this one */
+        if (node.tag && node.commit) {
+            hint_tag = xstrdup(node.tag);
+            hint_commit = xstrdup(node.commit);
+            g.hint_url = git;
+            g.hint_tag = hint_tag;
+            g.hint_commit = hint_commit;
         }
         mp = os_path_join(node.root, PKG_MANIFEST_FILE);
         if (!os_is_file(mp)) {
@@ -674,6 +702,9 @@ out:
     vec_free(specs);
     sb_free(&text);
     free(index_url);
+    free(git_owned);
+    free(hint_tag);
+    free(hint_commit);
     cpkg_close(&p);
     return rc;
 }
@@ -734,6 +765,36 @@ int cmd_update(int argc, char **argv)
     vec_push(names, NULL);
     if (cpkg_sync(&p, &p.m, names.data, names.len == 1, &g) == 0)
         rc = TERN_EXIT_OK;
+    /* git dependencies pinned by tag stay; say when a newer release exists */
+    for (i = 0; rc == TERN_EXIT_OK && i < p.m.ndeps; i++) {
+        const TernDep *d = &p.m.deps[i];
+        Arena a = {0};
+        PkgAvailList tags;
+        PkgVersion pinned;
+        const PkgAvail *best = NULL;
+        size_t k, j;
+        int named = names.len == 1;
+        for (j = 0; j + 1 < names.len; j++)
+            if (strcmp(names.data[j], d->name) == 0)
+                named = 1;
+        if (!named || d->kind != PKG_DEP_GIT || !d->tag ||
+            pkg_version_parse(d->tag, &pinned, 1) != 0 ||
+            pkg_git_tags(d->git, &a, &tags) != 0) {
+            arena_release(&a);
+            continue;
+        }
+        for (k = 0; k < tags.items.len; k++) {
+            const PkgAvail *t = &tags.items.data[k];
+            if (!t->version.pre[0] && pkg_version_cmp(&t->version, &pinned) > 0 &&
+                (!best || pkg_version_cmp(&t->version, &best->version) > 0))
+                best = t;
+        }
+        if (best)
+            pkg_status("Note", "%s is pinned to tag %s; %s is available (edit its tag in tern.toml)", d->name,
+                       d->tag, best->tag);
+        vec_free(tags.items);
+        arena_release(&a);
+    }
 out:
     if (pr >= 0)
         pkg_lock_free(&prev);

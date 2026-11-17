@@ -1,0 +1,53 @@
+// A comb block that drives a stream's valid from one input and its source's
+// ready from the stream's ready: a loop at block granularity, none at signal
+// granularity (`tern check` accepts it, so the simulator must too).
+module Gate {
+    in en: bool
+    in src: Stream<u8>
+    out dst: Stream<u8>
+
+    var s: Stream<u8>
+    comb {
+        s.valid = src.valid and en
+        s.data = src.data
+        src.ready = s.ready and en
+        assert !s.valid or en, "valid only while enabled"
+    }
+    // the consumer's ready depends on valid: s.ready <- dst.ready, s.valid
+    dst.valid = s.valid
+    dst.data = s.data
+    s.ready = dst.ready and s.valid
+}
+
+// A true loop through a split block is still an error.
+module Loop {
+    in a: bool
+    in b: bool
+    out y: bool
+    out z: bool
+    var p: bool
+    var q: bool
+    comb {
+        p = a and r
+        q = b
+    }
+    let r = !p
+    y = p
+    z = q
+}
+
+test "a gated stream passes beats only while enabled" {
+    let dut = sim Gate()
+    dut.src = Stream { valid: true, data: 7 }
+    dut.dst.ready = true
+    dut.en = false
+    dut.settle()
+    expect !dut.dst.valid and !dut.src.ready
+    dut.en = true
+    dut.settle()
+    expect dut.dst.valid and dut.dst.data == 7 and dut.src.ready
+}
+
+test "a real loop inside one block is reported" {
+    let dut = sim Loop()
+}

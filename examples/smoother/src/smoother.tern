@@ -1,0 +1,192 @@
+package smoother
+
+// A small pipelined datapath: a binomial FIR smoother whose coefficients
+// are computed at elaboration (const fn), unrolled with `for`, followed by
+// a gain stage read from a table in gain.hex, a run-control state machine
+// and a CRC-16 signature of everything it outputs.
+
+use std::crc::Crc16Ccitt
+use std::mem::DelayLine
+use std::math::sat_add
+
+/// Binomial coefficient n over k, at elaboration time.
+pub const fn binomial(n: uint, k: uint) -> uint {
+    var r = 1
+    var i = 0
+    while i < k {
+        r = r * (n - i) / (i + 1)
+        i = i + 1
+    }
+    r
+}
+
+/// Row `Taps - 1` of Pascal's triangle: the binomial smoothing kernel.
+/// Its coefficients sum to 2^(Taps - 1).
+pub const fn kernel<Taps: uint>() -> [u8; Taps] {
+    var k: [u8; Taps]
+    for i in 0..Taps {
+        k[i] = binomial(Taps - 1, i) as u8
+    }
+    k
+}
+
+/// What the run-control FSM reacts to, highest priority first.
+enum Event { Stop, Start, Warm, None }
+
+/// Run state: the delay line fills during `Warmup`; output is only valid
+/// during `Run`.
+pub enum Mode { Idle, Warmup, Run }
+
+/// FIR stage: `y = sum(k[i] * x[n - i]) >> (Taps - 1)` over the last
+/// `Taps` samples, two pipeline stages (multiply-add, then normalize).
+pub module Fir<W: uint, Taps: uint>
+where Taps >= 2, Taps <= 9
+{
+    /// Cycles from an input sample to the output that includes it.
+    pub const LATENCY: uint = 2
+    /// The kernel.
+    pub const K: [u8; Taps] = kernel<Taps>()
+    /// Accumulator width: the kernel sums to 2^(Taps - 1).
+    const AW: uint = W + Taps - 1
+
+    static_assert(K[0] == 1 and K[Taps - 1] == 1, "kernel must be symmetric with unit ends")
+
+    in clk: clock
+    in rst: reset
+    /// Input samples.
+    in in: Valid<uint<W>>
+    /// Smoothed samples.
+    out out: Valid<uint<W>>
+
+    // delay line: x[0] is the newest sample
+    reg x: [uint<W>; Taps] = all0
+    on clk {
+        if in.valid {
+            x[0] = in.data
+            for i in 1..Taps { x[i] = x[i - 1] }
+        }
+    }
+
+    // stage 1: unrolled multiply-accumulate
+    var acc: uint<AW>
+    comb {
+        acc = 0
+        for i in 0..Taps {
+            acc = (acc + x[i] * K[i]) as uint<AW>
+        }
+    }
+    reg sum: uint<AW> = 0
+    reg v1: bool = false
+    reg v2: bool = false
+    reg y: uint<W> = 0
+    on clk {
+        sum = acc
+        v1 = in.valid
+        // stage 2: normalize (exact: the kernel sums to a power of two)
+        y = (sum >> (Taps - 1)) as uint<W>
+        v2 = v1
+    }
+    out = Valid { valid: v2, data: y }
+
+    on clk {
+        assert (sum >> (Taps - 1)) <= uint<W>::MAX, "normalized sum overflows W bits"
+    }
+}
+
+/// Smoothing datapath with gain table and run control.
+///
+/// * `start` begins a run: the first `Taps` samples only fill the filter
+///   (`Warmup`), after that every input sample produces one output sample
+///   (`Run`). `stop` returns to `Idle` from any state.
+/// * Each output is the smoothed sample times `gain[gain_sel] / 16`,
+///   saturated to 12 bits.
+/// * `crc` is the CRC-16/CCITT of the low byte of every output sample since
+///   the last `start`.
+#[top]
+pub module Smoother<Taps: uint = 5>
+where Taps >= 2, Taps <= 9
+{
+    #[clock(hz: 100_000_000)]
+    in clk: clock
+    in rst: reset
+    /// Begin a run.
+    in start: bool
+    /// End the run.
+    in stop: bool
+    /// Gain table index.
+    in gain_sel: uint<4>
+    /// Input samples.
+    in samples: Valid<uint<12>>
+    /// Output samples.
+    out out: Valid<uint<12>>
+    /// Run state.
+    out mode: Mode
+    /// Signature of the outputs.
+    out crc: u16
+
+    type Fill = uint<clog2(Taps + 1)>
+
+    reg state: Mode = .Idle
+    reg fill: Fill = 0
+
+    let warm = state == .Warmup and samples.valid and fill == Taps - 1
+    let ev = if stop {
+        Event::Stop
+    } else if start {
+        Event::Start
+    } else if warm {
+        Event::Warm
+    } else {
+        Event::None
+    }
+
+    on clk {
+        state = match (state, ev) {
+            (_, .Stop) => .Idle,
+            (.Idle, .Start) => .Warmup,
+            (.Warmup, .Warm) => .Run,
+            (s, _) => s,
+        }
+        if state == .Idle {
+            fill = 0
+        } else if state == .Warmup and samples.valid {
+            fill = fill +% 1
+        }
+    }
+
+    let fir = Fir<12, Taps>(in: samples)
+    // the run flag travels with the samples through the filter
+    let running = DelayLine<bool, 2>(en: true, d: state == .Run and samples.valid)
+
+    #[ram(distributed)]
+    mem gain: [u8; 16] = include_hex("gain.hex")
+
+    // gain stage: Q4.4 multiply, saturate to 12 bits
+    let scaled = (fir.out.data * gain[gain_sel]) >> 4
+    let sat = if scaled > 0xFFF { 0xFFF } else { scaled as uint<12> }
+    reg out_v: bool = false
+    reg out_d: uint<12> = 0
+    on clk {
+        // samples still in the filter when a run stops are dropped
+        out_v = fir.out.valid and running.q and state == .Run
+        out_d = sat
+    }
+    out = Valid { valid: out_v, data: out_d }
+    mode = state
+
+    let sig = Crc16Ccitt(in: Stream { valid: out_v, data: out_d[7:0] as u8 }, clear: start)
+    crc = sig.crc
+
+    on clk {
+        assert state != .Warmup or fill < Taps, "warmup counted past Taps"
+    }
+
+    /// Warmup ends exactly when the filter is full.
+    property warmup_to_run { always warm and !stop and !start |=> state == .Run }
+    /// Stop always wins.
+    property stop_idles { always stop |=> state == .Idle }
+    /// Output only follows a cycle in Run.
+    property output_only_running { always out_v |-> past(state) == Mode::Run }
+    /// A run reaches the Run state.
+    cover property reaches_run { state == .Run }
+}

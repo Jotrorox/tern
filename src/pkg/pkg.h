@@ -362,6 +362,9 @@ typedef struct PkgGitProvider {
     int index_synced;
     int offline;            /* never sync the index (it must exist) */
     int quiet;
+    /* a fetch already made in this run (`tern add` learns a git dependency's
+     * name first): a node for the same url and tag reuses its commit */
+    const char *hint_url, *hint_tag, *hint_commit;
 } PkgGitProvider;
 
 PkgProvider pkg_git_provider(PkgGitProvider *ctx);

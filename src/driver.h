@@ -89,6 +89,8 @@ void driver_tops(Driver *dr, DriverItemVec *out);
  * non-generic module and every generic module whose generics all have
  * defaults (user files only; extern modules excluded). */
 void driver_default_roots(Driver *dr, DriverItemVec *out);
+/* "did you mean" help (after a diag_error) with the user module closest to `name` */
+void driver_suggest_module(Driver *dr, const char *name);
 /* `test` items of the user files (with their file = package scope). */
 void driver_tests(Driver *dr, DriverItemVec *out);
 /* Targets of tern.toml (NULL / 0 in single-file mode). */

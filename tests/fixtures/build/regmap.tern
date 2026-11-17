@@ -6,6 +6,8 @@ enum Mode { Off, Slow, Fast, Turbo }
 regmap Ctrl {
     0x00 ctrl: rw { enable: bool @0, mode: Mode @[2:1] },
     0x04 status: ro { busy: bool @0, err: bool @1 },
+    /// Event counter: counts every accepted
+    /// beat (a doc comment over two lines).
     0x08 count: rw u32,
     0x10 fifo: wo u8 -> Stream<u8>,
 }

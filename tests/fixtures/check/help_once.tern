@@ -1,0 +1,11 @@
+// args: --diag-format=human
+// a misspelled name in a #[top] with defaulted generics: one help line
+#[top]
+module Blink<Period: uint = 4> {
+    in clk: clock
+    in rst: reset
+    out led: bool
+    reg state: bool = false
+    on clk { state = !state }
+    led = stat
+}

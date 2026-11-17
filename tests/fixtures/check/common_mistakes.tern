@@ -1,0 +1,139 @@
+// args: --diag-format=human
+// Common mistakes and their help lines (one per module).
+
+enum Op { Add, Sub }
+
+module AssignInput {
+    in a: u8
+    out y: u8
+    a = 3
+    y = a
+}
+
+module AssignBundleInput {
+    in s: Stream<u8>
+    out y: u8
+    s.valid = true
+    s.ready = true
+    y = s.data
+}
+
+module RegInComb {
+    in clk: clock
+    in a: u8
+    out y: u8
+    reg r: u8 = 0
+    comb { r = a }
+    y = r
+}
+
+module LetReassign {
+    in a: u8
+    out y: u8
+    let t = a
+    t = a +% 1
+    y = t
+}
+
+module Child {
+    in a: u8
+    out y: u8
+    y = a
+}
+
+module UnknownPort {
+    in a: u8
+    out y: u8
+    y = Child(a: a, b: a).y
+}
+
+module MisspelledPort {
+    in a: u8
+    out y: u8
+    let c = Child(a: a)
+    y = c.yy
+}
+
+module EnumTypo {
+    in op: Op
+    out y: bool
+    y = op == .Ad
+}
+
+module CompareBool {
+    in a: u8
+    in b: bool
+    out y: bool
+    y = a == b
+}
+
+module IfWithoutElse {
+    in a: u8
+    in c: bool
+    out y: u8
+    y = if c { a }
+}
+
+module ResetNotConstant {
+    in clk: clock
+    in rst: reset
+    in a: u8
+    out y: u8
+    reg r: u8 = a
+    on clk { r = a }
+    y = r
+}
+
+module RegBundle {
+    in clk: clock
+    in s: Valid<u8>
+    out y: u8
+    reg r: Valid<u8>
+    on clk { r = s }
+    y = r.data
+}
+
+module Clocked {
+    in clk: clock
+    in a: u8
+    out y: u8
+    reg r: u8
+    on clk { r = a }
+    y = r
+}
+
+module TwoClocks {
+    in clk: clock
+    in clk2: clock
+    in a: u8
+    out y: u8
+    y = Clocked(a: a).y
+}
+
+module LiteralCascade {
+    in a: u8
+    out y: Valid<u8>
+    y = Valid { valid: true, data: missing }
+}
+
+module IfArmWidth {
+    in clk: clock
+    in en: bool
+    out y: uint<4>
+    reg c: uint<4> = 0
+    on clk {
+        if en { c = if c == 9 { 0 } else { c + 1 } }
+    }
+    y = c
+}
+
+module MatchArmWidth {
+    in op: Op
+    in a: u8
+    in b: u8
+    out y: u8
+    y = match op {
+        .Add => a + b,
+        .Sub => a,
+    }
+}

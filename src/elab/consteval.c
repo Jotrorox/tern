@@ -54,6 +54,37 @@ void el_help(Elab *el, const char *fmt, ...)
     diag_help("%s", buf);
 }
 
+const char *el_closest(const char *name, const char *const *cands, size_t n)
+{
+    const char *best = NULL;
+    uint32_t cap = (uint32_t)(strlen(name) <= 3 ? 1 : strlen(name) / 3), bd = cap + 1;
+    size_t i;
+    for (i = 0; i < n; i++) {
+        uint32_t d;
+        if (!cands[i] || strcmp(cands[i], name) == 0)
+            continue;
+        d = sema_edit_distance(name, cands[i], cap);
+        if (d < bd) {
+            bd = d;
+            best = cands[i];
+        }
+    }
+    return best;
+}
+
+/* "did you mean" among the variants of enum `t` */
+static void ce_variant_help(Elab *el, const Ty *t, const char *name)
+{
+    const char *names[64];
+    size_t n = 0, k;
+    const char *best;
+    for (k = 0; k < t->nvariants && n < TERN_ARRAY_LEN(names); k++)
+        names[n++] = t->variants[k].name;
+    best = el_closest(name, names, n);
+    if (best)
+        el_help(el, "did you mean `.%s`?", best);
+}
+
 void el_note(Elab *el, Span at, const char *fmt, ...)
 {
     va_list ap;
@@ -937,7 +968,12 @@ Value el_lookup_name(Elab *el, Env *env, const char *name, Span at, int report)
         const char *names[256];
         size_t n = 0;
         el_error(el, at, "cannot find `%s` in this scope", name);
-        if (!el->quiet) {
+        if ((name[0] == 'u' || name[0] == 's') && tern_is_digit((unsigned char)name[1]) &&
+            strspn(name + 1, "0123456789") == strlen(name + 1)) {
+            /* `u12`: only u8..u64 / s8..s64 are prelude aliases */
+            el_help(el, "write `%s<%s>`; the prelude only has u8, u16, u32, u64 and s8 .. s64",
+                    name[0] == 'u' ? "uint" : "sint", name + 1);
+        } else if (!el->quiet && !ce_error_seen) { /* not for a dropped duplicate */
             ce_collect_names(env, names, &n, TERN_ARRAY_LEN(names));
             sema_suggest(el->S, env ? env->file : NULL, name, names, n);
         }
@@ -1150,6 +1186,7 @@ Value el_member(Elab *el, Value base, const char *name, Span at, Env *env)
                 return val_enum(&el->arena, t, (uint32_t)k, NULL);
             }
             el_error(el, at, "enum `%s` has no variant `%s`", ty_str(t), name);
+            ce_variant_help(el, t, name);
             return val_error();
         }
         if (t->def && (t->def->kind == ITEM_STRUCT || t->def->kind == ITEM_BUNDLE)) {
@@ -1684,6 +1721,13 @@ static int ce_int_operands(Elab *el, BinaryOp op, Value *a, Value *b, Span at, E
     int fa = ce_int_family(ta), fb = ce_int_family(tb);
     if ((ta && ta->kind == TY_BOOL) || (tb && tb->kind == TY_BOOL)) {
         Expr *be = ta && ta->kind == TY_BOOL ? ea : eb;
+        if ((op == BIN_EQ || op == BIN_NE) && ta && tb && (fa || fb)) {
+            /* `count == done`: one side bool, the other an integer */
+            el_error(el, at, "cannot compare %s with %s", ty_str(ta), ty_str(tb));
+            el_help(el, "convert the bool with `%s as uint<1>`, or test the integer with `x != 0`",
+                    be ? el_text(be) : "x");
+            return 0;
+        }
         el_error(el, at, "bool is not an integer: `%s` on bool", ce_op_text(op));
         el_help(el, "convert with `%s as uint<1>`, or count set bools with `count_ones(...)`",
                 be ? el_text(be) : "x");
@@ -3073,6 +3117,7 @@ static Value ce_struct_literal(Elab *el, Expr *e, Env *env, Ty *expect)
                 Field **fields = it->kind == ITEM_STRUCT ? it->u.struct_def.fields : it->u.bundle.fields;
                 uint32_t nf = it->kind == ITEM_STRUCT ? it->u.struct_def.nfields : it->u.bundle.nfields;
                 uint32_t i, j;
+                int field_error = 0;
                 ElabArgs args;
                 if (it->kind == ITEM_TYPE) {
                     el_error(el, e->span, "cannot infer the generic arguments of `%s`", it->name.name);
@@ -3094,7 +3139,9 @@ static Value ce_struct_literal(Elab *el, Expr *e, Env *env, Ty *expect)
                         continue;
                     v = fi->value ? elab_eval(el, fi->value, env, NULL)
                                   : el_lookup_name(el, env, fi->name.name, fi->name.span, 1);
-                    if (v.kind != VAL_ERROR && v.ty)
+                    if (v.kind == VAL_ERROR)
+                        field_error = 1; /* already reported */
+                    else if (v.ty)
                         el_unify_type(el, fields[j]->type, v.ty, genv);
                 }
                 memset(&args, 0, sizeof args);
@@ -3107,8 +3154,9 @@ static Value ce_struct_literal(Elab *el, Expr *e, Env *env, Ty *expect)
                             args.n = i;
                             break;
                         }
-                        el_error(el, e->span, "cannot infer generic `%s` of `%s` from this literal",
-                                 gp->items[i].name.name, it->name.name);
+                        if (!field_error)
+                            el_error(el, e->span, "cannot infer generic `%s` of `%s` from this literal",
+                                     gp->items[i].name.name, it->name.name);
                         elab_env_free(genv);
                         return val_error();
                     }
@@ -3171,6 +3219,7 @@ static Value ce_variant_literal(Elab *el, Expr *e, Env *env, Ty *expect)
     k = ty_variant_index(expect, name);
     if (k < 0) {
         el_error(el, e->u.variant.name.span, "enum `%s` has no variant `%s`", ty_str(expect), name);
+        ce_variant_help(el, expect, name);
         return val_error();
     }
     if (expect->variants[k].payload) {
@@ -4425,6 +4474,7 @@ Value el_match_test(Elab *el, Pattern *p, Value subj, Env *env)
         vi = ty_variant_index(t, p->u.variant.name.name);
         if (vi < 0) {
             el_error(el, p->u.variant.name.span, "enum `%s` has no variant `%s`", ty_str(t), p->u.variant.name.name);
+            ce_variant_help(el, t, p->u.variant.name.name);
             return val_error();
         }
         if (subj.kind == VAL_ENUM)
@@ -4887,12 +4937,22 @@ static Value ce_if_hw(Elab *el, Value c, Block *then_b, Expr *else_e, Env *env, 
     } else if (want_value) {
         if (!else_e) {
             el_error(el, at, "an `if` used as a value needs an `else`");
+            el_help(el, "add `else { ... }` with a value of the same type");
             r = val_error();
         } else if (arms[0].returned || arms[1].returned) {
             /* the arm that returned has no value: the fn result covers that path */
             r = arms[0].returned ? arms[1].val : arms[0].val;
         } else {
-            r = el_unify_mux(el, c, arms[0].val, arms[1].val, expect, at);
+            Value tv = arms[0].val, fv = arms[1].val;
+            if (expect && expect->kind != TY_ERROR && expect->hw && c.kind != VAL_BOOL && tv.kind != VAL_ERROR &&
+                fv.kind != VAL_ERROR) {
+                /* convert each arm with its own expression, so a width error
+                 * names it (`c + 1` is uint<5>) instead of the whole `if` */
+                Expr *te = then_b->tail, *fe = else_e->kind == EXPR_BLOCK ? else_e->u.block->tail : else_e;
+                tv = elab_convert(el, tv, expect, te, NULL, te ? te->span : at);
+                fv = elab_convert(el, fv, expect, fe, NULL, fe ? fe->span : at);
+            }
+            r = el_unify_mux(el, c, tv, fv, expect, at);
         }
     }
     for (a = 0; a < 2; a++)
@@ -5157,6 +5217,19 @@ static Value ce_eval_match(Elab *el, Expr *e, Env *env, Ty *expect, int want_val
         uint32_t last = n;
         while (last > 0 && arms[last - 1].returned)
             last--;
+        if (expect && expect->kind != TY_ERROR && expect->hw && !el->quiet) {
+            /* convert each arm with its own expression, so a width error
+             * names the arm (`a + b` is uint<9>) instead of the whole match */
+            for (a = 0; a < last; a++) {
+                Stmt *bs = e->u.match.arms[a].body;
+                Expr *ae = bs && bs->kind == STMT_EXPR ? bs->u.expr : NULL;
+                if (ae && ae->kind == EXPR_BLOCK)
+                    ae = ae->u.block ? ae->u.block->tail : NULL;
+                if (!arms[a].returned && arms[a].cond.kind != VAL_BOOL && arms[a].val.kind != VAL_ERROR &&
+                    arms[a].val.kind != VAL_VOID && ae)
+                    arms[a].val = elab_convert(el, arms[a].val, expect, ae, NULL, ae->span);
+            }
+        }
         r = last ? arms[last - 1].val : val_void(el->S);
         for (a = last ? last - 1 : 0; a-- > 0;)
             if (!arms[a].returned)
@@ -5872,7 +5945,10 @@ void el_exec_stmt(Elab *el, Stmt *s, Env *env)
         if (c.kind == VAL_ERROR)
             return;
         if (!c.ty || c.ty->kind != TY_BOOL) {
-            el_error(el, s->u.assert_stmt.cond->span, "assertion condition must be bool");
+            el_error(el, s->u.assert_stmt.cond->span, "assertion condition must be bool, found %s",
+                     c.ty ? ty_str(c.ty) : val_kind_name((ValKind)c.kind));
+            if (c.ty && ce_int_family(c.ty))
+                el_help(el, "compare it: `%s != 0`", el_text(s->u.assert_stmt.cond));
             return;
         }
         if (el->hooks.check && !el->blk && el->hooks.check(el, s, c.kind == VAL_BOOL ? (int)c.u.i : -1, env))

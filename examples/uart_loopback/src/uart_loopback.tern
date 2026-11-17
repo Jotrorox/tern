@@ -1,0 +1,95 @@
+package uart_loopback
+
+// A UART echo bridge. Bytes received on `rxd` are queued in a FIFO and sent
+// back on `txd`; software on an AXI4-Lite bus sets the baud divider, turns
+// echo and an internal loopback on and off, injects bytes of its own and
+// reads the FIFO level and sticky error flags.
+
+use std::bus::{RegisterFile, Axi4Lite}
+use std::io::{UartTxCore, UartRxCore}
+use std::fifo::Fifo
+use std::stream::{Arbiter, ArbPolicy}
+use std::debug::Heartbeat
+
+/// Width of the baud divider (clock cycles per bit).
+pub const DIV_W: uint = 16
+
+/// The register map seen by software.
+pub regmap UartRegs {
+    /// `echo`: send received bytes back; `loopback`: connect `txd` to the
+    /// receiver internally (for self-test).
+    0x00 ctrl: rw { echo: bool @0, loopback: bool @1 } = 0x1,
+    /// Clock cycles per bit, at least 4 (868 = 115200 baud at 100 MHz).
+    0x04 baud_div: rw uint<DIV_W> = 868,
+    /// FIFO level and transmitter state.
+    0x08 status: ro { level: uint<5> @[4:0], tx_busy: bool @8, rx_pending: bool @9 },
+    /// Writing a byte sends it (one byte per write).
+    0x0C txdata: wo u8 -> Stream<u8>,
+    /// Sticky errors, write 1 to clear: bit 0 frame error, bit 1 overrun.
+    0x10 errors: w1c uint<2>,
+}
+
+/// UART echo bridge with an AXI4-Lite register file.
+///
+/// * Received bytes go through a `Depth`-entry FIFO and, while `ctrl.echo`
+///   is set, back out on `txd`. Bytes written to `txdata` have priority
+///   over echoed ones.
+/// * A frame error or a byte lost to a full FIFO sets a bit of `errors` and
+///   raises `irq` until software clears it.
+#[top]
+pub module UartLoopback<Depth: uint = 16>
+where Depth.is_pow2(), Depth <= 16
+{
+    /// System clock.
+    #[clock(hz: 100_000_000)]
+    in clk: clock
+    /// Synchronous reset, active high.
+    in rst: reset
+    /// Register access.
+    in bus: Axi4Lite<32, 32>
+    /// Serial input (asynchronous), idle high.
+    in rxd: bool
+    /// Serial output, idle high.
+    out txd: bool
+    /// An error flag is set.
+    out irq: bool
+    /// Alive LED, 1 Hz.
+    out led: bool
+
+    let regs = RegisterFile<UartRegs>(bus)
+
+    let tx_line = tx.txd
+    let rx_line = if regs.ctrl.loopback { tx_line } else { rxd }
+
+    let rx = UartRxCore<DIV_W>(divisor: regs.baud_div, rxd: rx_line)
+    let fifo = Fifo<u8, Depth>(push: rx.out)
+
+    // echoed bytes leave the FIFO only while echo is on
+    var echo: Stream<u8>
+    comb {
+        echo.valid = fifo.pop.valid and regs.ctrl.echo
+        echo.data = fifo.pop.data
+        fifo.pop.ready = echo.ready and regs.ctrl.echo
+    }
+
+    let arb = Arbiter<u8, 2, .Fixed>(in: [regs.txdata, echo])
+    let tx = UartTxCore<DIV_W>(divisor: regs.baud_div, in: arb.out)
+
+    regs.status = UartRegs::Status {
+        level: fifo.count as uint<5>,
+        tx_busy: tx.busy,
+        rx_pending: !fifo.empty,
+    }
+    regs.errors_set = (rx.overrun ++ rx.frame_error) as uint<2>
+
+    txd = tx_line
+    irq = regs.errors != 0
+    led = Heartbeat<ClkHz: 100_000_000>().led
+
+    on clk {
+        assert regs.baud_div >= 4 or !tx.busy, "baud divider below 4 while sending"
+    }
+
+    /// Nothing is sent while the transmitter is idle.
+    property idle_high { always !tx.busy |-> txd }
+}

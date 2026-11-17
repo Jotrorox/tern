@@ -1,0 +1,81 @@
+package sensor_bridge_test
+
+use sensor_bridge::SensorBridge
+
+// Both clocks run from their #[clock(hz)] periods with dut.run(ns: ..):
+// 100 MHz system, 25 MHz ADC, so one ADC cycle is four system cycles.
+
+test "samples cross into the system domain in order" {
+    let dut = sim SensorBridge()
+    dut.capture = true
+    dut.adc_valid = false
+    dut.adc_data = 0
+    dut.reset()
+    dut.run(ns: 200)                       // capture enable crosses (Sync2)
+    for v in [100, 200, 300, 400] {
+        dut.adc_valid = true
+        dut.adc_data = v
+        dut.adc.step()
+        dut.adc_valid = false
+        dut.adc.step()
+    }
+    dut.run(ns: 400)
+    expect dut.count == 4
+    expect dut.peak == 400
+    expect dut.mavg.sum == 100 + 200 + 300 + 400       // the window holds all four
+    expect dut.dropped == 0
+}
+
+test "the moving average follows a constant input" {
+    let dut = sim SensorBridge<Window: 4>()
+    dut.capture = true
+    dut.adc_valid = false
+    dut.adc_data = 0
+    dut.reset()
+    dut.run(ns: 200)
+    // the window starts out zero-filled: n/4 of the value after n samples
+    var outputs = 0
+    dut.adc_valid = true
+    dut.adc_data = 0x124
+    for _ in 0..80 {
+        dut.run(ns: 10)
+        if dut.avg.valid {
+            outputs = outputs + 1
+            if outputs <= 4 {
+                expect dut.avg.data == 0x49 * outputs
+            } else {
+                expect dut.avg.data == 0x124
+            }
+        }
+    }
+    expect outputs >= 10
+}
+
+test "nothing is captured while capture is low" {
+    let dut = sim SensorBridge()
+    dut.capture = false
+    dut.adc_valid = true
+    dut.adc_data = 7
+    dut.reset()
+    dut.run(ns: 1000)
+    expect dut.count == 0 and dut.peak == 0
+}
+
+test "a full FIFO drops samples and counts them" {
+    let dut = sim SensorBridge<Depth: 4>()
+    dut.capture = true
+    dut.adc_valid = false
+    dut.adc_data = 0
+    dut.reset()
+    dut.run(ns: 200)
+    // stop the system clock: only the ADC side advances
+    dut.adc_valid = true
+    for i in 0..8 {
+        dut.adc_data = i as uint<12>
+        dut.adc.step()
+    }
+    dut.adc_valid = false
+    dut.run(ns: 500)
+    expect dut.count == 4
+    expect dut.dropped == 4
+}

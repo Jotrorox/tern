@@ -210,9 +210,11 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b)
         if (!it || it->kind != ITEM_MODULE) {
             if (it && it->kind == ITEM_EXTERN)
                 diag_error(it->name.span, "`%s` is an extern module; it cannot be the top of a build", name);
-            else
+            else {
                 diag_error(span_none(), "cannot find module `%s`%s", name,
-                           o->top ? "" : " (the `top` of the build target)");
+                           o->top ? "" : " (the `top` of the build target in tern.toml)");
+                driver_suggest_module(dr, name);
+            }
             free(cwd);
             return -1;
         }
@@ -223,8 +225,13 @@ int bk_build_run(const BkBuildOptions *o, BkBuild *b)
         driver_tops(dr, &tops);
         if (!tops.len) {
             driver_default_roots(dr, &tops);
-            if (tops.len > 1)
+            if (tops.len > 1) {
                 tops.len = 1; /* the first module that needs no generic arguments */
+                fprintf(stderr,
+                        "tern build: note: no #[top] module; building `%s`, the first module without required "
+                        "generics\n  (mark the top with #[top] or name it with --top)\n",
+                        tops.data[0].item->name.name);
+            }
         }
     }
     if (!tops.len) {
@@ -316,7 +323,8 @@ static const char *bk_kind_label(const SvOutput *out, const SvFile *f)
 int bk_build_write(BkBuild *b, int summary)
 {
     static const char *const groups[] = {"package", "modules", "extern", "memory init", "constraints", "regmaps"};
-    size_t i, g, changed = 0;
+    size_t i, g, changed = 0, nfiles = b->out.nfiles;
+    StrBuf flname = {0};
     if (os_mkdir_p(b->out_dir) != 0) {
         diag_error(span_none(), "cannot create directory `%s`", b->out_dir);
         return -1;
@@ -333,8 +341,34 @@ int bk_build_write(BkBuild *b, int summary)
         changed += r == 1;
         free(p);
     }
-    if (!summary)
+    if (b->ndesigns) {
+        /* <top>.f: the HDL files in compile order (package first) for
+         * simulators and synthesis tools, with paths relative to the
+         * directory tern build ran in: `iverilog -g2012 -c build/default/Top.f` */
+        StrBuf fl = {0};
+        char *p;
+        int r;
+        for (g = 0; g < 2; g++)
+            for (i = 0; i < b->out.nfiles; i++)
+                if (b->out.files[i].kind == (g == 0 ? SV_FILE_PACKAGE : SV_FILE_MODULE))
+                    sb_printf(&fl, "%s/%s\n", b->out_dir_display, b->out.files[i].name);
+        sb_printf(&flname, "%s.f", bk_build_top_name(b));
+        p = os_path_join(b->out_dir, flname.data);
+        r = os_write_file_if_changed(p, fl.data ? fl.data : "", fl.len);
+        sb_free(&fl);
+        if (r < 0) {
+            diag_error(span_none(), "cannot write `%s`", p);
+            free(p);
+            return -1;
+        }
+        free(p);
+        changed += r == 1;
+        nfiles++;
+    }
+    if (!summary) {
+        sb_free(&flname);
         return 0;
+    }
     printf("tern build: %s", b->ndesigns ? b->designs[0]->top->display : "?");
     for (i = 1; i < b->ndesigns; i++)
         printf(", %s", b->designs[i]->top->display);
@@ -355,7 +389,10 @@ int bk_build_write(BkBuild *b, int summary)
         if (col)
             printf("\n");
     }
-    printf("  %u file%s, %u changed\n", (unsigned)b->out.nfiles, b->out.nfiles == 1 ? "" : "s", (unsigned)changed);
+    if (flname.len)
+        printf("  %-12s %s\n", "file list", flname.data);
+    printf("  %u file%s, %u changed\n", (unsigned)nfiles, nfiles == 1 ? "" : "s", (unsigned)changed);
+    sb_free(&flname);
     return 0;
 }
 

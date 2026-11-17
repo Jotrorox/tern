@@ -242,6 +242,8 @@ Env *el_bind_generics(Elab *el, GenericParams *gp, const char *owner, FileUnit *
                 v = elab_convert(el, v, pt, p->default_value, NULL, p->default_value->span);
         } else {
             el_error(el, at, "missing generic argument `%s` for `%s`", p->name.name, owner);
+            el_help(el, "give it %s: `%s<%s%s ..>`", p->kind == GENERIC_TYPE ? "a type" : "a value", owner,
+                    p->name.name, p->kind == GENERIC_TYPE ? ": u8," : ": 4,");
             ok = 0;
             break;
         }

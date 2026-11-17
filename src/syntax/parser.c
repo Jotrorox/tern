@@ -2014,6 +2014,10 @@ static Block *ps_block_inner(Parser *p)
                 diag_help("write `{ ... }`");
         } else if (ps_kind(p) == TK_ERROR) {
             ps_silent_fail(p);
+        } else if (ps_kind(p) == TK_ASSIGN) {
+            /* `if a = b {` */
+            if (ps_error(p, ps_err_span(p), "expected `{`, found `=`"))
+                diag_help("compare with `==`; `=` is an assignment, not an expression");
         } else {
             ps_error(p, ps_err_span(p), "expected `{`, found %s", ps_describe(p));
         }

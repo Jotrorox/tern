@@ -184,6 +184,7 @@ static struct {
     int color;
     int strict;
     FILE *out;
+    char *path_base;   /* directory prefix stripped from printed paths (cwd) */
     int errors;
     int warnings;
 } diag_st;
@@ -372,6 +373,20 @@ DiagFormat diag_get_format(void) { return diag_st.format; }
 void diag_set_color(int on) { diag_st.color = on; }
 void diag_set_strict(int on) { diag_st.strict = on; }
 void diag_set_output(FILE *f) { diag_st.out = f; }
+void diag_set_path_base(const char *dir)
+{
+    free(diag_st.path_base);
+    diag_st.path_base = dir && *dir ? xstrdup(dir) : NULL;
+}
+
+/* `path` relative to the path base when it lies below it */
+const char *diag_path_display(const char *path)
+{
+    size_t n = diag_st.path_base ? strlen(diag_st.path_base) : 0;
+    if (n && strncmp(path, diag_st.path_base, n) == 0 && path[n] == '/' && path[n + 1])
+        return path + n + 1;
+    return path;
+}
 int diag_error_count(void) { return diag_st.errors; }
 int diag_warning_count(void) { return diag_st.warnings; }
 
@@ -447,7 +462,7 @@ static void diag_put_location(StrBuf *out, Span s)
     DiagLoc l = diag_resolve(s);
     if (!l.f)
         return;
-    sb_printf(out, "%s:%u:%u: ", l.f->path, (unsigned)l.line, (unsigned)l.col);
+    sb_printf(out, "%s:%u:%u: ", diag_path_display(l.f->path), (unsigned)l.line, (unsigned)l.col);
 }
 
 static int diag_digits(uint32_t n)

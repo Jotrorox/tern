@@ -3,17 +3,18 @@ package std::io
 // std::io: peripheral and pin-level protocol engines.
 //
 // Files in this package:
-//   io.tern          EdgeDetect, Debounce
-//   uart.tern        UartTxCore, UartRxCore, UartTx, UartRx, Uart
-//   spi.tern         SpiMaster, SpiSlave, QspiMaster
-//   i2c.tern         I2cMaster, I2cSlave
-//   pwm.tern         Pwm
-//   quadrature.tern  QuadratureDecoder
-//   ws2812.tern      Ws2812
-//   sevenseg.tern    SevenSegment, hex_to_segments
-//   ps2.tern         Ps2
-//   onewire.tern     OneWire
-//   sdio.tern        Sdio (SPI-mode SD card)
+//
+//     io.tern          EdgeDetect, Debounce
+//     uart.tern        UartTxCore, UartRxCore, UartTx, UartRx, Uart
+//     spi.tern         SpiMaster, SpiSlave, QspiMaster
+//     i2c.tern         I2cMaster, I2cSlave
+//     pwm.tern         Pwm
+//     quadrature.tern  QuadratureDecoder
+//     ws2812.tern      Ws2812
+//     sevenseg.tern    SevenSegment, hex_to_segments
+//     ps2.tern         Ps2
+//     onewire.tern     OneWire
+//     sdio.tern        Sdio (SPI-mode SD card)
 //
 // Conventions for pins:
 // * Inputs coming from pins are asynchronous; every engine that samples a pin

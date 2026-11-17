@@ -202,6 +202,12 @@ static void elb_assign_leaf(Elab *el, Place *p, Value v, Expr *src, Expr *lhs, S
     }
     if (s->kind == IRS_IN) {
         el_error(el, at, "cannot assign to input port `%s`", s->path);
+        if (s->path && strchr(s->path, '.'))
+            el_help(el, "`%s` flows into this module: on an `in` bundle port only the `flip` fields are outputs",
+                    s->path);
+        else
+            el_help(el, "inputs are driven by the instantiating module; for a value computed here use an `out` "
+                        "port or a `let`/`var`");
         return;
     }
     if (map_has(&mc->inst_out, p->sig)) {
@@ -210,6 +216,8 @@ static void elb_assign_leaf(Elab *el, Place *p, Value v, Expr *src, Expr *lhs, S
     }
     if (map_has(&mc->let_wire, p->sig)) {
         el_error(el, at, "cannot assign to `%s`: a `let` is assigned once, at its declaration", s->path);
+        el_help(el, "for a value assigned in a block, declare `var %s: ...` (comb) or `reg %s: ...` (on)", s->name,
+                s->name);
         return;
     }
     rhs = el_to_ir(el, &v, at);
@@ -234,6 +242,9 @@ static void elb_assign_leaf(Elab *el, Place *p, Value v, Expr *src, Expr *lhs, S
             }
         } else if (s->kind == IRS_REG) {
             el_error(el, at, "register `%s` can only be assigned in an `on` block", s->path);
+            el_help(el, "a `comb` block assigns `var`s and outputs: declare `var %s: ...` for a combinational "
+                        "value, or assign the register in `on`",
+                    s->name);
             return;
         }
         ir_stmts_push(el->blk->out, ir_stmt_assign(el->design->arena, lv, rhs, at));
@@ -510,6 +521,12 @@ static Value elb_force_reg(Elab *el, Binding *b, Stmt *s, Env *env)
     Value v;
     if (t->kind == TY_ERROR)
         return val_error();
+    if (t->kind == TY_BUNDLE) {
+        el_error(el, s->u.reg.type->span, "register `%s` cannot hold a bundle (%s)", s->u.reg.name.name, ty_str(t));
+        el_help(el, "declare one register per field (`reg %s_valid: bool`), or use a struct type",
+                s->u.reg.name.name);
+        return val_error();
+    }
     if (!t->hw) {
         el_error(el, s->u.reg.type->span, "register `%s` has type %s, which is not a hardware type", s->u.reg.name.name,
                  ty_str(t));
@@ -530,6 +547,7 @@ static Value elb_force_reg(Elab *el, Binding *b, Stmt *s, Env *env)
             if (iv.kind != VAL_ERROR && !val_is_const(&iv)) {
                 el_error(el, s->u.reg.init->span, "the reset value of `%s` must be a compile-time constant",
                          s->u.reg.name.name);
+                el_help(el, "a reset value is a constant; to load a signal, assign it in the `on` block");
             } else if (iv.kind != VAL_ERROR) {
                 ir_set_init(el->design, m, p->sig, elab_const_bits(el, &iv, t));
             }
@@ -656,9 +674,12 @@ static Value elb_force_domain(Elab *el, Binding *b, Stmt *s, Env *env)
                      r.ty ? ty_str(r.ty) : val_kind_name((ValKind)r.kind));
             return val_error();
         }
-        if (r.u.e->kind == IRE_SIG)
+        if (r.u.e->kind == IRE_SIG && m->sigs[r.u.e->sig].type->async == r.ty->async &&
+            m->sigs[r.u.e->sig].type->active_low == r.ty->active_low)
             rsig = r.u.e->sig;
         else {
+            /* an expression, or a signal converted to another style
+             * (`rst_out as reset`): a wire of the domain's reset type */
             rsig = ir_add_signal(el->design, m,
                                  elb_name(el, env, arena_printf(&el->arena, "%s_reset", s->u.domain.name.name)), NULL,
                                  IRS_WIRE, el_irty(el, r.ty), s->span);
@@ -906,6 +927,30 @@ static int elb_find_port(ModInfo *mi, const char *name)
     return -1;
 }
 
+/* help line for an unknown port: the closest port name, else the ports */
+static void elb_port_help(Elab *el, ModInfo *mi, const char *name)
+{
+    const char *names[128];
+    size_t n = 0;
+    uint32_t i;
+    const char *best;
+    StrBuf sb = {0};
+    for (i = 0; i < mi->nports && n < TERN_ARRAY_LEN(names); i++)
+        names[n++] = mi->ports[i].name;
+    best = strlen(name) > 2 ? el_closest(name, names, n) : NULL; /* `c` is "close" to every short name */
+    if (best) {
+        el_help(el, "did you mean `%s`?", best);
+        return;
+    }
+    for (i = 0; i < n && i < 12; i++)
+        sb_printf(&sb, "%s`%s`", i ? ", " : "", names[i]);
+    if (n > 12)
+        sb_puts(&sb, ", ...");
+    if (n)
+        el_help(el, "its ports are %s", sb.data);
+    sb_free(&sb);
+}
+
 /* the parent domain whose clock drives the clock port of child domain cd */
 static uint32_t elb_map_child_domain(Elab *el, ModInfo *mi, IrExpr **clk_conn, uint32_t cd, uint32_t fallback)
 {
@@ -916,9 +961,16 @@ static uint32_t elb_map_child_domain(Elab *el, ModInfo *mi, IrExpr **clk_conn, u
     ck = c->domains[cd].clock;
     for (i = 0; i < mi->nports; i++) {
         Place *pp = mi->ports[i].place;
-        if (pp && pp->kind == PL_SIG && pp->sig == ck && clk_conn[i] && clk_conn[i]->kind == IRE_SIG)
-            return elb_domain_for_clock(el, clk_conn[i]->sig, 0) != IR_NONE ? elb_domain_for_clock(el, clk_conn[i]->sig, 0)
-                                                                            : fallback;
+        if (pp && pp->kind == PL_SIG && pp->sig == ck && clk_conn[i] && clk_conn[i]->kind == IRE_SIG) {
+            IrModule *m = el->mod->ir;
+            uint32_t d;
+            /* the instance's own domain when it has this clock: two domains
+             * may share a clock with different resets (`@ d`) */
+            if (fallback != IR_NONE && fallback < m->ndomains && m->domains[fallback].clock == clk_conn[i]->sig)
+                return fallback;
+            d = elb_domain_for_clock(el, clk_conn[i]->sig, 0);
+            return d != IR_NONE ? d : fallback;
+        }
     }
     return fallback;
 }
@@ -1065,6 +1117,7 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
         if (k < 0) {
             el_error(el, args[i].name.name ? args[i].name.span : args[i].span, "module `%s` has no port `%s`",
                      vm->display, pn);
+            elb_port_help(el, mi, pn);
             continue;
         }
         if (given[k]) {
@@ -1104,6 +1157,7 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
                     el_error(el, args[given[i] - 1].value->span, "reset style mismatch: `%s` is %s, port `%s` is %s",
                              el_text(args[given[i] - 1].value), ty_str(rv.ty), pp->name, ty_str(pp->ty));
                     el_help(el, "convert explicitly: `%s as %s`", el_text(args[given[i] - 1].value), ty_str(pp->ty));
+                    conn[i] = rv.u.e; /* no follow-up errors */
                 } else {
                     conn[i] = rv.u.e;
                 }
@@ -1125,8 +1179,10 @@ Value el_instance(Elab *el, Expr *call, Env *env, const char *name, Span at, Val
                 Ty *rt = ty_reset(el->S, rs->type->async, rs->type->active_low);
                 if (rt != pp->ty) {
                     el_error(el, at, "instance `%s`: reset port `%s` is %s, but the inherited reset `%s` is %s", name,
-                             pp->name, ty_str(pp->ty), rs->name, ty_str(rt));
-                    el_help(el, "connect it explicitly: `%s: %s as %s`", pp->name, rs->name, ty_str(pp->ty));
+                             pp->name, ty_str(pp->ty), rs->path ? rs->path : rs->name, ty_str(rt));
+                    el_help(el, "connect it explicitly: `%s: %s as %s`", pp->name, rs->path ? rs->path : rs->name,
+                            ty_str(pp->ty));
+                    conn[i] = ir_sig(el->design->arena, m, m->domains[pd].reset, at); /* no follow-up errors */
                 } else {
                     conn[i] = ir_sig(el->design->arena, m, m->domains[pd].reset, at);
                 }
@@ -1187,6 +1243,7 @@ Value el_inst_field(Elab *el, Value inst, const char *name, Span at)
     int k = elb_find_port(vi->mi, name);
     if (k < 0) {
         el_error(el, at, "module `%s` has no port `%s`", vi->mi->display, name);
+        elb_port_help(el, vi->mi, name);
         return val_error();
     }
     return vi->ports[k];
@@ -2079,6 +2136,7 @@ static void elb_finish(Elab *el, ModCtx *mc)
 {
     IrModule *m = mc->ir;
     size_t i, j;
+    uint32_t k;
     /* var defaults: first statement of the comb process that drives the var */
     for (i = 0; i < mc->var_defaults.len; i++) {
         VarDefault *vd = &mc->var_defaults.data[i];
@@ -2117,6 +2175,7 @@ static void elb_finish(Elab *el, ModCtx *mc)
         PendingIn *pi = &mc->pendings.data[i];
         StrBuf sb = {0};
         int count = 0;
+        const char *clock_port = NULL;
         ValInst *vi = pi->inst;
         if (pi->assigned || !vi)
             continue;
@@ -2139,11 +2198,20 @@ static void elb_finish(Elab *el, ModCtx *mc)
             }
             sb_printf(&sb, "`%.*s`", (int)len, nm);
             count++;
+            for (k = 0; k < vi->mi->nports && !clock_port; k++)
+                if ((vi->mi->ports[k].is_clock || vi->mi->ports[k].is_reset) &&
+                    strlen(vi->mi->ports[k].name) == len && strncmp(vi->mi->ports[k].name, nm, len) == 0)
+                    clock_port = vi->mi->ports[k].name;
         }
         el_error(el, vi->loc, "instance `%s` of `%s` has unconnected input%s %s", vi->name, vi->mi->display,
                  count == 1 ? "" : "s", sb_cstr(&sb));
-        el_help(el, "connect %s in the instantiation (`port: value`) or assign it later (`%s.port = value`)",
-                count == 1 ? "it" : "them", vi->name);
+        if (clock_port)
+            el_help(el, "clock and reset ports are inherited only from a default domain (a module with one "
+                        "clock); connect `%s: ...` or put the instance in a domain: `%s(..) @ dom`",
+                    clock_port, vi->mi->display);
+        else
+            el_help(el, "connect %s in the instantiation (`port: value`) or assign it later (`%s.port = value`)",
+                    count == 1 ? "it" : "them", vi->name);
         sb_free(&sb);
     }
 }
