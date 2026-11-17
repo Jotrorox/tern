@@ -1,0 +1,8 @@
+count = 3
+c = 3
+count = 3
+log: count is 1
+counter.stim:14:1: expect failed at cycle 13: dut.count == 3
+    dut.count = 2
+---- stderr ----
+tern sim: counter.stim:14: stopped at this line

@@ -115,3 +115,14 @@ module LiteralCascade {
     out y: Valid<u8>
     y = Valid { valid: true, data: missing }
 }
+
+module IfArmWidth {
+    in clk: clock
+    in en: bool
+    out y: uint<4>
+    reg c: uint<4> = 0
+    on clk {
+        if en { c = if c == 9 { 0 } else { c + 1 } }
+    }
+    y = c
+}

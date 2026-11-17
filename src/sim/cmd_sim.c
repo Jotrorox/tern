@@ -375,6 +375,7 @@ int cmd_sim(int argc, char **argv)
     } else {
         char buf[4096];
         for (;;) {
+            int r;
             if (c.interactive) {
                 fputs("tern> ", stdout);
                 fflush(stdout);
@@ -382,8 +383,15 @@ int cmd_sim(int argc, char **argv)
             if (!fgets(buf, sizeof buf, stdin))
                 break;
             c.lineno++;
-            if (simc_line(&c, buf) < 0)
+            r = simc_line(&c, buf);
+            if (r < 0)
                 break;
+            if (r == 0 && !c.interactive) {
+                /* piped stdin behaves like a script: stop, exit status 1 */
+                fprintf(stderr, "tern sim: <stdin>:%u: stopped at this line\n", (unsigned)c.lineno);
+                rc = TERN_EXIT_FAIL;
+                break;
+            }
         }
         if (c.interactive)
             putchar('\n');

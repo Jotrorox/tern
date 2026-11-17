@@ -754,6 +754,36 @@ int cmd_update(int argc, char **argv)
     vec_push(names, NULL);
     if (cpkg_sync(&p, &p.m, names.data, names.len == 1, &g) == 0)
         rc = TERN_EXIT_OK;
+    /* git dependencies pinned by tag stay; say when a newer release exists */
+    for (i = 0; rc == TERN_EXIT_OK && i < p.m.ndeps; i++) {
+        const TernDep *d = &p.m.deps[i];
+        Arena a = {0};
+        PkgAvailList tags;
+        PkgVersion pinned;
+        const PkgAvail *best = NULL;
+        size_t k, j;
+        int named = names.len == 1;
+        for (j = 0; j + 1 < names.len; j++)
+            if (strcmp(names.data[j], d->name) == 0)
+                named = 1;
+        if (!named || d->kind != PKG_DEP_GIT || !d->tag ||
+            pkg_version_parse(d->tag, &pinned, 1) != 0 ||
+            pkg_git_tags(d->git, &a, &tags) != 0) {
+            arena_release(&a);
+            continue;
+        }
+        for (k = 0; k < tags.items.len; k++) {
+            const PkgAvail *t = &tags.items.data[k];
+            if (!t->version.pre[0] && pkg_version_cmp(&t->version, &pinned) > 0 &&
+                (!best || pkg_version_cmp(&t->version, &best->version) > 0))
+                best = t;
+        }
+        if (best)
+            pkg_status("Note", "%s is pinned to tag %s; %s is available (edit its tag in tern.toml)", d->name,
+                       d->tag, best->tag);
+        vec_free(tags.items);
+        arena_release(&a);
+    }
 out:
     if (pr >= 0)
         pkg_lock_free(&prev);

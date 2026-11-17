@@ -88,3 +88,10 @@ common_mistakes.tern:116:36: error: cannot find `missing` in this scope
     |                                    ^^^^^^^
   in: LiteralCascade
 
+common_mistakes.tern:125:44: error: width mismatch: `c + 1` is uint<5>, expected uint<4>
+    |
+125 |         if en { c = if c == 9 { 0 } else { c + 1 } }
+    |                                            ^^^^^
+    = help: use `+%` for a wrapping add, or truncate with `as uint<4>`
+  in: IfArmWidth
+

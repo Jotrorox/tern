@@ -1,0 +1,15 @@
+# a comment
+reset
+en = true
+step 3
+peek count c
+count
+for i in 0..2 { dut.step() }
+log("count is {}", dut.count)
+expect dut.count == 1
+step
+expect dut.count == 2
+en = false
+step 5
+expect dut.count == 3
+step

@@ -72,8 +72,9 @@ static const MainCmd main_cmds[] = {
     {"sim", cmd_sim, "Verification", "<top> [--vcd <file>] [<script>] [<paths>]",
      "interactive stimulus REPL or a stimulus script against a top",
      "  <top>               module to simulate, e.g. Top or 'Fifo<u8, 4>' (default: the #[top])\n"
-     "  <script>            run the lines of this file instead of reading stdin; stops\n"
-     "                      at the first failing line (exit status 1)\n"
+     "  <script>            run the lines of this file instead of reading stdin; a script\n"
+     "                      (or piped stdin) stops at the first failing line (exit\n"
+     "                      status 1)\n"
      "  --vcd <file>        record a VCD waveform\n"
      "  --seed <n>          seed of rand<T>() and of power-on register values\n"
      "commands (the design is `dut`; paths are relative to it):\n"

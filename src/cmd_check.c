@@ -44,7 +44,8 @@ static void cmd_check_report(Driver *dr, IrDesign *d)
                 if (d->modules[m]->tern_name == it->name.name && d->modules[m]->loc.file == it->name.span.file)
                     found = 1;
             if (!found) {
-                fprintf(stderr, "tern check: not elaborated: %s (%s)\n", it->name.name, f->ast->path);
+                fprintf(stderr, "tern check: not elaborated: %s (%s)\n", it->name.name,
+                        diag_path_display(f->ast->path));
                 never++;
             }
         }

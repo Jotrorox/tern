@@ -1,0 +1,14 @@
+// args: Counter<4> counter.stim
+// tern sim with a stimulus script: commands, Tern statements, peeks of
+// missing signals and a failing expect (reported at its script line)
+module Counter<Max: uint = 10> {
+    in clk: clock
+    in rst: reset
+    in en: bool
+    out count: uint<clog2(Max)>
+    reg c: uint<clog2(Max)> = 0
+    on clk {
+        if en { c = if c == Max - 1 { 0 } else { c +% 1 } }
+    }
+    count = c
+}

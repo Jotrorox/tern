@@ -4943,7 +4943,16 @@ static Value ce_if_hw(Elab *el, Value c, Block *then_b, Expr *else_e, Env *env, 
             /* the arm that returned has no value: the fn result covers that path */
             r = arms[0].returned ? arms[1].val : arms[0].val;
         } else {
-            r = el_unify_mux(el, c, arms[0].val, arms[1].val, expect, at);
+            Value tv = arms[0].val, fv = arms[1].val;
+            if (expect && expect->kind != TY_ERROR && expect->hw && c.kind != VAL_BOOL && tv.kind != VAL_ERROR &&
+                fv.kind != VAL_ERROR) {
+                /* convert each arm with its own expression, so a width error
+                 * names it (`c + 1` is uint<5>) instead of the whole `if` */
+                Expr *te = then_b->tail, *fe = else_e->kind == EXPR_BLOCK ? else_e->u.block->tail : else_e;
+                tv = elab_convert(el, tv, expect, te, NULL, te ? te->span : at);
+                fv = elab_convert(el, fv, expect, fe, NULL, fe ? fe->span : at);
+            }
+            r = el_unify_mux(el, c, tv, fv, expect, at);
         }
     }
     for (a = 0; a < 2; a++)
