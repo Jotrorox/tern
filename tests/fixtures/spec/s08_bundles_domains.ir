@@ -1,0 +1,356 @@
+module Dma
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<async, low> @0
+  2: in bus_valid (bus.valid): bool @0
+  3: in bus_data (bus.data): uint<32> @0
+  4: out bus_ready (bus.ready): bool @0 flipped
+  5: out fb_valid (fb.valid): bool @0
+  6: out fb_data (fb.data): uint<32> @0
+  7: in fb_ready (fb.ready): bool @0 flipped
+  8: out flag: bool @0
+  assign fb_valid = bus_valid
+  assign fb_data = bus_data
+  assign bus_ready = fb_ready
+  assign flag = bus_valid
+end
+module AsyncFifo_u32_16 "AsyncFifo<uint<32>, 16>" in std::fifo cdc(async_fifo)
+  param Depth = 32'h10
+  domain 0 "src_d" clock=src reset=src_rst
+  domain 1 "dst_d" clock=dst reset=dst_rst
+  0: in src: clock
+  1: in src_rst: reset<sync, high>
+  2: in dst: clock
+  3: in dst_rst: reset<sync, high>
+  4: in push_valid (push.valid): bool @0
+  5: in push_data (push.data): uint<32> @0
+  6: out push_ready (push.ready): bool @0 flipped
+  7: out pop_valid (pop.valid): bool @1
+  8: out pop_data (pop.data): uint<32> @1
+  9: in pop_ready (pop.ready): bool @1 flipped
+  10: out wr_count: uint<5> @0
+  11: out rd_count: uint<5> @1
+  12: mem buf: uint<32> x 16 #[ram(distributed)]
+  13: reg wbin: uint<5> @0 = 5'h0
+  14: reg wgray: bit<5> @0 = 5'h0
+  15: reg wq1_rgray: bit<5> @0 = 5'h0 #[async_reg]
+  16: reg wq2_rgray: bit<5> @0 = 5'h0 #[async_reg]
+  17: reg rbin: uint<5> @1 = 5'h0
+  18: reg rgray: bit<5> @1 = 5'h0
+  19: reg rq1_wgray: bit<5> @1 = 5'h0 #[async_reg]
+  20: reg rq2_wgray: bit<5> @1 = 5'h0 #[async_reg]
+  21: wire _t0: bit<5>
+  22: wire wused: uint<5>
+  23: wire _t1: bit<5>
+  24: wire rused: uint<5>
+  assign _t0 = (((wq2_rgray ^ (wq2_rgray >> 3'h1)) ^ ((wq2_rgray ^ (wq2_rgray >> 3'h1)) >> 3'h2)) ^ (((wq2_rgray ^ (wq2_rgray >> 3'h1)) ^ ((wq2_rgray ^ (wq2_rgray >> 3'h1)) >> 3'h2)) >> 3'h4))
+  assign wused = (wbin - _t0)
+  assign push_ready = (wused != 5'h10)
+  assign wr_count = wused
+  assign _t1 = (((rq2_wgray ^ (rq2_wgray >> 3'h1)) ^ ((rq2_wgray ^ (rq2_wgray >> 3'h1)) >> 3'h2)) ^ (((rq2_wgray ^ (rq2_wgray >> 3'h1)) ^ ((rq2_wgray ^ (rq2_wgray >> 3'h1)) >> 3'h2)) >> 3'h4))
+  assign rused = (_t1 - rbin)
+  assign pop_valid = (rused != 5'h0)
+  assign pop_data = buf[zext4(rbin)]
+  assign rd_count = rused
+  on 0 regs(wbin, wgray, wq1_rgray, wq2_rgray) {
+    wq1_rgray = rgray
+    wq2_rgray = wq1_rgray
+    if (push_valid && push_ready) {
+      buf[zext4(wbin)] = push_data
+      wbin = (wbin + 5'h1)
+      wgray = ((wbin + 5'h1) ^ ((wbin + 5'h1) >> 3'h1))
+    }
+  }
+  on 1 regs(rbin, rgray, rq1_wgray, rq2_wgray) {
+    rq1_wgray = wgray
+    rq2_wgray = rq1_wgray
+    if (pop_valid && pop_ready) {
+      rbin = (rbin + 5'h1)
+      rgray = ((rbin + 5'h1) ^ ((rbin + 5'h1) >> 3'h1))
+    }
+  }
+  assert property no_overflow @0: always (wr_count <= 5'h10)
+  assert property no_underflow @0: always (rd_count <= 5'h10)
+  assert property wgray_one_bit @0: always (!(wgray == past(wgray, 1)) |-> ((((((3'h0 + zext3((wgray ^ past(wgray, 1))[0])) + zext3((wgray ^ past(wgray, 1))[1])) + zext3((wgray ^ past(wgray, 1))[2])) + zext3((wgray ^ past(wgray, 1))[3])) + zext3((wgray ^ past(wgray, 1))[4])) == 3'h1))
+  assert property rgray_one_bit @0: always (!(rgray == past(rgray, 1)) |-> ((((((3'h0 + zext3((rgray ^ past(rgray, 1))[0])) + zext3((rgray ^ past(rgray, 1))[1])) + zext3((rgray ^ past(rgray, 1))[2])) + zext3((rgray ^ past(rgray, 1))[3])) + zext3((rgray ^ past(rgray, 1))[4])) == 3'h1))
+  assert property pop_stable @0: always ((pop_valid && !pop_ready) |=> (pop_valid && (pop_data == past(pop_data, 1))))
+  cover property fills_up @0: !push_ready
+end
+module Scanout
+  domain 0 "" clock=clk reset=none default
+  0: in clk: clock
+  1: in fb_valid (fb.valid): bool @0
+  2: in fb_data (fb.data): uint<32> @0
+  3: out fb_ready (fb.ready): bool @0 flipped
+  4: out pixel: uint<32> @0
+  5: reg p: uint<32> @0 = 32'h0
+  assign fb_ready = 1'h1
+  assign pixel = p
+  on 0 regs(p) {
+    if fb_valid {
+      p = fb_data
+    }
+  }
+end
+module Sync2_bool "Sync2<bool>" in std::cdc cdc(sync2)
+  domain 0 "dst" clock=dst reset=none
+  domain 1 "src" clock=src reset=none
+  0: in src: clock
+  1: in dst: clock
+  2: in d: bool @1
+  3: out q: bool @0
+  4: reg s1: bool @0 = 1'h0 #[async_reg]
+  5: reg s2: bool @0 = 1'h0 #[async_reg]
+  assign q = s2
+  on 0 regs(s1, s2) {
+    s1 = d
+    s2 = s1
+  }
+  assert property two_stages @0: always (s2 == past(s1, 1))
+end
+module Skid_u8 "Skid<uint<8>>" in std::stream
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in in_valid (in.valid): bool @0
+  3: in in_data (in.data): uint<8> @0
+  4: out in_ready (in.ready): bool @0 flipped
+  5: out out_valid (out.valid): bool @0
+  6: out out_data (out.data): uint<8> @0
+  7: in out_ready (out.ready): bool @0 flipped
+  8: reg main_valid: bool @0 = 1'h0
+  9: reg main_data: uint<8> @0
+  10: reg skid_valid: bool @0 = 1'h0
+  11: reg skid_data: uint<8> @0
+  assign in_ready = !skid_valid
+  assign out_valid = main_valid
+  assign out_data = main_data
+  on 0 regs(main_valid, main_data, skid_valid, skid_data) {
+    if (out_ready || !main_valid) {
+      if skid_valid {
+        main_valid = 1'h1
+        main_data = skid_data
+        skid_valid = 1'h0
+      } else {
+        main_valid = in_valid
+        main_data = in_data
+      }
+    } else {
+      if (in_valid && !skid_valid) {
+        skid_valid = 1'h1
+        skid_data = in_data
+      }
+    }
+  }
+  assert property out_stable @0: always ((out_valid && !out_ready) |=> (out_valid && (out_data == past(out_data, 1))))
+  assert property skid_behind_main @0: always (skid_valid |-> main_valid)
+  cover property skid_used @0: skid_valid
+end
+module Bundles
+  domain 0 "" clock=clk reset=rst default
+  0: in clk: clock
+  1: in rst: reset<sync, high> @0
+  2: in rx_valid (rx.valid): bool @0
+  3: in rx_data (rx.data): uint<8> @0
+  4: out rx_ready (rx.ready): bool @0 flipped
+  5: out tx_valid (tx.valid): bool @0
+  6: out tx_data (tx.data): uint<8> @0
+  7: in tx_ready (tx.ready): bool @0 flipped
+  8: in s_valid (s.valid): bool @0
+  9: in s_data (s.data): uint<8> @0
+  10: out s_ready (s.ready): bool @0 flipped
+  11: out doubled_valid (doubled.valid): bool @0
+  12: out doubled_data (doubled.data): uint<8> @0
+  13: in doubled_ready (doubled.ready): bool @0 flipped
+  14: in t_valid (t.valid): bool @0
+  15: in t_data (t.data): uint<8> @0
+  16: out t_ready (t.ready): bool @0 flipped
+  17: out sk_valid (sk.valid): bool @0
+  18: out sk_data (sk.data): uint<8> @0
+  19: in sk_ready (sk.ready): bool @0 flipped
+  20: in bus_aw_valid (bus.aw.valid): bool @0
+  21: in bus_aw_data (bus.aw.data): uint<32> @0
+  22: out bus_aw_ready (bus.aw.ready): bool @0 flipped
+  23: in bus_w_valid (bus.w.valid): bool @0
+  24: in bus_w_data (bus.w.data): struct { data: uint<32>, strb: bit<4> } @0
+  25: out bus_w_ready (bus.w.ready): bool @0 flipped
+  26: out bus_b_valid (bus.b.valid): bool @0 flipped
+  27: out bus_b_data (bus.b.data): bit<2> @0 flipped
+  28: in bus_b_ready (bus.b.ready): bool @0
+  29: in bus_ar_valid (bus.ar.valid): bool @0
+  30: in bus_ar_data (bus.ar.data): uint<32> @0
+  31: out bus_ar_ready (bus.ar.ready): bool @0 flipped
+  32: out bus_r_valid (bus.r.valid): bool @0 flipped
+  33: out bus_r_data (bus.r.data): struct { data: uint<32>, resp: bit<2> } @0 flipped
+  34: in bus_r_ready (bus.r.ready): bool @0
+  35: out v_valid (v.valid): bool @0
+  36: out v_data (v.data): uint<8> @0
+  37: out fired: bool @0
+  38: wire skid_0_in_valid (skid_0.in.valid): bool @0
+  39: wire skid_0_in_data (skid_0.in.data): uint<8> @0
+  40: wire skid_0_in_ready (skid_0.in.ready): bool @0
+  41: wire skid_0_out_valid (skid_0.out.valid): bool @0
+  42: wire skid_0_out_data (skid_0.out.data): uint<8> @0
+  43: wire skid_0_out_ready (skid_0.out.ready): bool @0
+  assign tx_valid = rx_valid
+  assign tx_data = rx_data
+  assign rx_ready = tx_ready
+  assign doubled_valid = s_valid
+  assign doubled_data = (s_data + s_data)
+  assign s_ready = doubled_ready
+  assign skid_0_in_valid = t_valid
+  assign skid_0_in_data = t_data
+  assign t_ready = skid_0_in_ready
+  assign sk_valid = skid_0_out_valid
+  assign sk_data = skid_0_out_data
+  assign skid_0_out_ready = sk_ready
+  assign fired = (rx_valid && rx_ready)
+  assign v_valid = rx_valid
+  assign v_data = rx_data
+  assign bus_aw_ready = 1'h1
+  assign bus_w_ready = 1'h1
+  assign bus_b_valid = (bus_aw_valid && bus_w_valid)
+  assign bus_b_data = 2'h0
+  assign bus_ar_ready = 1'h0
+  assign bus_r_valid = 1'h0
+  assign bus_r_data.data = 32'h0
+  assign bus_r_data.resp = 2'h0
+  inst skid_0: Skid_u8 (clk = clk, rst = rst, in_valid = skid_0_in_valid, in_data = skid_0_in_data, in_ready -> skid_0_in_ready, out_valid -> skid_0_out_valid, out_data -> skid_0_out_data, out_ready = skid_0_out_ready)
+end
+module Top top
+  domain 0 "sys" clock=sys_clk reset=sys_rst
+  domain 1 "pix" clock=pix_clk reset=none
+  0: in sys_clk: clock
+  1: in sys_rst: reset<async, low>
+  2: in pix_clk: clock
+  3: in pix_rst: reset<sync, high>
+  4: in cpu_bus_valid (cpu_bus.valid): bool
+  5: in cpu_bus_data (cpu_bus.data): uint<32>
+  6: out cpu_bus_ready (cpu_bus.ready): bool flipped
+  7: in rx_valid (rx.valid): bool
+  8: in rx_data (rx.data): uint<8>
+  9: out rx_ready (rx.ready): bool flipped
+  10: in bus_aw_valid (bus.aw.valid): bool
+  11: in bus_aw_data (bus.aw.data): uint<32>
+  12: out bus_aw_ready (bus.aw.ready): bool flipped
+  13: in bus_w_valid (bus.w.valid): bool
+  14: in bus_w_data (bus.w.data): struct { data: uint<32>, strb: bit<4> }
+  15: out bus_w_ready (bus.w.ready): bool flipped
+  16: out bus_b_valid (bus.b.valid): bool flipped
+  17: out bus_b_data (bus.b.data): bit<2> flipped
+  18: in bus_b_ready (bus.b.ready): bool
+  19: in bus_ar_valid (bus.ar.valid): bool
+  20: in bus_ar_data (bus.ar.data): uint<32>
+  21: out bus_ar_ready (bus.ar.ready): bool flipped
+  22: out bus_r_valid (bus.r.valid): bool flipped
+  23: out bus_r_data (bus.r.data): struct { data: uint<32>, resp: bit<2> } flipped
+  24: in bus_r_ready (bus.r.ready): bool
+  25: out pixel: uint<32>
+  26: out flag_pix: bool
+  27: out tx_valid (tx.valid): bool
+  28: out tx_data (tx.data): uint<8>
+  29: in tx_ready (tx.ready): bool flipped
+  30: out fired: bool
+  31: wire dma_bus_valid (dma.bus.valid): bool @0
+  32: wire dma_bus_data (dma.bus.data): uint<32> @0
+  33: wire dma_bus_ready (dma.bus.ready): bool @0
+  34: wire dma_fb_valid (dma.fb.valid): bool @0
+  35: wire dma_fb_data (dma.fb.data): uint<32> @0
+  36: wire dma_fb_ready (dma.fb.ready): bool @0
+  37: wire dma_flag (dma.flag): bool @0
+  38: wire xfifo_push_valid (xfifo.push.valid): bool @0
+  39: wire xfifo_push_data (xfifo.push.data): uint<32> @0
+  40: wire xfifo_push_ready (xfifo.push.ready): bool @0
+  41: wire xfifo_pop_valid (xfifo.pop.valid): bool @1
+  42: wire xfifo_pop_data (xfifo.pop.data): uint<32> @1
+  43: wire xfifo_pop_ready (xfifo.pop.ready): bool @1
+  44: wire xfifo_wr_count (xfifo.wr_count): uint<5> @0
+  45: wire xfifo_rd_count (xfifo.rd_count): uint<5> @1
+  46: wire video_fb_valid (video.fb.valid): bool @1
+  47: wire video_fb_data (video.fb.data): uint<32> @1
+  48: wire video_fb_ready (video.fb.ready): bool @1
+  49: wire video_pixel (video.pixel): uint<32> @1
+  50: wire sync_d (sync.d): bool @0
+  51: wire sync_q (sync.q): bool @1
+  52: wire b_rx_valid (b.rx.valid): bool @1
+  53: wire b_rx_data (b.rx.data): uint<8> @1
+  54: wire b_rx_ready (b.rx.ready): bool @1
+  55: wire b_tx_valid (b.tx.valid): bool @1
+  56: wire b_tx_data (b.tx.data): uint<8> @1
+  57: wire b_tx_ready (b.tx.ready): bool @1
+  58: wire b_s_valid (b.s.valid): bool @1
+  59: wire b_s_data (b.s.data): uint<8> @1
+  60: wire b_s_ready (b.s.ready): bool @1
+  61: wire b_doubled_valid (b.doubled.valid): bool @1
+  62: wire b_doubled_data (b.doubled.data): uint<8> @1
+  63: wire b_doubled_ready (b.doubled.ready): bool @1
+  64: wire b_t_valid (b.t.valid): bool @1
+  65: wire b_t_data (b.t.data): uint<8> @1
+  66: wire b_t_ready (b.t.ready): bool @1
+  67: wire b_sk_valid (b.sk.valid): bool @1
+  68: wire b_sk_data (b.sk.data): uint<8> @1
+  69: wire b_sk_ready (b.sk.ready): bool @1
+  70: wire b_bus_aw_valid (b.bus.aw.valid): bool @1
+  71: wire b_bus_aw_data (b.bus.aw.data): uint<32> @1
+  72: wire b_bus_aw_ready (b.bus.aw.ready): bool @1
+  73: wire b_bus_w_valid (b.bus.w.valid): bool @1
+  74: wire b_bus_w_data (b.bus.w.data): struct { data: uint<32>, strb: bit<4> } @1
+  75: wire b_bus_w_ready (b.bus.w.ready): bool @1
+  76: wire b_bus_b_valid (b.bus.b.valid): bool @1
+  77: wire b_bus_b_data (b.bus.b.data): bit<2> @1
+  78: wire b_bus_b_ready (b.bus.b.ready): bool @1
+  79: wire b_bus_ar_valid (b.bus.ar.valid): bool @1
+  80: wire b_bus_ar_data (b.bus.ar.data): uint<32> @1
+  81: wire b_bus_ar_ready (b.bus.ar.ready): bool @1
+  82: wire b_bus_r_valid (b.bus.r.valid): bool @1
+  83: wire b_bus_r_data (b.bus.r.data): struct { data: uint<32>, resp: bit<2> } @1
+  84: wire b_bus_r_ready (b.bus.r.ready): bool @1
+  85: wire b_v_valid (b.v.valid): bool @1
+  86: wire b_v_data (b.v.data): uint<8> @1
+  87: wire b_fired (b.fired): bool @1
+  assign dma_bus_valid = cpu_bus_valid
+  assign dma_bus_data = cpu_bus_data
+  assign cpu_bus_ready = dma_bus_ready
+  assign xfifo_push_valid = dma_fb_valid
+  assign xfifo_push_data = dma_fb_data
+  assign dma_fb_ready = xfifo_push_ready
+  assign video_fb_valid = xfifo_pop_valid
+  assign video_fb_data = xfifo_pop_data
+  assign xfifo_pop_ready = video_fb_ready
+  assign pixel = video_pixel
+  assign sync_d = dma_flag
+  assign flag_pix = sync_q
+  assign b_rx_valid = rx_valid
+  assign b_rx_data = rx_data
+  assign rx_ready = b_rx_ready
+  assign b_s_valid = 1'h0
+  assign b_s_data = 8'h0
+  assign b_t_valid = 1'h1
+  assign b_t_data = 8'h7
+  assign b_bus_aw_valid = bus_aw_valid
+  assign b_bus_aw_data = bus_aw_data
+  assign bus_aw_ready = b_bus_aw_ready
+  assign b_bus_w_valid = bus_w_valid
+  assign b_bus_w_data = bus_w_data
+  assign bus_w_ready = b_bus_w_ready
+  assign bus_b_valid = b_bus_b_valid
+  assign bus_b_data = b_bus_b_data
+  assign b_bus_b_ready = bus_b_ready
+  assign b_bus_ar_valid = bus_ar_valid
+  assign b_bus_ar_data = bus_ar_data
+  assign bus_ar_ready = b_bus_ar_ready
+  assign bus_r_valid = b_bus_r_valid
+  assign bus_r_data = b_bus_r_data
+  assign b_bus_r_ready = bus_r_ready
+  assign tx_valid = b_tx_valid
+  assign tx_data = b_tx_data
+  assign b_tx_ready = tx_ready
+  assign fired = b_fired
+  assign b_doubled_ready = 1'h1
+  assign b_sk_ready = 1'h1
+  inst dma: Dma (clk = sys_clk, rst = sys_rst, bus_valid = dma_bus_valid, bus_data = dma_bus_data, bus_ready -> dma_bus_ready, fb_valid -> dma_fb_valid, fb_data -> dma_fb_data, fb_ready = dma_fb_ready, flag -> dma_flag)
+  inst xfifo: AsyncFifo_u32_16 (src = sys_clk, src_rst = ~sys_rst, dst = pix_clk, dst_rst = pix_rst, push_valid = xfifo_push_valid, push_data = xfifo_push_data, push_ready -> xfifo_push_ready, pop_valid -> xfifo_pop_valid, pop_data -> xfifo_pop_data, pop_ready = xfifo_pop_ready, wr_count -> xfifo_wr_count, rd_count -> xfifo_rd_count)
+  inst video: Scanout (clk = pix_clk, fb_valid = video_fb_valid, fb_data = video_fb_data, fb_ready -> video_fb_ready, pixel -> video_pixel)
+  inst sync: Sync2_bool (src = sys_clk, dst = pix_clk, d = sync_d, q -> sync_q)
+  inst b: Bundles (clk = pix_clk, rst = pix_rst, rx_valid = b_rx_valid, rx_data = b_rx_data, rx_ready -> b_rx_ready, tx_valid -> b_tx_valid, tx_data -> b_tx_data, tx_ready = b_tx_ready, s_valid = b_s_valid, s_data = b_s_data, s_ready -> b_s_ready, doubled_valid -> b_doubled_valid, doubled_data -> b_doubled_data, doubled_ready = b_doubled_ready, t_valid = b_t_valid, t_data = b_t_data, t_ready -> b_t_ready, sk_valid -> b_sk_valid, sk_data -> b_sk_data, sk_ready = b_sk_ready, bus_aw_valid = b_bus_aw_valid, bus_aw_data = b_bus_aw_data, bus_aw_ready -> b_bus_aw_ready, bus_w_valid = b_bus_w_valid, bus_w_data = b_bus_w_data, bus_w_ready -> b_bus_w_ready, bus_b_valid -> b_bus_b_valid, bus_b_data -> b_bus_b_data, bus_b_ready = b_bus_b_ready, bus_ar_valid = b_bus_ar_valid, bus_ar_data = b_bus_ar_data, bus_ar_ready -> b_bus_ar_ready, bus_r_valid -> b_bus_r_valid, bus_r_data -> b_bus_r_data, bus_r_ready = b_bus_r_ready, v_valid -> b_v_valid, v_data -> b_v_data, fired -> b_fired)
+end

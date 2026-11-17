@@ -1,0 +1,8 @@
+# §9.5 fixture: feature flags read as cfg::<name>
+[package]
+name = "spec-cfg"
+version = "0.1.0"
+
+[features]
+debug_ila = false
+fast_path = true

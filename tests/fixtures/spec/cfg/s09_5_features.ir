@@ -1,0 +1,19 @@
+module Probe_0 "Probe<false>" in cfg_demo
+  param Debug = 1'h0
+  0: in d: uint<8>
+  1: out q: uint<8>
+  assign q = d
+end
+module Features in cfg_demo top
+  0: in d: uint<8>
+  1: out q: uint<8>
+  2: out fast: bool
+  3: out dbg: uint<8>
+  4: wire p_d (p.d): uint<8>
+  5: wire p_q (p.q): uint<8>
+  assign q = d
+  assign fast = 1'h1
+  assign p_d = d
+  assign dbg = p_q
+  inst p: Probe_0 (d = p_d, q -> p_q)
+end

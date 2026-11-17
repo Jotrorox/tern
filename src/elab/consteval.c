@@ -3440,7 +3440,7 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
             int q = el->quiet;
             Ty *rt;
             el->quiet = 1;
-            rt = elab_eval_type(el, it->u.fn.ret, genv);
+            rt = elab_eval_type(el, it->u.fn.ret, benv);
             el->quiet = q;
             el->quiet_errors = 0;
             el->tail_expect = rt && rt->kind != TY_ERROR ? rt : NULL;
@@ -3477,7 +3477,7 @@ Value el_call_fn(Elab *el, ValFn *fn, const Value *args, const Ident *names, Exp
     if (hw)
         el->hw_calls.len--;
     if (it->u.fn.ret && result.kind != VAL_ERROR && !el->limit_hit) {
-        Ty *rt = elab_eval_type(el, it->u.fn.ret, genv);
+        Ty *rt = elab_eval_type(el, it->u.fn.ret, benv);
         if (rt->kind != TY_ERROR) {
             if (result.kind == VAL_VOID) {
                 el_error(el, it->u.fn.body ? it->u.fn.body->span : at, "`%s` must return a %s value",
@@ -3826,6 +3826,109 @@ Value el_call_value(Elab *el, Value fnv, Expr *call, Env *env, Ty *expect)
 }
 
 /* method call x.name(args) */
+/* Built-in methods of stream bundles (§8.1: "the standard Stream has
+ * fire(), map(f) and skid()"): `s.map(f)` is the stream with its data passed
+ * through fn f (valid passes through, ready flows back to s); `s.skid()`
+ * instantiates std::stream::Skid<T> on s and returns its output. Returns 0
+ * when `name` is not one of them. */
+static int ce_stream_method(Elab *el, Value base, const char *name, Expr *call, Env *env, Value *out)
+{
+    Ty *t = base.ty;
+    Item *bi = t->def;
+    int kv = ty_field_index(t, intern_cstr("valid")), kd = ty_field_index(t, intern_cstr("data"));
+    int kr = ty_field_index(t, intern_cstr("ready"));
+    Span at = call->span;
+    GenericParams *gp = &bi->u.bundle.generics;
+    if (kv < 0 || kd < 0 || base.kind != VAL_BUNDLE || gp->n != 1 || gp->items[0].kind != GENERIC_TYPE)
+        return 0;
+    if (strcmp(name, "map") == 0) {
+        Value fnv, d, r;
+        ElabArgs args;
+        ElabArg a;
+        Ty *rt;
+        uint32_t i;
+        if (call->u.call.nargs != 1) {
+            el_error(el, at, "`map` takes one function");
+            *out = val_error();
+            return 1;
+        }
+        fnv = elab_eval(el, call->u.call.args[0].value, env, NULL);
+        if (fnv.kind != VAL_FN) {
+            if (fnv.kind != VAL_ERROR)
+                el_error(el, call->u.call.args[0].value->span, "`map` needs a function");
+            *out = val_error();
+            return 1;
+        }
+        d = el_call_fn(el, fnv.u.fn, &base.u.list->v[kd], NULL, NULL, 1, at, NULL);
+        if (d.kind == VAL_ERROR || !d.ty || !d.ty->hw) {
+            if (d.kind != VAL_ERROR)
+                el_error(el, at, "the function given to `map` must return a hardware value");
+            *out = val_error();
+            return 1;
+        }
+        a.name = gp->items[0].name.name;
+        a.val = val_type(el->S, d.ty);
+        a.span = at;
+        args.items = &a;
+        args.n = 1;
+        rt = el_type_item_vals(el, bi, t->file, NULL, &args, at);
+        if (rt->kind != TY_BUNDLE || rt->nfields != t->nfields) {
+            *out = val_error();
+            return 1;
+        }
+        r = val_list(&el->arena, VAL_BUNDLE, rt, rt->nfields);
+        for (i = 0; i < rt->nfields; i++)
+            r.u.list->v[i] = (int)i == kd ? d : base.u.list->v[i]; /* ready keeps its place: it flows back */
+        *out = r;
+        return 1;
+    }
+    if (strcmp(name, "skid") == 0) {
+        Package *pkg = sema_find_package(el->S, "std::stream");
+        Symbol sym;
+        ElabArgs args;
+        ElabArg a;
+        ValModule *vm;
+        Value mv, inst, inp;
+        Expr *fake;
+        if (call->u.call.nargs != 0 || !pkg || !sema_lookup_member(el->S, NULL, pkg, intern_cstr("Skid"), &sym, NULL) ||
+            sym.kind != SYM_ITEM) {
+            el_error(el, at, "`skid()` needs std::stream::Skid and takes no arguments");
+            *out = val_error();
+            return 1;
+        }
+        a.name = NULL;
+        a.val = val_type(el->S, base.u.list->v[kd].ty ? base.u.list->v[kd].ty : t->fields[kd].ty);
+        a.span = at;
+        args.items = &a;
+        args.n = 1;
+        vm = elab_bind_module(el, sym.item, sym.file, &args, at);
+        if (!vm) {
+            *out = val_error();
+            return 1;
+        }
+        memset(&mv, 0, sizeof mv);
+        mv.kind = VAL_MODULE;
+        mv.u.mod = vm;
+        fake = ANEW(&el->arena, Expr);
+        *fake = *call;
+        fake->u.call.nargs = 0;
+        fake->u.call.args = NULL;
+        fake->u.call.domain = NULL;
+        inst = el_instance(el, fake, env, NULL, at, mv);
+        if (inst.kind != VAL_INST) {
+            *out = val_error();
+            return 1;
+        }
+        inp = el_inst_field(el, inst, intern_cstr("in"), at);
+        if (inp.place)
+            el_assign(el, inp.place, base, call->u.call.callee->u.field.base, NULL, at);
+        *out = el_inst_field(el, inst, intern_cstr("out"), at);
+        return 1;
+    }
+    TERN_UNUSED(kr);
+    return 0;
+}
+
 static Value ce_method(Elab *el, Expr *call, Env *env, Ty *expect)
 {
     Expr *callee = call->u.call.callee;
@@ -3885,6 +3988,11 @@ static Value ce_method(Elab *el, Expr *call, Env *env, Ty *expect)
                 }
                 return el_call_value(el, fv, call, env, expect);
             }
+        }
+        {
+            Value r;
+            if (ce_stream_method(el, base, name, call, env, &r))
+                return r;
         }
         el_error(el, callee->u.field.name.span, "bundle `%s` has no method `%s`", ty_str(base.ty), name);
         return val_error();

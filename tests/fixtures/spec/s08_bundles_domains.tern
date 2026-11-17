@@ -1,0 +1,106 @@
+// §8 Bundles, clock domains and CDC: bundle declarations and their use
+// (8.1), named domains and `@ dom` (8.2), std::cdc crossings (8.3).
+use std::cdc::{Sync2, AsyncFifo}
+
+// 8.1 (Valid and Stream are the prelude's, declared exactly as in the spec;
+// the spec's Axi4Lite is declared here)
+pub bundle Axi4Lite<AW: uint = 32, DW: uint = 32> {
+    aw: Stream<uint<AW>>,
+    w: Stream<struct { data: uint<DW>, strb: bit<DW / 8> }>,
+    flip b: Stream<bit<2>>,
+    ar: Stream<uint<AW>>,
+    flip r: Stream<struct { data: uint<DW>, resp: bit<2> }>,
+}
+
+fn double(x: u8) -> u8 { x +% x }
+
+/// Directions follow from `in`/`out`; whole, field-wise and literal
+/// assignment; the Stream methods fire(), map(f) and skid().
+module Bundles {
+    in clk: clock
+    in rst: reset
+    in rx: Stream<u8>
+    out tx: Stream<u8>
+    in s: Stream<u8>
+    out doubled: Stream<u8>
+    in t: Stream<u8>
+    out sk: Stream<u8>
+    in bus: Axi4Lite
+    out v: Valid<u8>
+    out fired: bool
+
+    tx = rx // both directions in one line
+    doubled = s.map(double) // ready flows back to s
+    sk = t.skid() // one register slice (std::stream::Skid)
+    fired = rx.fire()
+    v = Valid { valid: rx.valid, data: rx.data }
+    // `flip b` on an `in` Axi4Lite: b.valid is an output, b.ready an input
+    bus.aw.ready = true
+    bus.w.ready = true
+    bus.b = Stream { valid: bus.aw.valid and bus.w.valid, data: 0 }
+    bus.ar.ready = false
+    bus.r.valid = false
+    bus.r.data.data = 0
+    bus.r.data.resp = 0
+}
+
+// stand-ins for the spec's Dma and Scanout
+module Dma {
+    in clk: clock
+    in rst: reset<async, low>
+    in bus: Stream<u32>
+    out fb: Stream<u32>
+    out flag: bool
+    fb = bus
+    flag = bus.valid
+}
+
+module Scanout {
+    in clk: clock
+    in fb: Stream<u32>
+    out pixel: u32
+    reg p: u32 = 0
+    fb.ready = true
+    on clk { if fb.valid { p = fb.data } }
+    pixel = p
+}
+
+/// 8.2: named domains and `@ dom`; the crossings go through std::cdc (8.3).
+#[top]
+module Top {
+    in sys_clk: clock
+    in sys_rst: reset<async, low>
+    in pix_clk: clock
+    in pix_rst: reset
+    in cpu_bus: Stream<u32>
+    in rx: Stream<u8>
+    in bus: Axi4Lite
+    out pixel: u32
+    out flag_pix: bool
+    out tx: Stream<u8>
+    out fired: bool
+
+    domain sys = (sys_clk, sys_rst) // named domains when a module has several clocks
+    domain pix = (pix_clk) // no reset
+
+    let dma = Dma(bus: cpu_bus) @ sys
+    let xfifo = AsyncFifo<u32, 16>(
+        push: dma.fb,
+        src: sys.clock,
+        src_rst: sys.reset as reset,
+        dst: pix.clock,
+        dst_rst: pix_rst,
+    )
+    let video = Scanout(fb: xfifo.pop) @ pix
+    pixel = video.pixel
+    let sync = Sync2(src: sys.clock, dst: pix.clock, d: dma.flag)
+    flag_pix = sync.q
+
+    let b = Bundles(rst: pix_rst, rx, s: rx_copy, t: rx_copy2, bus) @ pix
+    tx = b.tx
+    fired = b.fired
+    b.doubled.ready = true
+    b.sk.ready = true
+    let rx_copy = Stream { valid: false, data: 0u8 }
+    let rx_copy2 = Stream { valid: true, data: 7u8 }
+}
