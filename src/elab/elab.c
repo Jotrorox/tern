@@ -996,7 +996,7 @@ static int elb_find_port(ModInfo *mi, const char *name)
 /* help line for an unknown port: the closest port name, else the ports */
 static void elb_port_help(Elab *el, ModInfo *mi, const char *name)
 {
-    const char *names[128];
+    const char *names[128] = {0};
     size_t n = 0;
     uint32_t i;
     const char *best;
