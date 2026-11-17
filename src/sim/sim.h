@@ -194,6 +194,38 @@ void sim_coverage_reset(SimModel *m);
 int sim_vcd_open(SimModel *m, const char *path);
 void sim_vcd_close(SimModel *m);
 
+/* ---------------------------------------------------- compiled engine -- */
+
+/* The compiled simulator (simc.c, spec 13.7): the model's instruction list
+ * is translated to C, built with the host C compiler ($CC, else cc, cl,
+ * gcc, clang) into a shared library cached under the cache directory, and
+ * run instead of the interpreter. Values, the test API, VCD, properties,
+ * coverage and #[test_port] overrides behave identically.
+ *   SIM_ENGINE_INTERP    always interpret
+ *   SIM_ENGINE_COMPILED  sim_new compiles (or loads the cached library);
+ *                        a failure is reported with diag_error and sim_new
+ *                        returns NULL
+ *   SIM_ENGINE_AUTO      interpret; once a model has interpreted about 2^26
+ *                        instructions, load its cached library or compile it
+ *                        in the background and switch when ready. No
+ *                        compiler or a failed compile: keep interpreting. */
+typedef enum SimEngine { SIM_ENGINE_AUTO, SIM_ENGINE_INTERP, SIM_ENGINE_COMPILED } SimEngine;
+
+/* Process-wide engine for sim_new and the cache directory (NULL:
+ * $TERN_SIMCACHE, else <temp>/tern-simcache). Default: AUTO. */
+void sim_set_engine_defaults(SimEngine e, const char *cache_dir);
+SimEngine sim_engine_default(void);
+int sim_parse_engine(const char *s, SimEngine *out);   /* "auto"/"interp"/"compiled"; 0 if unknown */
+const char *sim_host_cc(void);       /* the host compiler command, or NULL if none was found */
+/* Switch m to compiled code now (synchronously). 0, or -1 after diag_error. */
+int sim_compile(SimModel *m);
+/* Start compiling m in the background (or load its cached library); a later
+ * sim_compile waits for it. 0, or -1 after diag_error. */
+int sim_compile_start(SimModel *m);
+int sim_is_compiled(const SimModel *m);
+/* The generated C of m's model (heap), or NULL if it cannot be translated. */
+char *sim_c_source(SimModel *m);
+
 /* ------------------------------------------------------------ remote -- */
 
 /* A model whose values live in another simulator (remote.c; the Verilator

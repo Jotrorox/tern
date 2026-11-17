@@ -30,6 +30,7 @@
 #include "../../src/sim/netlist.c"
 #include "../../src/sim/eval.c"
 #include "../../src/sim/vcd.c"
+#include "../../src/sim/simc.c"
 #include "../../src/emit/sv.c"
 #include "../../src/emit/svparam.c"
 #include "../../src/emit/constraints.c"

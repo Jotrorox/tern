@@ -14,6 +14,8 @@
 #
 # Variables: CC, STD (c11 | c99), OPT, WARN, EXTRA (appended to CFLAGS),
 # CFLAGS (overrides all of the above), LDFLAGS, LDLIBS.
+# Programs link with -ldl only where dlopen needs it (glibc before 2.34):
+# $(OBJ)/dl.flags records the result of a link probe.
 #   make CC=gcc STD=c99 EXTRA=-Werror
 #   make EXTRA="-fsanitize=address,undefined -g" LDFLAGS="-fsanitize=address,undefined" test
 #
@@ -33,6 +35,7 @@ EXTRA   =
 CFLAGS  = -std=$(STD) $(OPT) $(WARN) $(EXTRA)
 LDFLAGS =
 LDLIBS  =
+DL      = `cat $(OBJ)/dl.flags`
 OBJ     = build/obj
 BIN     = tern
 PREFIX  = /usr/local
@@ -245,6 +248,7 @@ SIM_SRCS = \
 	src/sim/eval.c \
 	src/sim/vcd.c \
 	src/sim/remote.c \
+	src/sim/simc.c \
 	src/sim/testrun.c \
 	src/sim/cmd_test.c \
 	src/sim/cmd_sim.c
@@ -254,6 +258,7 @@ SIM_OBJS = \
 	$(OBJ)/sim_eval.o \
 	$(OBJ)/sim_vcd.o \
 	$(OBJ)/sim_remote.o \
+	$(OBJ)/sim_simc.o \
 	$(OBJ)/sim_testrun.o \
 	$(OBJ)/sim_cmd_test.o \
 	$(OBJ)/sim_cmd_sim.o
@@ -267,6 +272,8 @@ $(OBJ)/sim_vcd.o: src/sim/vcd.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/vcd.c -o $@
 $(OBJ)/sim_remote.o: src/sim/remote.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/remote.c -o $@
+$(OBJ)/sim_simc.o: src/sim/simc.c $(HDRS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) -c src/sim/simc.c -o $@
 $(OBJ)/sim_testrun.o: src/sim/testrun.c $(HDRS) $(OBJ)/.dir
 	$(CC) $(CFLAGS) -c src/sim/testrun.c -o $@
 $(OBJ)/sim_cmd_test.o: src/sim/cmd_test.c $(HDRS) $(OBJ)/.dir
@@ -437,19 +444,28 @@ OBJS = \
 	$(TOOLS_OBJS) \
 	$(MAIN_OBJS)
 
-$(BIN): $(OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
+$(BIN): $(OBJS) $(OBJ)/dl.flags
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS) $(DL)
 
 $(OBJ)/.dir:
 	mkdir -p $(OBJ)
 	touch $@
 
+# dlopen (the compiled simulator, src/sim/simc.c) is in libc on macOS, musl
+# and glibc >= 2.34; older glibc needs -ldl
+$(OBJ)/dl.flags: $(OBJ)/.dir
+	@printf 'extern void *dlopen(const char *, int);\nint main(void) { return dlopen(0, 0) != 0; }\n' \
+	  > $(OBJ)/dlprobe.c; \
+	if $(CC) -o $(OBJ)/dlprobe $(OBJ)/dlprobe.c >/dev/null 2>&1; then : > $@; \
+	elif $(CC) -o $(OBJ)/dlprobe $(OBJ)/dlprobe.c -ldl >/dev/null 2>&1; then echo -ldl > $@; \
+	else : > $@; fi; rm -f $(OBJ)/dlprobe $(OBJ)/dlprobe.c
+
 # ------------------------------------------------------ embedded std lib ---
 # tools/embed runs on every build but only rewrites src/std_embed.c when
 # the std/ sources changed, so nothing is recompiled otherwise.
 
-tools/embed: tools/embed.c src/base/common.c src/base/common.h $(OS_SRCS) src/os/os.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tools/embed.c $(LDLIBS)
+tools/embed: tools/embed.c src/base/common.c src/base/common.h $(OS_SRCS) src/os/os.h $(OBJ)/dl.flags
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tools/embed.c $(LDLIBS) $(DL)
 
 src/std_embed.c: tools/embed FORCE
 	./tools/embed std src/std_embed.c
@@ -461,11 +477,12 @@ FORCE:
 # they need.  To add one: add it to UNIT_TESTS (one per line), give it a
 # rule, and add it to build.bat.
 
-TEST_DEPS = $(BASE_SRCS) $(OS_SRCS) $(HDRS)
+TEST_DEPS = $(BASE_SRCS) $(OS_SRCS) $(HDRS) $(OBJ)/dl.flags
 
 UNIT_TESTS = \
 	build/test_base \
 	build/test_sim \
+	build/test_simc \
 	build/test_pkg \
 	build/test_tools \
 	build/test_fmt \
@@ -475,39 +492,45 @@ UNIT_TESTS = \
 	build/test_elab
 
 tests/run: tests/run.c $(TEST_DEPS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/run.c $(LDLIBS) $(DL)
 
 # Extracts the ```tern code blocks of README.md and docs/guide/*.md and runs
 # `tern check` (and `tern test` for ```tern,test) on each one.
 build/doc_snippets: tests/doc_snippets.c $(TEST_DEPS) $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/doc_snippets.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/doc_snippets.c $(LDLIBS) $(DL)
 
 build/test_base: tests/unit/test_base.c $(TEST_DEPS) $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_base.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_base.c $(LDLIBS) $(DL)
 
 build/test_sim: tests/unit/test_sim.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_sim.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_sim.c $(LDLIBS) $(DL)
+
+# the simulator tests again on compiled models, a differential test against
+# the interpreter over tests/fixtures, and a benchmark (skipped without a
+# host C compiler)
+build/test_simc: tests/unit/test_simc.c tests/unit/test_sim.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(OBJ)/.dir
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_simc.c $(LDLIBS) $(DL)
 
 build/test_pkg: tests/unit/test_pkg.c $(TEST_DEPS) $(PKG_SRCS) $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_pkg.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_pkg.c $(LDLIBS) $(DL)
 
 build/test_tools: tests/unit/test_tools.c $(TEST_DEPS) $(TOOLS_SRCS) $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_tools.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_tools.c $(LDLIBS) $(DL)
 
 build/test_fmt: tests/unit/test_fmt.c $(TEST_DEPS) $(SYNTAX_SRCS) $(TOOLS_SRCS) src/std_embed.c $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_fmt.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_fmt.c $(LDLIBS) $(DL)
 
 build/test_backend: tests/unit/test_backend.c $(TEST_DEPS) $(IR_SRCS) $(EMIT_SRCS) $(BACKEND_SRCS) src/pkg/toml.c $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_backend.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_backend.c $(LDLIBS) $(DL)
 
 build/test_emit: tests/unit/test_emit.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(EMIT_SRCS) $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_emit.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_emit.c $(LDLIBS) $(DL)
 
 build/test_lsp: tests/unit/test_lsp.c $(TEST_DEPS) $(SYNTAX_SRCS) $(IR_SRCS) $(SEMA_SRCS) $(ELAB_SRCS) $(CHECK_SRCS) $(PKG_SRCS) $(LSP_SRCS) src/tools/fmt.c src/std_embed.c src/driver.c $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_lsp.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_lsp.c $(LDLIBS) $(DL)
 
 build/test_elab: tests/unit/test_elab.c $(TEST_DEPS) $(IR_SRCS) $(SIM_SRCS) $(OBJ)/.dir
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_elab.c $(LDLIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ tests/unit/test_elab.c $(LDLIBS) $(DL)
 
 test: $(BIN) tests/run build/doc_snippets $(UNIT_TESTS)
 	for t in $(UNIT_TESTS); do ./$$t || exit 1; done
@@ -564,24 +587,24 @@ test-std: $(BIN)
 FUZZ_CC = clang
 FUZZ_FLAGS = -g -O1 -fsanitize=fuzzer,address,undefined
 
-fuzz: $(OBJ)/.dir
+fuzz: $(OBJ)/dl.flags
 	mkdir -p build/fuzz-corpus
-	$(FUZZ_CC) -std=c11 $(FUZZ_FLAGS) $(WARN) -o build/fuzz_parser tests/fuzz/fuzz_parser.c
+	$(FUZZ_CC) -std=c11 $(FUZZ_FLAGS) $(WARN) -o build/fuzz_parser tests/fuzz/fuzz_parser.c $(DL)
 
 # ---------------------------------------------------------------- other ---
 
-unity:
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $(BIN) src/unity.c $(LDLIBS)
+unity: $(OBJ)/dl.flags
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $(BIN) src/unity.c $(LDLIBS) $(DL)
 
-check-warnings:
+check-warnings: $(OBJ)/dl.flags
 	for s in c99 c11; do \
 	  $(MAKE) STD=$$s OBJ=build/obj-$$s BIN=build/tern-$$s EXTRA=-Werror build/tern-$$s || exit 1; \
-	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/unity-$$s src/unity.c || exit 1; \
-	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/run-$$s tests/run.c || exit 1; \
-	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/doc_snippets-$$s tests/doc_snippets.c || exit 1; \
+	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/unity-$$s src/unity.c $(DL) || exit 1; \
+	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/run-$$s tests/run.c $(DL) || exit 1; \
+	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/doc_snippets-$$s tests/doc_snippets.c $(DL) || exit 1; \
 	  for t in $(UNIT_TESTS); do n=`basename $$t`; \
-	    $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/$$n-$$s tests/unit/$$n.c || exit 1; done; \
-	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/embed-$$s tools/embed.c || exit 1; \
+	    $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/$$n-$$s tests/unit/$$n.c $(DL) || exit 1; done; \
+	  $(CC) -std=$$s $(OPT) $(WARN) -Werror -o build/embed-$$s tools/embed.c $(DL) || exit 1; \
 	done
 	@echo "check-warnings: OK (c99 and c11, -Werror)"
 

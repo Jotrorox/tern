@@ -62,7 +62,8 @@ static const MainCmd main_cmds[] = {
      "  --text              print a terminal rendering (the offline reference)\n"
      "  --open              open the generated index.html in a browser\n"},
     {"test", cmd_test, "Verification",
-     "[<paths>] [<filter>...] [--backend builtin|verilator] [--waves] [--seed <n>] [--cover] [-j <n>] [--list]",
+     "[<paths>] [<filter>...] [--backend builtin|verilator] [--sim auto|interp|compiled] [--waves] [--seed <n>] "
+     "[--cover] [-j <n>] [--list]",
      "run test blocks on the built-in simulator (or Verilator)",
      "  <paths>             files or directories (default: the project's src/ and tests/)\n"
      "  <filter>            run only tests whose name contains <filter>\n"
@@ -78,7 +79,17 @@ static const MainCmd main_cmds[] = {
      "                      --build`; tests run one at a time; immediate assertions are\n"
      "                      checked by Verilator, properties and --cover are not).\n"
      "                      Default: builtin, except that designs containing an extern\n"
-     "                      module use verilator when it is installed\n"},
+     "                      module use verilator when it is installed\n"
+     "  --sim <engine>      engine of the built-in simulator (results are identical):\n"
+     "                      interp: the interpreter; compiled: translate each design to\n"
+     "                      C and build it with the host compiler ($CC, else cc, cl,\n"
+     "                      gcc or clang) into build/simcache/ (an error without one);\n"
+     "                      auto (default): interpret, and once a design has run about\n"
+     "                      2^26 instructions (roughly a quarter second), switch to its\n"
+     "                      compiled model -- cached, or compiled in the background --\n"
+     "                      silently staying interpreted when no compiler is found.\n"
+     "                      $TERN_SIMCACHE overrides the cache directory\n"
+     "  -v, --verbose       note when --sim auto finds no host C compiler\n"},
     {"sim", cmd_sim, "Verification", "<top> [--vcd <file>] [<script>] [<paths>]",
      "interactive stimulus REPL or a stimulus script against a top",
      "  <top>               module to simulate, e.g. Top or 'Fifo<u8, 4>' (default: the #[top])\n"
@@ -88,6 +99,7 @@ static const MainCmd main_cmds[] = {
      "  --vcd <file>        record a VCD waveform\n"
      "  --seed <n>          seed of rand<T>() and of power-on register values\n"
      "  --backend <b>       builtin or verilator (as for tern test)\n"
+     "  --sim <engine>      auto, interp or compiled (as for tern test)\n"
      "commands (the design is `dut`; paths are relative to it):\n"
      "  poke <path> <expr>  drive an input (also: <path> = <expr>)\n"
      "  peek <path>...      print signals (also: <path>)\n"

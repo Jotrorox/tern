@@ -26,6 +26,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <time.h>
+#include <dlfcn.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
@@ -931,6 +932,52 @@ void os_proc_free(OsProc *p)
     free(p->out.data);
     free(p->err.data);
     free(p);
+}
+
+/* ----------------------------------------------------- shared libraries --- */
+
+void *os_dl_open(const char *path, char **err_out)
+{
+    void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!h && err_out) {
+        const char *e = dlerror();
+        *err_out = xstrdup(e ? e : "dlopen failed");
+    }
+    return h;
+}
+
+OsDlFn os_dl_sym(void *lib, const char *name)
+{
+    OsDlFn f = NULL;
+    void *p;
+    if (!lib)
+        return NULL;
+    p = dlsym(lib, name);
+    /* POSIX guarantees data and function pointers convert; copy the bits so
+     * that ISO C pedantry does not complain about the cast */
+    if (p)
+        memcpy(&f, &p, sizeof f < sizeof p ? sizeof f : sizeof p);
+    return f;
+}
+
+void os_dl_close(void *lib)
+{
+    if (lib)
+        dlclose(lib);
+}
+
+const char *os_dl_ext(void)
+{
+#if defined(__APPLE__)
+    return ".dylib";
+#else
+    return ".so";
+#endif
+}
+
+uint64_t os_process_id(void)
+{
+    return (uint64_t)getpid();
 }
 
 #else

@@ -20,6 +20,8 @@ cl %TERN_CFLAGS% tests\unit\test_base.c /Fe:build\test_base.exe /Fo:build\test_b
 if errorlevel 1 exit /b 1
 cl %TERN_CFLAGS% tests\unit\test_sim.c /Fe:build\test_sim.exe /Fo:build\test_sim.obj
 if errorlevel 1 exit /b 1
+cl %TERN_CFLAGS% tests\unit\test_simc.c /Fe:build\test_simc.exe /Fo:build\test_simc.obj
+if errorlevel 1 exit /b 1
 cl %TERN_CFLAGS% tests\unit\test_pkg.c /Fe:build\test_pkg.exe /Fo:build\test_pkg.obj
 if errorlevel 1 exit /b 1
 cl %TERN_CFLAGS% tests\unit\test_tools.c /Fe:build\test_tools.exe /Fo:build\test_tools.obj
@@ -42,6 +44,9 @@ if errorlevel 1 exit /b 1
 build\test_base.exe
 if errorlevel 1 exit /b 1
 build\test_sim.exe
+if errorlevel 1 exit /b 1
+rem compiled simulator (skips itself when the model compiler cannot run)
+build\test_simc.exe tern.exe
 if errorlevel 1 exit /b 1
 build\test_pkg.exe
 if errorlevel 1 exit /b 1

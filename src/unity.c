@@ -53,6 +53,7 @@
 #include "sim/eval.c"
 #include "sim/vcd.c"
 #include "sim/remote.c"
+#include "sim/simc.c"
 #include "sim/testrun.c"
 #include "sim/cmd_test.c"
 #include "sim/cmd_sim.c"

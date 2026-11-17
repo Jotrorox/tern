@@ -179,6 +179,7 @@ typedef struct SimMon {
     int started;
     uint64_t hits;
     SimAttemptVec att;
+    SimAttemptVec spare;     /* the previous tick's attempt buffer, reused */
 } SimMon;
 
 typedef struct SimGroup {
@@ -251,6 +252,8 @@ typedef struct SimRemoteOps {
     void (*destroy)(SimModel *m);
 } SimRemoteOps;
 
+typedef struct SimC SimC;   /* compiled model (simc.c) */
+
 struct SimModel {
     Arena arena;
     const SimRemoteOps *rops; /* non-NULL: values live in a remote simulator */
@@ -309,6 +312,11 @@ struct SimModel {
     uint32_t nfail;
     Map pseen;               /* attempt dedupe scratch */
 
+    /* compiled code (simc.c): NULL or not loaded yet = interpreted */
+    SimC *simc;
+    uint64_t work;           /* interpreted instructions (region lengths) so far */
+    uint64_t work_next;      /* --sim auto: next simc_tick at this much work */
+
     /* VCD */
     FILE *vcd;
     uint64_t *vcd_last;
@@ -325,6 +333,13 @@ void sim_settle_now(SimModel *m);
 void sim_assert_hit(SimModel *m, uint32_t id, uint64_t val);
 void sim_mon_reset_all(SimModel *m);
 void sim_apply_forces(SimModel *m);
+
+/* simc.c: run the comb (region 0), clocked (1 + domain) or property-leaf
+ * (1 + ndoms + group) code [lo, hi), compiled when a model is loaded */
+void sim_exec_region(SimModel *m, uint32_t region, uint32_t lo, uint32_t hi);
+int simc_setup(SimModel *m);    /* in sim_new: 0 after a diagnostic (--sim compiled failed) */
+void simc_tick(SimModel *m);
+void simc_free(SimModel *m);
 
 /* vcd.c */
 void sim_vcd_sample(SimModel *m);
